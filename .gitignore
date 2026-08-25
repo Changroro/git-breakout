@@ -1,0 +1,9 @@
+node_modules/
+dist/
+TODO.md
+_workspace/
+*.log
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
+data/repository-cards/

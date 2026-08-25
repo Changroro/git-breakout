@@ -1,0 +1,35 @@
+{
+  "name": "ai-trend-radar-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "collect": "tsx server/collect.ts",
+    "collector:worker": "tsx server/collector-worker.ts",
+    "preview": "vite preview",
+    "history:import": "tsx server/import-history.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@primer/octicons-react": "^19.33.0",
+    "@radix-ui/react-slider": "^1.4.7",
+    "better-sqlite3": "^13.0.3",
+    "cheerio": "^1.2.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.3.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}
