@@ -12,6 +12,15 @@ export type HistoryResponse = {
   snapshots: RankingSnapshot[];
 };
 
+export type RankingSnapshotMetadata = Omit<RankingSnapshot, "repositories"> & {
+  repository_count: number;
+};
+
+export type TimelineResponse = {
+  schema_version: "1.0";
+  snapshots: RankingSnapshotMetadata[];
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -48,9 +57,36 @@ export function parseHistoryResponse(value: unknown): HistoryResponse {
   return value as HistoryResponse;
 }
 
+export function parseTimelineResponse(value: unknown): TimelineResponse {
+  if (!isRecord(value) || value.schema_version !== "1.0" || !Array.isArray(value.snapshots)) {
+    throw new TypeError("Timeline response does not match schema version 1.0");
+  }
+  value.snapshots.forEach((snapshot, index) => {
+    if (
+      !isRecord(snapshot) ||
+      typeof snapshot.id !== "string" ||
+      typeof snapshot.captured_at !== "string" ||
+      !Number.isFinite(Date.parse(snapshot.captured_at)) ||
+      typeof snapshot.source !== "string" ||
+      !Number.isInteger(snapshot.repository_count) ||
+      (snapshot.repository_count as number) <= 0
+    ) {
+      throw new TypeError(`Timeline snapshot ${index} is invalid`);
+    }
+  });
+  if (value.snapshots.length === 0) {
+    throw new RangeError("At least one completed snapshot is required");
+  }
+  return value as TimelineResponse;
+}
+
+export function parseRankingSnapshot(value: unknown): RankingSnapshot {
+  return parseHistoryResponse({ schema_version: "1.0", snapshots: [value] }).snapshots[0];
+}
+
 export function resolveSnapshotId(
   requestedId: string | null,
-  snapshots: readonly RankingSnapshot[],
+  snapshots: readonly { id: string }[],
 ): string {
   if (snapshots.length === 0) {
     throw new RangeError("At least one completed snapshot is required");

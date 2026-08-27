@@ -10,15 +10,39 @@ describe("parseCollectionContext", () => {
     expect(parseCollectionContext({
       latest_captured_at: "2026-08-26T08:00:00.000Z",
       interval_minutes: 120,
+      retention_policy: {
+        grace_days: 14,
+        growth_days: 7,
+        push_days: 30,
+        repository_limit: 1_000,
+      },
       repositories: [{
         full_name: "alpha/one",
+        first_seen_at: "2026-08-20T08:00:00.000Z",
+        latest_captured_at: "2026-08-26T08:00:00.000Z",
+        latest_pushed_at: "2026-08-26T07:00:00.000Z",
+        latest_rank: 2,
+        latest_stars: 42,
+        growth_comparison_stars: 30,
         observations: [{ captured_at: "2026-08-26T08:00:00.000Z", stars: 42 }],
       }],
     })).toEqual({
       latestCapturedAt: "2026-08-26T08:00:00.000Z",
       intervalMinutes: 120,
+      retentionPolicy: {
+        graceDays: 14,
+        growthDays: 7,
+        pushDays: 30,
+        repositoryLimit: 1_000,
+      },
       repositories: [{
         fullName: "alpha/one",
+        firstSeenAt: "2026-08-20T08:00:00.000Z",
+        latestCapturedAt: "2026-08-26T08:00:00.000Z",
+        latestPushedAt: "2026-08-26T07:00:00.000Z",
+        latestRank: 2,
+        latestStars: 42,
+        growthComparisonStars: 30,
         observations: [{ capturedAt: "2026-08-26T08:00:00.000Z", stars: 42 }],
       }],
     });
@@ -28,17 +52,53 @@ describe("parseCollectionContext", () => {
     expect(() => parseCollectionContext({
       latest_captured_at: null,
       interval_minutes: 120,
+      retention_policy: {
+        grace_days: 14,
+        growth_days: 7,
+        push_days: 30,
+        repository_limit: 1_000,
+      },
       repositories: [
-        { full_name: "alpha/one", observations: [] },
-        { full_name: "ALPHA/ONE", observations: [] },
+        {
+          full_name: "alpha/one",
+          first_seen_at: "2026-08-20T08:00:00.000Z",
+          latest_captured_at: "2026-08-26T08:00:00.000Z",
+          latest_pushed_at: "2026-08-26T07:00:00.000Z",
+          latest_rank: 2,
+          latest_stars: 42,
+          growth_comparison_stars: null,
+          observations: [],
+        },
+        {
+          full_name: "ALPHA/ONE",
+          first_seen_at: "2026-08-20T08:00:00.000Z",
+          latest_captured_at: "2026-08-26T08:00:00.000Z",
+          latest_pushed_at: "2026-08-26T07:00:00.000Z",
+          latest_rank: 2,
+          latest_stars: 42,
+          growth_comparison_stars: null,
+          observations: [],
+        },
       ],
     })).toThrow("duplicate repository");
     expect(() => parseCollectionContext({
       latest_captured_at: null,
       interval_minutes: 120,
+      retention_policy: {
+        grace_days: 14,
+        growth_days: 7,
+        push_days: 30,
+        repository_limit: 1_000,
+      },
       repositories: [{
         full_name: "alpha/one",
-        observations: [{ captured_at: "invalid", stars: -1 }],
+        first_seen_at: "2026-08-20T08:00:00.000Z",
+        latest_captured_at: "2026-08-26T08:00:00.000Z",
+        latest_pushed_at: "2026-08-26T07:00:00.000Z",
+        latest_rank: 2,
+        latest_stars: 42,
+        growth_comparison_stars: null,
+        observations: [{ captured_at: "2026-08-26T08:00:00.000Z", stars: -1 }],
       }],
     })).toThrow("non-negative integer");
   });

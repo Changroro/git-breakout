@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import * as Slider from "@radix-ui/react-slider";
 import {
   ChevronLeftIcon,
@@ -10,16 +10,23 @@ import {
   StarIcon,
   SunIcon,
 } from "@primer/octicons-react";
-import { parseHistoryResponse, resolveSnapshotId, type RankingSnapshot } from "./lib/history";
+import {
+  parseRankingSnapshot,
+  parseTimelineResponse,
+  resolveSnapshotId,
+  type RankingSnapshot,
+  type RankingSnapshotMetadata,
+} from "./lib/history";
 import { getVisiblePages, parsePage } from "./lib/pagination";
 import type { RankedRepository } from "./lib/ranking";
 import {
-  parseStarHistoryLookup,
-  type StarHistoryLookup,
-  type StarHistoryPercentiles,
-} from "./lib/star-history";
+  buildSparklinePoints,
+  parseStarSeriesResponse,
+  type RepositoryStarSeries,
+} from "./lib/star-series";
 
 const PAGE_SIZE = 10;
+const SNAPSHOT_CACHE_LIMIT = 5;
 const numberFormatter = new Intl.NumberFormat("ko-KR", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -39,13 +46,25 @@ const timelineDateFormatter = new Intl.DateTimeFormat("en-US", {
 });
 
 type Theme = "light" | "dark";
-type StarHistoryState =
-  | { status: "loading" }
-  | StarHistoryLookup
-  | { status: "error"; message: string };
+type StarSeriesState =
+  | { status: "loading"; requestKey: string }
+  | { status: "ready"; requestKey: string; series: Map<string, RepositoryStarSeries> }
+  | { status: "error"; requestKey: string; message: string };
 
 function formatCapturedAt(value: string): string {
   return `${capturedAtFormatter.format(new Date(value))} KST`;
+}
+
+function cacheSnapshot(cache: Map<string, RankingSnapshot>, snapshot: RankingSnapshot): void {
+  cache.delete(snapshot.id);
+  cache.set(snapshot.id, snapshot);
+  if (cache.size > SNAPSHOT_CACHE_LIMIT) {
+    const oldestId = cache.keys().next().value;
+    if (typeof oldestId !== "string") {
+      throw new Error("Snapshot cache did not contain an eviction candidate");
+    }
+    cache.delete(oldestId);
+  }
 }
 
 function getInitialTheme(): Theme {
@@ -98,39 +117,52 @@ function sourceLabel(source: string): string {
   throw new TypeError(`Unknown ranking source ${source}`);
 }
 
-function useStarHistory(repositoryName: string): StarHistoryState {
-  const [state, setState] = useState<StarHistoryState>({ status: "loading" });
+function useRepositoryStarSeries(
+  snapshotId: string,
+  repositories: readonly RankedRepository[],
+): StarSeriesState {
+  const repositoryKey = repositories.map((repository) => repository.full_name).join("\n");
+  const requestKey = `${snapshotId}\n${repositoryKey}`;
+  const [state, setState] = useState<StarSeriesState>({ status: "loading", requestKey });
 
   useEffect(() => {
     const controller = new AbortController();
-    setState({ status: "loading" });
+    setState({ status: "loading", requestKey });
 
     async function load() {
       try {
-        const response = await fetch(`/api/star-history?${new URLSearchParams({
-          repository: repositoryName,
-        }).toString()}`, {
+        const parameters = new URLSearchParams({ snapshot: snapshotId });
+        repositories.forEach((repository) => parameters.append("repository", repository.full_name));
+        const response = await fetch(`/api/star-series?${parameters.toString()}`, {
           headers: { Accept: "application/json" },
           signal: controller.signal,
         });
         if (!response.ok) {
-          throw new Error(`Star History request failed with status ${response.status}`);
+          throw new Error(`Star series request failed with status ${response.status}`);
         }
-        setState(parseStarHistoryLookup(await response.json()));
+        const parsed = parseStarSeriesResponse(await response.json());
+        const series = new Map(parsed.series.map((item) => [item.full_name.toLowerCase(), item]));
+        if (
+          series.size !== repositories.length
+          || repositories.some((repository) => !series.has(repository.full_name.toLowerCase()))
+        ) {
+          throw new Error("Star series response does not match the visible repositories");
+        }
+        setState({ status: "ready", requestKey, series });
       } catch (error) {
         if (!controller.signal.aborted) {
-          const message = error instanceof Error ? error.message : "Unknown Star History error";
-          console.error(`${repositoryName}: ${message}`);
-          setState({ status: "error", message });
+          const message = error instanceof Error ? error.message : "Unknown star series error";
+          console.error(message);
+          setState({ status: "error", requestKey, message });
         }
       }
     }
 
     void load();
     return () => controller.abort();
-  }, [repositoryName]);
+  }, [requestKey]);
 
-  return state;
+  return state.requestKey === requestKey ? state : { status: "loading", requestKey };
 }
 
 function RepositoryCardThumbnail({ repository }: { repository: RankedRepository }) {
@@ -155,75 +187,75 @@ function RepositoryCardThumbnail({ repository }: { repository: RankedRepository 
   />;
 }
 
-const radarAxes: Array<keyof Pick<
-  StarHistoryPercentiles,
-  "stars" | "contributors" | "new_stars" | "pushes" | "forks"
->> = ["stars", "contributors", "new_stars", "pushes", "forks"];
-
-function radarPoints(percentiles: StarHistoryPercentiles, scale = 1): string {
-  return radarAxes.map((axis, index) => {
-    const angle = -Math.PI / 2 + index * (Math.PI * 2 / radarAxes.length);
-    const radius = 29 * scale * (percentiles[axis] / 100);
-    return `${(50 + Math.cos(angle) * radius).toFixed(1)},${(
-      38 + Math.sin(angle) * radius
-    ).toFixed(1)}`;
-  }).join(" ");
+function formatStarGain(series: RepositoryStarSeries): string {
+  if (series.points.length < 2) {
+    return "Tracking started";
+  }
+  const gain = series.points[series.points.length - 1].stars - series.points[0].stars;
+  return `${gain > 0 ? "+" : ""}${numberFormatter.format(gain)} since tracked`;
 }
 
-function RepositoryActivity({
+function resolveRepositorySeries(
+  repositoryName: string,
+  state: StarSeriesState,
+): RepositoryStarSeries | null {
+  if (state.status !== "ready") {
+    return null;
+  }
+  const series = state.series.get(repositoryName.toLowerCase());
+  if (series === undefined) {
+    throw new Error(`Star series for ${repositoryName} is missing`);
+  }
+  return series;
+}
+
+function RepositoryStarGrowth({
   repositoryName,
   state,
 }: {
   repositoryName: string;
-  state: StarHistoryState;
+  state: StarSeriesState;
 }) {
   if (state.status === "loading") {
-    return <span className="repository-activity repository-activity-status">Loading stats</span>;
-  }
-  if (state.status === "unavailable") {
-    return <span className="repository-activity repository-activity-status">No Star History data</span>;
+    return <span className="repository-growth repository-growth-status">Loading history</span>;
   }
   if (state.status === "error") {
-    return <span className="repository-activity repository-activity-status" title={state.message}>Stats failed</span>;
+    return <span className="repository-growth repository-growth-status" title={state.message}>History failed</span>;
   }
-
-  const percentiles = state.repo.weekly_percentiles;
+  const series = resolveRepositorySeries(repositoryName, state);
+  if (series === null || series.points.length < 2) {
+    return <span className="repository-growth repository-growth-status">Tracking started</span>;
+  }
+  const first = series.points[0];
+  const latest = series.points[series.points.length - 1];
+  const gain = latest.stars - first.stars;
+  const label = formatStarGain(series);
+  const sparkline = buildSparklinePoints(series.points, 108, 44, 4);
+  const latestCoordinate = sparkline.split(" ").at(-1);
+  if (latestCoordinate === undefined) {
+    throw new Error(`Star sparkline for ${repositoryName} has no latest point`);
+  }
+  const latestY = latestCoordinate.split(",")[1];
+  if (latestY === undefined) {
+    throw new Error(`Star sparkline for ${repositoryName} has an invalid latest point`);
+  }
   return (
-    <span className="repository-activity">
+    <span className="repository-growth">
       <svg
-        aria-label={`${repositoryName} activity percentiles from Star History`}
-        className="activity-radar"
+        aria-label={`${repositoryName} ${label}`}
+        className="star-sparkline"
         role="img"
-        viewBox="0 0 100 76"
+        viewBox="0 0 108 44"
       >
-        {[0.25, 0.5, 0.75, 1].map((scale) => (
-          <polygon className="activity-radar-grid" key={scale} points={radarPoints({
-            stars: 100,
-            contributors: 100,
-            new_stars: 100,
-            pushes: 100,
-            forks: 100,
-            issues_closed: 100,
-          }, scale)} />
-        ))}
-        {radarAxes.map((_, index) => {
-          const angle = -Math.PI / 2 + index * (Math.PI * 2 / radarAxes.length);
-          return <line
-            className="activity-radar-axis"
-            key={index}
-            x1="50"
-            x2={(50 + Math.cos(angle) * 29).toFixed(1)}
-            y1="38"
-            y2={(38 + Math.sin(angle) * 29).toFixed(1)}
-          />;
-        })}
-        <polygon className="activity-radar-value" points={radarPoints(percentiles)} />
-        {radarPoints(percentiles).split(" ").map((point, index) => {
-          const [cx, cy] = point.split(",");
-          return <circle className="activity-radar-dot" cx={cx} cy={cy} key={index} r="2" />;
-        })}
+        <title>{`${formatCapturedAt(first.captured_at)}: ${first.stars} stars; ${formatCapturedAt(latest.captured_at)}: ${latest.stars} stars; change ${gain}`}</title>
+        <line className="star-sparkline-baseline" x1="4" x2="104" y1="40" y2="40" />
+        <polyline
+          className="star-sparkline-line"
+          points={sparkline}
+        />
+        <circle className="star-sparkline-dot" cx="104" cy={latestY} r="2.2" />
       </svg>
-      <span className="activity-radar-label">Star History</span>
+      <span className="star-sparkline-label">{label}</span>
     </span>
   );
 }
@@ -231,13 +263,15 @@ function RepositoryActivity({
 function RankingRow({
   repository,
   rowIndex,
+  starSeries,
 }: {
   repository: RankedRepository;
   rowIndex: number;
+  starSeries: StarSeriesState;
 }) {
   const language = repository.language ?? "—";
   const stars = requireDisplayValue(repository.metrics.stars, "metrics.stars", repository.full_name);
-  const starHistory = useStarHistory(repository.full_name);
+  const series = resolveRepositorySeries(repository.full_name, starSeries);
 
   return (
     <li className="ranking-row">
@@ -258,22 +292,18 @@ function RankingRow({
           <div className="mobile-meta">
             <span>{language}</span>
             <span className="mobile-stars"><StarIcon size={12} />{numberFormatter.format(stars)}</span>
-            {starHistory.status === "available" ? (
-              <span className="mobile-star-history">
-                SH +{numberFormatter.format(starHistory.repo.weekly_activity.new_stars)}★ · {numberFormatter.format(starHistory.repo.weekly_activity.pushes)} pushes
-              </span>
-            ) : starHistory.status === "unavailable" ? (
-              <span>SH unavailable</span>
-            ) : starHistory.status === "error" ? (
-              <span title={starHistory.message}>SH failed</span>
-            ) : (
-              <span>SH loading</span>
-            )}
+            <span className="mobile-star-growth">
+              {starSeries.status === "loading"
+                ? "Loading history"
+                : starSeries.status === "error"
+                  ? "History failed"
+                  : series === null ? "Tracking started" : formatStarGain(series)}
+            </span>
           </div>
         </div>
         <span className="cell language">{language}</span>
         <span className="cell stars">{numberFormatter.format(stars)}</span>
-        <RepositoryActivity repositoryName={repository.full_name} state={starHistory} />
+        <RepositoryStarGrowth repositoryName={repository.full_name} state={starSeries} />
       </div>
     </li>
   );
@@ -332,7 +362,7 @@ function Pagination({
 }
 
 function requireSelectedSnapshotIndex(
-  snapshots: readonly RankingSnapshot[],
+  snapshots: readonly RankingSnapshotMetadata[],
   selectedId: string,
 ): number {
   const selectedIndex = snapshots.findIndex((snapshot) => snapshot.id === selectedId);
@@ -347,7 +377,7 @@ function Timeline({
   selectedId,
   onSelect,
 }: {
-  snapshots: readonly RankingSnapshot[];
+  snapshots: readonly RankingSnapshotMetadata[];
   selectedId: string;
   onSelect: (snapshotId: string) => void;
 }) {
@@ -441,21 +471,24 @@ function Timeline({
 function RankingPage({
   snapshots,
   selectedId,
+  selectedSnapshot,
+  isSnapshotLoading,
+  snapshotError,
   onSelect,
 }: {
-  snapshots: readonly RankingSnapshot[];
+  snapshots: readonly RankingSnapshotMetadata[];
   selectedId: string;
+  selectedSnapshot: RankingSnapshot;
+  isSnapshotLoading: boolean;
+  snapshotError: string | null;
   onSelect: (snapshotId: string) => void;
 }) {
-  const selectedSnapshot = snapshots.find((snapshot) => snapshot.id === selectedId);
-  if (selectedSnapshot === undefined) {
-    throw new RangeError(`Selected snapshot ${selectedId} does not exist`);
-  }
   const totalPages = Math.ceil(selectedSnapshot.repositories.length / PAGE_SIZE);
   const requestedPage = new URLSearchParams(window.location.search).get("page");
   const currentPage = parsePage(requestedPage, totalPages);
   const start = (currentPage - 1) * PAGE_SIZE;
   const repositories = selectedSnapshot.repositories.slice(start, start + PAGE_SIZE);
+  const starSeries = useRepositoryStarSeries(selectedSnapshot.id, repositories);
 
   return (
     <main className="page-container">
@@ -472,7 +505,11 @@ function RankingPage({
         <Timeline snapshots={snapshots} selectedId={selectedId} onSelect={onSelect} />
       </section>
 
-      <section className="ranking-board" aria-label="Repository ranking">
+      <section
+        aria-busy={isSnapshotLoading}
+        className={`ranking-board ${isSnapshotLoading ? "ranking-board-loading" : ""}`}
+        aria-label="Repository ranking"
+      >
         <div className="board-heading">
           <div className="board-title">
             <RepoIcon size={18} />
@@ -481,8 +518,19 @@ function RankingPage({
               <p>{sourceLabel(selectedSnapshot.source)}</p>
             </div>
           </div>
-          <span className="result-count">{selectedSnapshot.repositories.length} repositories</span>
+          <div className="board-status">
+            {isSnapshotLoading ? (
+              <span className="snapshot-loading" role="status">
+                <span className="snapshot-loading-spinner" />Updating snapshot
+              </span>
+            ) : null}
+            <span className="result-count">{selectedSnapshot.repositories.length} repositories</span>
+          </div>
         </div>
+
+        {snapshotError === null ? null : (
+          <p className="snapshot-error" role="alert">{snapshotError}</p>
+        )}
 
         <div className="column-heading" aria-hidden="true">
           <span>Rank</span>
@@ -490,17 +538,26 @@ function RankingPage({
           <span>Repository</span>
           <span>Language</span>
           <span className="stars-heading"><StarIcon size={12} />Stars</span>
-          <span>Star History</span>
+          <span>Stars gained</span>
         </div>
 
-        <ol className="ranking-list" start={start + 1} key={`${selectedId}-${currentPage}`}>
+        <ol className="ranking-list" start={start + 1} key={`${selectedSnapshot.id}-${currentPage}`}>
           {repositories.map((repository, rowIndex) => (
-            <RankingRow repository={repository} rowIndex={rowIndex} key={repository.full_name} />
+            <RankingRow
+              repository={repository}
+              rowIndex={rowIndex}
+              starSeries={starSeries}
+              key={repository.full_name}
+            />
           ))}
         </ol>
 
         <div className="board-footer">
-          <Pagination currentPage={currentPage} totalPages={totalPages} snapshotId={selectedId} />
+          <Pagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            snapshotId={selectedSnapshot.id}
+          />
         </div>
       </section>
     </main>
@@ -508,26 +565,29 @@ function RankingPage({
 }
 
 export default function App() {
-  const [snapshots, setSnapshots] = useState<RankingSnapshot[] | null>(null);
+  const [snapshots, setSnapshots] = useState<RankingSnapshotMetadata[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedSnapshot, setSelectedSnapshot] = useState<RankingSnapshot | null>(null);
+  const [isSnapshotLoading, setIsSnapshotLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const snapshotCache = useRef(new Map<string, RankingSnapshot>());
 
   useEffect(() => {
     const controller = new AbortController();
 
-    async function loadHistory() {
+    async function loadTimeline() {
       try {
-        const response = await fetch("/api/history", {
+        const response = await fetch("/api/timeline", {
           headers: { Accept: "application/json" },
           signal: controller.signal,
         });
         if (!response.ok) {
-          throw new Error(`History request failed with status ${response.status}`);
+          throw new Error(`Timeline request failed with status ${response.status}`);
         }
-        const history = parseHistoryResponse(await response.json());
+        const timeline = parseTimelineResponse(await response.json());
         const requestedId = new URLSearchParams(window.location.search).get("snapshot");
-        const resolvedId = resolveSnapshotId(requestedId, history.snapshots);
-        setSnapshots(history.snapshots);
+        const resolvedId = resolveSnapshotId(requestedId, timeline.snapshots);
+        setSnapshots(timeline.snapshots);
         setSelectedId(resolvedId);
       } catch (caughtError) {
         if (!controller.signal.aborted) {
@@ -536,9 +596,55 @@ export default function App() {
       }
     }
 
-    void loadHistory();
+    void loadTimeline();
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    if (selectedId === null) {
+      return;
+    }
+    const snapshotId = selectedId;
+    const cachedSnapshot = snapshotCache.current.get(snapshotId);
+    setError(null);
+    if (cachedSnapshot !== undefined) {
+      cacheSnapshot(snapshotCache.current, cachedSnapshot);
+      setSelectedSnapshot(cachedSnapshot);
+      setIsSnapshotLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    setIsSnapshotLoading(true);
+
+    async function loadSnapshot() {
+      try {
+        const response = await fetch(`/api/snapshot?${new URLSearchParams({ id: snapshotId })}`, {
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Snapshot request failed with status ${response.status}`);
+        }
+        const snapshot = parseRankingSnapshot(await response.json());
+        if (snapshot.id !== snapshotId) {
+          throw new Error(`Snapshot response ${snapshot.id} does not match ${snapshotId}`);
+        }
+        cacheSnapshot(snapshotCache.current, snapshot);
+        setSelectedSnapshot(snapshot);
+      } catch (caughtError) {
+        if (!controller.signal.aborted) {
+          setError(caughtError instanceof Error ? caughtError.message : "Unknown snapshot error");
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsSnapshotLoading(false);
+        }
+      }
+    }
+
+    void loadSnapshot();
+    return () => controller.abort();
+  }, [selectedId]);
 
   function selectSnapshot(snapshotId: string) {
     if (snapshots === null || !snapshots.some((snapshot) => snapshot.id === snapshotId)) {
@@ -561,19 +667,26 @@ export default function App() {
         </div>
       </header>
 
-      {error !== null ? (
+      {error !== null && selectedSnapshot === null ? (
         <main className="page-container">
           <section className="status-panel" role="alert">
             <h1>History unavailable</h1>
             <p>{error}</p>
           </section>
         </main>
-      ) : snapshots === null || selectedId === null ? (
+      ) : snapshots === null || selectedId === null || selectedSnapshot === null ? (
         <main className="page-container">
           <p className="loading-state" role="status">Loading ranking history...</p>
         </main>
       ) : (
-        <RankingPage snapshots={snapshots} selectedId={selectedId} onSelect={selectSnapshot} />
+        <RankingPage
+          snapshots={snapshots}
+          selectedId={selectedId}
+          selectedSnapshot={selectedSnapshot}
+          isSnapshotLoading={isSnapshotLoading}
+          snapshotError={error}
+          onSelect={selectSnapshot}
+        />
       )}
     </div>
   );

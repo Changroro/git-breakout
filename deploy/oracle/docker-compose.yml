@@ -43,13 +43,36 @@ services:
       - "127.0.0.1:${POSTGREST_PORT:?POSTGREST_PORT is required}:3000"
     networks:
       - internal
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/oracle/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      rest:
+        condition: service_healthy
+    environment:
+      TREND_RADAR_INTERNAL_API_URL: http://rest:3000
+      TREND_RADAR_STATIC_DIR: /app/dist
+      TREND_RADAR_WEB_CACHE_DIR: /var/lib/trend-radar
+      TREND_RADAR_WEB_PORT: 8080
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    volumes:
+      - web-cache:/var/lib/trend-radar
+    networks:
+      - internal
       - edge
 
   tunnel:
     image: cloudflare/cloudflared:2026.8.2
     restart: unless-stopped
     depends_on:
-      rest:
+      web:
         condition: service_healthy
     command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
     volumes:
@@ -65,3 +88,4 @@ networks:
 
 volumes:
   db-data:
+  web-cache:

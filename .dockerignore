@@ -1,0 +1,9 @@
+.git
+.github
+data
+dist
+node_modules
+server-dist
+TODO.md
+deploy/oracle/.env
+deploy/oracle/cloudflared.yml

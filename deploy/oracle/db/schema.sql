@@ -13,11 +13,23 @@ create table radar.collector_settings (
   id boolean primary key default true check (id),
   interval_minutes integer not null check (interval_minutes > 0),
   lease_minutes integer not null check (lease_minutes > 0),
+  retention_grace_days integer not null check (retention_grace_days > 0),
+  retention_growth_days integer not null check (retention_growth_days > 0),
+  retention_push_days integer not null check (retention_push_days > 0),
+  retention_repository_limit integer not null check (retention_repository_limit > 0),
   updated_at timestamptz not null
 );
 
-insert into radar.collector_settings (interval_minutes, lease_minutes, updated_at)
-values (120, 30, now());
+insert into radar.collector_settings (
+  interval_minutes,
+  lease_minutes,
+  retention_grace_days,
+  retention_growth_days,
+  retention_push_days,
+  retention_repository_limit,
+  updated_at
+)
+values (120, 30, 14, 7, 30, 1000, now());
 
 create table radar.collector_runs (
   id uuid primary key,
@@ -170,12 +182,26 @@ language sql
 stable
 set search_path = pg_catalog, radar
 as $$
-  with ranked_observations as (
+  with policy as (
+    select
+      retention_grace_days,
+      retention_growth_days,
+      retention_push_days,
+      retention_repository_limit
+    from radar.collector_settings
+    where id
+  ), latest_snapshot as (
+    select max(captured_at) as captured_at
+    from radar.snapshots
+  ), ranked_observations as (
     select
       full_name_key,
       full_name,
       captured_at,
       stars,
+      rank,
+      payload_json,
+      min(captured_at) over (partition by full_name_key) as first_seen_at,
       row_number() over (
         partition by full_name_key
         order by captured_at desc
@@ -185,6 +211,11 @@ as $$
     select
       full_name_key,
       (array_agg(full_name order by captured_at desc))[1] as full_name,
+      min(first_seen_at) as first_seen_at,
+      (array_agg(captured_at order by captured_at desc))[1] as latest_captured_at,
+      (array_agg(payload_json ->> 'pushed_at' order by captured_at desc))[1] as latest_pushed_at,
+      (array_agg(rank order by captured_at desc))[1] as latest_rank,
+      (array_agg(stars order by captured_at desc))[1] as latest_stars,
       jsonb_agg(
         jsonb_build_object('captured_at', captured_at, 'stars', stars)
         order by captured_at desc
@@ -192,17 +223,51 @@ as $$
     from ranked_observations
     where observation_number <= 20
     group by full_name_key
+  ), repository_summaries as (
+    select
+      repository_context.*,
+      comparison.stars as growth_comparison_stars
+    from repository_context
+    cross join policy
+    cross join latest_snapshot
+    left join lateral (
+      select repositories.stars
+      from radar.snapshot_repositories repositories
+      where repositories.full_name_key = repository_context.full_name_key
+        and repositories.captured_at <= latest_snapshot.captured_at
+          - make_interval(days => policy.retention_growth_days)
+      order by repositories.captured_at desc
+      limit 1
+    ) comparison on true
   )
   select jsonb_build_object(
     'latest_captured_at', (select max(captured_at) from radar.snapshots),
     'interval_minutes', (
       select interval_minutes from radar.collector_settings where id
     ),
+    'retention_policy', (
+      select jsonb_build_object(
+        'grace_days', retention_grace_days,
+        'growth_days', retention_growth_days,
+        'push_days', retention_push_days,
+        'repository_limit', retention_repository_limit
+      )
+      from policy
+    ),
     'repositories', coalesce(
       (select jsonb_agg(
-        jsonb_build_object('full_name', full_name, 'observations', observations)
+        jsonb_build_object(
+          'full_name', full_name,
+          'first_seen_at', first_seen_at,
+          'latest_captured_at', latest_captured_at,
+          'latest_pushed_at', latest_pushed_at,
+          'latest_rank', latest_rank,
+          'latest_stars', latest_stars,
+          'growth_comparison_stars', growth_comparison_stars,
+          'observations', observations
+        )
         order by full_name_key
-      ) from repository_context),
+      ) from repository_summaries),
       '[]'::jsonb
     )
   );
@@ -314,6 +379,83 @@ begin
 end;
 $$;
 
+create function api.repository_star_series(
+  p_snapshot_id uuid,
+  p_full_names text[]
+)
+returns jsonb
+language plpgsql
+stable
+set search_path = pg_catalog, radar
+as $$
+declare
+  selected_captured_at timestamptz;
+  response jsonb;
+begin
+  if cardinality(p_full_names) is null or cardinality(p_full_names) not between 1 and 10 then
+    raise exception 'Star series requires between 1 and 10 repositories';
+  end if;
+  if exists (
+    select 1
+    from unnest(p_full_names) as names(full_name)
+    where full_name !~ '^[^/[:space:]]+/[^/[:space:]]+$'
+  ) then
+    raise exception 'Star series repository names must use owner/name format';
+  end if;
+  if (
+    select count(*)
+    from (select distinct lower(full_name) from unnest(p_full_names) as names(full_name)) unique_names
+  ) <> cardinality(p_full_names) then
+    raise exception 'Star series repository names must be unique';
+  end if;
+
+  select captured_at into selected_captured_at
+  from radar.snapshots
+  where id = p_snapshot_id;
+  if selected_captured_at is null then
+    raise exception 'Snapshot % does not exist', p_snapshot_id;
+  end if;
+  if exists (
+    select 1
+    from unnest(p_full_names) as names(full_name)
+    where not exists (
+      select 1
+      from radar.snapshot_repositories repositories
+      where repositories.snapshot_id = p_snapshot_id
+        and repositories.full_name_key = lower(names.full_name)
+    )
+  ) then
+    raise exception 'Star series repository is absent from snapshot %', p_snapshot_id;
+  end if;
+
+  select jsonb_build_object(
+    'schema_version', '1.0',
+    'series', jsonb_agg(
+      jsonb_build_object(
+        'full_name', requested.full_name,
+        'points', history.points
+      )
+      order by requested.position
+    )
+  ) into response
+  from unnest(p_full_names) with ordinality as requested(full_name, position)
+  cross join lateral (
+    select jsonb_agg(
+      jsonb_build_object(
+        'captured_at', repositories.captured_at,
+        'stars', repositories.stars
+      )
+      order by repositories.captured_at
+    ) as points
+    from radar.snapshot_repositories repositories
+    where repositories.full_name_key = lower(requested.full_name)
+      and repositories.captured_at <= selected_captured_at
+  ) history;
+
+  return response;
+end;
+$$;
+
 create function api.health()
 returns jsonb
 language sql
@@ -329,4 +471,5 @@ grant execute on function api.collection_context() to collector;
 grant execute on function api.complete_collection(uuid, timestamptz, text, jsonb) to collector;
 grant execute on function api.snapshot_timeline() to web_anon, collector;
 grant execute on function api.snapshot_repositories(uuid) to web_anon, collector;
+grant execute on function api.repository_star_series(uuid, text[]) to web_anon, collector;
 grant execute on function api.health() to web_anon, collector;

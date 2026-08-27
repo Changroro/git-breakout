@@ -1,0 +1,269 @@
+import { createReadStream, existsSync, statSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { extname, resolve, sep } from "node:path";
+import { loadRepositoryCard } from "./card-cache.ts";
+import { PublicHistoryApi } from "./public-history.ts";
+
+const MAX_PROXY_BODY_BYTES = 32 * 1024 * 1024;
+const PROXY_TIMEOUT_MS = 60_000;
+const MIME_TYPES: Record<string, string> = {
+  ".css": "text/css; charset=utf-8",
+  ".html": "text/html; charset=utf-8",
+  ".ico": "image/x-icon",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  ".webp": "image/webp",
+};
+
+export type WebServerConfig = {
+  cacheDirectory: string;
+  internalApiUrl: string;
+  staticDirectory: string;
+};
+
+type WebServerDependencies = {
+  fetchImplementation?: typeof fetch;
+};
+
+function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
+  response.statusCode = statusCode;
+  response.setHeader("Content-Type", "application/json; charset=utf-8");
+  response.setHeader("Cache-Control", "no-store");
+  response.end(JSON.stringify(payload));
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown server error";
+}
+
+function rejectMethod(response: ServerResponse, allowed: string): void {
+  response.setHeader("Allow", allowed);
+  sendJson(response, 405, { error: "Method not allowed" });
+}
+
+async function readRequestBody(request: IncomingMessage): Promise<Buffer | undefined> {
+  if (request.method === "GET" || request.method === "HEAD") {
+    return undefined;
+  }
+  const chunks: Buffer[] = [];
+  let length = 0;
+  for await (const chunk of request) {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    length += bytes.length;
+    if (length > MAX_PROXY_BODY_BYTES) {
+      throw new RangeError(`RPC request body exceeds ${MAX_PROXY_BODY_BYTES} bytes`);
+    }
+    chunks.push(bytes);
+  }
+  return Buffer.concat(chunks);
+}
+
+function forwardedHeaders(request: IncomingMessage): Headers {
+  const headers = new Headers();
+  for (const name of ["accept", "authorization", "content-type", "prefer", "range", "x-client-info"]) {
+    const value = request.headers[name];
+    if (typeof value === "string") {
+      headers.set(name, value);
+    }
+  }
+  return headers;
+}
+
+async function proxyRpc(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  internalApiUrl: string,
+  fetchImplementation: typeof fetch,
+): Promise<void> {
+  if (!/^\/rpc\/[a-z][a-z0-9_]*$/.test(requestUrl.pathname)) {
+    sendJson(response, 404, { error: "RPC route not found" });
+    return;
+  }
+  try {
+    const body = await readRequestBody(request);
+    const upstream = await fetchImplementation(`${internalApiUrl}${requestUrl.pathname}${requestUrl.search}`, {
+      method: request.method,
+      headers: forwardedHeaders(request),
+      body,
+      signal: AbortSignal.timeout(PROXY_TIMEOUT_MS),
+    });
+    response.statusCode = upstream.status;
+    for (const name of ["content-range", "content-type", "location", "preference-applied", "www-authenticate"]) {
+      const value = upstream.headers.get(name);
+      if (value !== null) {
+        response.setHeader(name, value);
+      }
+    }
+    response.end(Buffer.from(await upstream.arrayBuffer()));
+  } catch (error) {
+    sendJson(response, error instanceof RangeError ? 413 : 502, { error: errorMessage(error) });
+  }
+}
+
+function resolveStaticFile(staticDirectory: string, pathname: string): string | null {
+  let decodedPath: string;
+  try {
+    decodedPath = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+  const relativePath = decodedPath === "/" ? "index.html" : decodedPath.slice(1);
+  const filePath = resolve(staticDirectory, relativePath);
+  const staticRoot = resolve(staticDirectory);
+  if (filePath !== staticRoot && !filePath.startsWith(`${staticRoot}${sep}`)) {
+    return null;
+  }
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+    return null;
+  }
+  return filePath;
+}
+
+function serveStatic(
+  request: IncomingMessage,
+  response: ServerResponse,
+  staticDirectory: string,
+  pathname: string,
+): void {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    rejectMethod(response, "GET, HEAD");
+    return;
+  }
+  const filePath = resolveStaticFile(staticDirectory, pathname);
+  if (filePath === null) {
+    sendJson(response, 404, { error: "Page not found" });
+    return;
+  }
+  response.statusCode = 200;
+  response.setHeader("Content-Type", MIME_TYPES[extname(filePath).toLowerCase()] ?? "application/octet-stream");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader(
+    "Cache-Control",
+    pathname === "/" ? "no-cache" : "public, max-age=31536000, immutable",
+  );
+  if (request.method === "HEAD") {
+    response.end();
+    return;
+  }
+  createReadStream(filePath).on("error", (error) => {
+    if (!response.headersSent) {
+      sendJson(response, 500, { error: error.message });
+      return;
+    }
+    response.destroy(error);
+  }).pipe(response);
+}
+
+export function createWebServer(
+  config: WebServerConfig,
+  dependencies: WebServerDependencies = {},
+): Server {
+  const staticDirectory = resolve(config.staticDirectory);
+  if (!existsSync(resolve(staticDirectory, "index.html"))) {
+    throw new Error(`Static index is missing from ${staticDirectory}`);
+  }
+  const fetchImplementation = dependencies.fetchImplementation ?? fetch;
+  const historyApi = new PublicHistoryApi({
+    baseUrl: config.internalApiUrl,
+    fetchImplementation,
+  });
+  const cardCacheDirectory = resolve(config.cacheDirectory, "repository-cards");
+
+  const server = createServer(async (request, response) => {
+    const requestUrl = new URL(request.url ?? "/", "http://localhost");
+    if (requestUrl.pathname === "/health") {
+      if (request.method !== "GET") {
+        rejectMethod(response, "GET");
+        return;
+      }
+      sendJson(response, 200, { status: "ok" });
+      return;
+    }
+    if (requestUrl.pathname === "/api/timeline") {
+      if (request.method !== "GET") {
+        rejectMethod(response, "GET");
+        return;
+      }
+      try {
+        sendJson(response, 200, await historyApi.readTimeline());
+      } catch (error) {
+        sendJson(response, 502, { error: errorMessage(error) });
+      }
+      return;
+    }
+    if (requestUrl.pathname === "/api/snapshot") {
+      if (request.method !== "GET") {
+        rejectMethod(response, "GET");
+        return;
+      }
+      const snapshotId = requestUrl.searchParams.get("id");
+      if (snapshotId === null) {
+        sendJson(response, 400, { error: "Snapshot id is required" });
+        return;
+      }
+      try {
+        sendJson(response, 200, await historyApi.readSnapshot(snapshotId));
+      } catch (error) {
+        sendJson(response, error instanceof RangeError ? 404 : 502, { error: errorMessage(error) });
+      }
+      return;
+    }
+    if (requestUrl.pathname === "/api/card") {
+      if (request.method !== "GET") {
+        rejectMethod(response, "GET");
+        return;
+      }
+      try {
+        const repositoryName = requestUrl.searchParams.get("repository");
+        const imageUrl = requestUrl.searchParams.get("url");
+        if (repositoryName === null) {
+          throw new TypeError("Repository name is required");
+        }
+        if (imageUrl === null) {
+          throw new TypeError("Card URL is required");
+        }
+        const card = await loadRepositoryCard(repositoryName, imageUrl, cardCacheDirectory, fetchImplementation);
+        response.statusCode = 200;
+        response.setHeader("Content-Type", card.contentType);
+        response.setHeader("Cache-Control", "public, max-age=21600, immutable");
+        response.end(card.bytes);
+      } catch (error) {
+        sendJson(response, 502, { error: errorMessage(error) });
+      }
+      return;
+    }
+    if (requestUrl.pathname === "/api/star-series") {
+      if (request.method !== "GET") {
+        rejectMethod(response, "GET");
+        return;
+      }
+      const snapshotId = requestUrl.searchParams.get("snapshot");
+      const repositoryNames = requestUrl.searchParams.getAll("repository");
+      if (snapshotId === null) {
+        sendJson(response, 400, { error: "Snapshot id is required" });
+        return;
+      }
+      try {
+        sendJson(response, 200, await historyApi.readStarSeries(snapshotId, repositoryNames));
+      } catch (error) {
+        sendJson(response, error instanceof TypeError ? 400 : 502, { error: errorMessage(error) });
+      }
+      return;
+    }
+    if (requestUrl.pathname.startsWith("/rpc/")) {
+      await proxyRpc(
+        request,
+        response,
+        requestUrl,
+        historyApi.baseUrl,
+        fetchImplementation,
+      );
+      return;
+    }
+    serveStatic(request, response, staticDirectory, requestUrl.pathname);
+  });
+  return server;
+}

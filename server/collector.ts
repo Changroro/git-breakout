@@ -187,10 +187,9 @@ export async function collectOnce({
     const repositories = await fetchGitHubRepositories({
       token: githubToken,
       capturedAt: startedAt,
-      previouslyObservedNames: [
-        ...database.readObservedRepositoryNames(),
-        ...BOOTSTRAP_REPOSITORY_NAMES,
-      ],
+      previouslyObservedNames: database.readLatestCollectionCapturedAt() === null
+        ? [...BOOTSTRAP_REPOSITORY_NAMES]
+        : database.readRetainedRepositoryNames(),
       fetchImplementation,
     });
     const capturedAt = now().toISOString();
