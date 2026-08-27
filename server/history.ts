@@ -3,6 +3,15 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import type { HistoryResponse, RankingSnapshot } from "../src/lib/history.ts";
 import { rankRepositories, type RepositoryCandidate, type RankedRepository } from "../src/lib/ranking.ts";
+import {
+  parseStarSeriesResponse,
+  type StarSeriesResponse,
+} from "../src/lib/star-series.ts";
+import {
+  selectRetainedRepositoryNames,
+  type RepositoryRetentionCandidate,
+  type RetentionPolicy,
+} from "./retention.ts";
 
 type SnapshotInput = {
   id: string;
@@ -26,6 +35,11 @@ type ObservationRow = {
   payload_json: string;
 };
 
+type RetentionRow = ObservationRow & {
+  full_name: string;
+  rank: number;
+};
+
 export type StarObservation = {
   capturedAt: string;
   stars: number;
@@ -37,14 +51,6 @@ export type CollectorRun = {
   finished_at: string | null;
   status: "running" | "completed" | "failed";
   error_message: string | null;
-};
-
-export type StarHistoryCacheEntry = {
-  fullName: string;
-  status: "available" | "unavailable" | "failed";
-  checkedAt: string;
-  payload: unknown | null;
-  errorMessage: string | null;
 };
 
 export class HistoryDatabase {
@@ -89,6 +95,10 @@ export class HistoryDatabase {
       CREATE TABLE IF NOT EXISTS collector_settings (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         interval_minutes INTEGER NOT NULL CHECK (interval_minutes > 0),
+        retention_grace_days INTEGER CHECK (retention_grace_days > 0),
+        retention_growth_days INTEGER CHECK (retention_growth_days > 0),
+        retention_push_days INTEGER CHECK (retention_push_days > 0),
+        retention_repository_limit INTEGER CHECK (retention_repository_limit > 0),
         updated_at TEXT NOT NULL
       );
 
@@ -98,24 +108,46 @@ export class HistoryDatabase {
         acquired_at TEXT NOT NULL,
         expires_at TEXT NOT NULL
       );
-
-      CREATE TABLE IF NOT EXISTS star_history_repositories (
-        full_name TEXT PRIMARY KEY COLLATE NOCASE,
-        status TEXT NOT NULL CHECK (status IN ('available', 'unavailable', 'failed')),
-        checked_at TEXT NOT NULL,
-        payload_json TEXT,
-        error_message TEXT,
-        CHECK (
-          (status = 'available' AND payload_json IS NOT NULL AND error_message IS NULL) OR
-          (status = 'unavailable' AND payload_json IS NULL AND error_message IS NULL) OR
-          (status = 'failed' AND payload_json IS NULL AND error_message IS NOT NULL)
-        )
-      );
-
-      INSERT OR IGNORE INTO collector_settings (id, interval_minutes, updated_at)
-      VALUES (1, 120, '2026-08-25T00:00:00.000Z');
     `);
+    this.migrateCollectorRetentionSettings();
+    this.database.prepare(`
+      INSERT OR IGNORE INTO collector_settings (
+        id,
+        interval_minutes,
+        retention_grace_days,
+        retention_growth_days,
+        retention_push_days,
+        retention_repository_limit,
+        updated_at
+      )
+      VALUES (1, 120, 14, 7, 30, 1000, '2026-08-25T00:00:00.000Z')
+    `).run();
     this.migrateLegacyOpenGraphImages();
+  }
+
+  private migrateCollectorRetentionSettings(): void {
+    const columns = new Set((this.database.prepare("PRAGMA table_info(collector_settings)").all() as Array<{
+      name: string;
+    }>).map(({ name }) => name));
+    const retentionColumns = [
+      ["retention_grace_days", 14],
+      ["retention_growth_days", 7],
+      ["retention_push_days", 30],
+      ["retention_repository_limit", 1_000],
+    ] as const;
+    retentionColumns.forEach(([name]) => {
+      if (!columns.has(name)) {
+        this.database.exec(`ALTER TABLE collector_settings ADD COLUMN ${name} INTEGER`);
+      }
+    });
+    this.database.prepare(`
+      UPDATE collector_settings
+      SET
+        retention_grace_days = COALESCE(retention_grace_days, 14),
+        retention_growth_days = COALESCE(retention_growth_days, 7),
+        retention_push_days = COALESCE(retention_push_days, 30),
+        retention_repository_limit = COALESCE(retention_repository_limit, 1000)
+    `).run();
   }
 
   private migrateLegacyOpenGraphImages(): void {
@@ -281,63 +313,91 @@ export class HistoryDatabase {
     return row.interval_minutes;
   }
 
-  readStarHistoryCache(fullName: string): StarHistoryCacheEntry | null {
-    if (!/^[^/\s]+\/[^/\s]+$/.test(fullName)) {
-      throw new TypeError("Star History repository must use owner/name format");
-    }
+  readRetentionPolicy(): RetentionPolicy {
     const row = this.database.prepare(`
-      SELECT full_name, status, checked_at, payload_json, error_message
-      FROM star_history_repositories
-      WHERE full_name = ? COLLATE NOCASE
-    `).get(fullName) as {
-      full_name: string;
-      status: StarHistoryCacheEntry["status"];
-      checked_at: string;
-      payload_json: string | null;
-      error_message: string | null;
+      SELECT
+        retention_grace_days,
+        retention_growth_days,
+        retention_push_days,
+        retention_repository_limit
+      FROM collector_settings
+      WHERE id = 1
+    `).get() as {
+      retention_grace_days: number;
+      retention_growth_days: number;
+      retention_push_days: number;
+      retention_repository_limit: number;
     } | undefined;
-    if (row === undefined) {
-      return null;
+    if (
+      row === undefined
+      || !Number.isInteger(row.retention_grace_days)
+      || row.retention_grace_days <= 0
+      || !Number.isInteger(row.retention_growth_days)
+      || row.retention_growth_days <= 0
+      || !Number.isInteger(row.retention_push_days)
+      || row.retention_push_days <= 0
+      || !Number.isInteger(row.retention_repository_limit)
+      || row.retention_repository_limit <= 0
+    ) {
+      throw new Error("Collector retention policy is missing or invalid");
     }
     return {
-      fullName: row.full_name,
-      status: row.status,
-      checkedAt: row.checked_at,
-      payload: row.payload_json === null ? null : JSON.parse(row.payload_json),
-      errorMessage: row.error_message,
+      graceDays: row.retention_grace_days,
+      growthDays: row.retention_growth_days,
+      pushDays: row.retention_push_days,
+      repositoryLimit: row.retention_repository_limit,
     };
   }
 
-  writeStarHistoryCache(entry: StarHistoryCacheEntry): void {
-    if (!/^[^/\s]+\/[^/\s]+$/.test(entry.fullName)) {
-      throw new TypeError("Star History repository must use owner/name format");
+  readStarSeries(fullNames: readonly string[], before: string): StarSeriesResponse {
+    if (
+      fullNames.length < 1
+      || fullNames.length > 10
+      || !Number.isFinite(Date.parse(before))
+      || fullNames.some((fullName) => !/^[^/\s]+\/[^/\s]+$/.test(fullName))
+    ) {
+      throw new TypeError("Star series requires 1-10 repositories and a valid timestamp");
     }
-    if (!Number.isFinite(Date.parse(entry.checkedAt))) {
-      throw new TypeError("Star History checkedAt must be a valid ISO-8601 timestamp");
+    const uniqueNames = new Set(fullNames.map((fullName) => fullName.toLowerCase()));
+    if (uniqueNames.size !== fullNames.length) {
+      throw new TypeError("Star series repository names must be unique");
     }
-    const validEntry =
-      (entry.status === "available" && entry.payload !== null && entry.errorMessage === null) ||
-      (entry.status === "unavailable" && entry.payload === null && entry.errorMessage === null) ||
-      (entry.status === "failed" && entry.payload === null && entry.errorMessage !== null);
-    if (!validEntry) {
-      throw new TypeError("Star History cache entry does not match its status");
-    }
-    this.database.prepare(`
-      INSERT INTO star_history_repositories (
-        full_name, status, checked_at, payload_json, error_message
-      ) VALUES (?, ?, ?, ?, ?)
-      ON CONFLICT(full_name) DO UPDATE SET
-        status = excluded.status,
-        checked_at = excluded.checked_at,
-        payload_json = excluded.payload_json,
-        error_message = excluded.error_message
-    `).run(
-      entry.fullName,
-      entry.status,
-      entry.checkedAt,
-      entry.payload === null ? null : JSON.stringify(entry.payload),
-      entry.errorMessage,
-    );
+    const placeholders = fullNames.map(() => "?").join(", ");
+    const rows = this.database.prepare(`
+      SELECT repositories.full_name, snapshots.captured_at, repositories.payload_json
+      FROM ranking_snapshot_repositories AS repositories
+      JOIN ranking_snapshots AS snapshots ON snapshots.id = repositories.snapshot_id
+      WHERE repositories.full_name COLLATE NOCASE IN (${placeholders})
+        AND snapshots.captured_at <= ?
+      ORDER BY snapshots.captured_at ASC
+    `).all(...fullNames, before) as Array<{
+      full_name: string;
+      captured_at: string;
+      payload_json: string;
+    }>;
+    const points = new Map(fullNames.map((fullName) => [fullName.toLowerCase(), [] as Array<{
+      captured_at: string;
+      stars: number;
+    }>]));
+    rows.forEach((row) => {
+      const repository = JSON.parse(row.payload_json) as RankedRepository;
+      const stars = repository.metrics.stars;
+      if (!Number.isInteger(stars) || stars === null || stars < 0) {
+        throw new TypeError(`Stored star observation for ${row.full_name} is invalid`);
+      }
+      const series = points.get(row.full_name.toLowerCase());
+      if (series === undefined) {
+        throw new Error(`Unexpected star series repository ${row.full_name}`);
+      }
+      series.push({ captured_at: row.captured_at, stars });
+    });
+    return parseStarSeriesResponse({
+      schema_version: "1.0",
+      series: fullNames.map((fullName) => ({
+        full_name: fullName,
+        points: points.get(fullName.toLowerCase()),
+      })),
+    });
   }
 
   readObservedRepositoryNames(): string[] {
@@ -358,6 +418,73 @@ export class HistoryDatabase {
       seen.add(key);
       return [row.full_name];
     });
+  }
+
+  readRetainedRepositoryNames(): string[] {
+    const referenceAt = this.readLatestCollectionCapturedAt();
+    if (referenceAt === null) {
+      return [];
+    }
+    const policy = this.readRetentionPolicy();
+    const rows = this.database.prepare(`
+      SELECT
+        repositories.full_name,
+        repositories.rank,
+        snapshots.captured_at,
+        repositories.payload_json
+      FROM ranking_snapshot_repositories AS repositories
+      JOIN ranking_snapshots AS snapshots ON snapshots.id = repositories.snapshot_id
+      WHERE snapshots.status = 'completed'
+        AND snapshots.source IN ('github_official', 'github_combined')
+      ORDER BY repositories.full_name COLLATE NOCASE, snapshots.captured_at DESC
+    `).all() as RetentionRow[];
+    const rowsByName = new Map<string, RetentionRow[]>();
+    rows.forEach((row) => {
+      const key = row.full_name.toLowerCase();
+      const repositoryRows = rowsByName.get(key);
+      if (repositoryRows === undefined) {
+        rowsByName.set(key, [row]);
+        return;
+      }
+      repositoryRows.push(row);
+    });
+    const comparisonCutoff = Date.parse(referenceAt) - policy.growthDays * 86_400_000;
+    const candidates: RepositoryRetentionCandidate[] = [...rowsByName.values()].map(
+      (repositoryRows) => {
+        const latest = repositoryRows[0];
+        const first = repositoryRows.at(-1);
+        if (latest === undefined || first === undefined) {
+          throw new Error("Collector retention history is empty");
+        }
+        const latestRepository = JSON.parse(latest.payload_json) as RankedRepository;
+        const latestStars = latestRepository.metrics.stars;
+        if (!Number.isInteger(latestStars) || latestStars === null || latestStars < 0) {
+          throw new TypeError(`Stored retention stars for ${latest.full_name} are invalid`);
+        }
+        const comparison = repositoryRows.find(
+          (row) => Date.parse(row.captured_at) <= comparisonCutoff,
+        );
+        let growthComparisonStars: number | null = null;
+        if (comparison !== undefined) {
+          const comparisonRepository = JSON.parse(comparison.payload_json) as RankedRepository;
+          const comparisonStars = comparisonRepository.metrics.stars;
+          if (!Number.isInteger(comparisonStars) || comparisonStars === null || comparisonStars < 0) {
+            throw new TypeError(`Stored retention comparison for ${latest.full_name} is invalid`);
+          }
+          growthComparisonStars = comparisonStars;
+        }
+        return {
+          fullName: latest.full_name,
+          firstSeenAt: first.captured_at,
+          latestCapturedAt: latest.captured_at,
+          latestPushedAt: latestRepository.pushed_at,
+          latestRank: latest.rank,
+          latestStars,
+          growthComparisonStars,
+        };
+      },
+    );
+    return selectRetainedRepositoryNames(candidates, referenceAt, policy);
   }
 
   readLatestCollectionCapturedAt(): string | null {
@@ -383,7 +510,7 @@ export class HistoryDatabase {
       fullName.trim() === "" ||
       !Number.isFinite(Date.parse(before))
     ) {
-      throw new TypeError("Star history requires repository name and valid timestamp");
+      throw new TypeError("Star observations require repository name and valid timestamp");
     }
     const rows = this.database.prepare(`
       SELECT snapshots.captured_at, repositories.payload_json

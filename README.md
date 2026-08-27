@@ -10,16 +10,16 @@
 [![Collector](https://img.shields.io/badge/Collector-Every%202%20hours-3FB950?style=flat-square)](.github/workflows/collect.yml)
 [![Status](https://img.shields.io/badge/Status-Personal%20project-8B949E?style=flat-square)](#상태와-범위)
 
-[English](README.en.md) · [공개 API 상태](https://github-trend-radar.imbch.dev/rpc/health)
+[English](README.en.md) · [공개 웹](https://github-trend-radar.imbch.dev) · [API 상태](https://github-trend-radar.imbch.dev/rpc/health)
 
 </div>
 
 > [!IMPORTANT]
-> 이 프로젝트는 GitHub 공식 서비스가 아닌 개인 프로젝트다. 공개 UI는 아직 배포하지 않았고, 공개 API와 수집 데이터 저장소만 Oracle A1에서 운영 중이다.
+> 이 프로젝트는 GitHub 공식 서비스가 아닌 개인 프로젝트다. 공개 웹, API, 수집 데이터 저장소를 Oracle A1에서 운영한다.
 
 ## 프로젝트 소개
 
-GitHub Trend Radar는 현재 Trending 목록만 다시 보여주는 페이지가 아니다. 현재 GitHub Trending, 최근 생성 저장소, 최근 push 저장소, 이전에 발견한 저장소를 하나의 후보군으로 합치고, 반복 관측으로 계산한 스타 증가량과 저장소 활동성을 기준으로 다시 정렬한다.
+GitHub Trend Radar는 현재 Trending 목록만 다시 보여주는 페이지가 아니다. 현재 GitHub Trending, 최근 생성 저장소, 최근 push 저장소, 유지 조건을 통과한 이전 저장소를 하나의 후보군으로 합치고, 반복 관측으로 계산한 스타 증가량과 저장소 활동성을 기준으로 다시 정렬한다.
 
 `Momentum`은 저장소의 누적 인기도가 아니라 **지금 얼마나 빠르게 관심을 얻고 있는지**를 나타낸다. 큰 저장소가 항상 상위에 오르지 않도록 전체 스타 수보다 관측 성장 속도에 더 높은 가중치를 둔다.
 
@@ -29,11 +29,11 @@ GitHub Trend Radar는 현재 Trending 목록만 다시 보여주는 페이지가
 | --- | --- | --- |
 | GitHub Trending | daily · weekly · monthly 현재 목록 | 공식 노출 신호와 현재 순위 기록 |
 | GitHub Search | 최근 7일 생성 저장소, 최근 24시간 push 저장소 | Trending 밖의 신규·활성 저장소 발견 |
-| Bootstrap seeds | 아직 관측하지 못한 검증된 공개 저장소 | 초기 관측 풀 보강 |
-| 이전 관측 저장소 | 한 번이라도 정상 수집된 전체 저장소 | Trending/Search 범위를 벗어난 뒤에도 계속 추적 |
+| Bootstrap seeds | 아직 관측하지 못한 검증된 공개 저장소 | 최초 수집의 관측 풀만 보강 |
+| 이전 관측 저장소 | 14일 유예·7일 Star 증가·30일 내 push 조건을 통과한 직전 모멘텀 상위 1,000개 | Trending/Search 범위를 벗어난 유효 후보 추적 |
 | GitHub GraphQL | 스타·fork·watcher·issue·언어·topic·push 시각 | 현재 메타데이터 갱신 |
 
-Search 쿼리 하나당 최대 1,000개만 가져오므로 이것을 “GitHub 전체 저장소의 완전한 순위”라고 부르지는 않는다. 대신 발견한 저장소를 관측 풀에 계속 남겨 범위를 누적 확장한다.
+Search 쿼리 하나당 최대 1,000개만 가져오므로 이것을 “GitHub 전체 저장소의 완전한 순위”라고 부르지는 않는다. 조건에서 탈락한 저장소는 새 스냅샷 수집만 멈추며 기존 기록은 보존된다. 이후 Trending/Search에서 다시 발견되면 자동으로 관측을 재개한다.
 
 ## 화면
 
@@ -48,6 +48,7 @@ Search 쿼리 하나당 최대 1,000개만 가져오므로 이것을 “GitHub �
 ### 발견과 랭킹
 
 - **GitHub-wide discovery**: Trending 3종과 Search 2종을 합치고 이름 변경·삭제 저장소를 검증한다.
+- **14일 컷오프**: 신규 저장소에는 14일을 부여하고, 이후 7일 Star 증가 또는 30일 내 push가 있는 후보만 유지한다.
 - **2시간 관측 윈도우**: 관측 데이터로 1시간·6시간·24시간 스타 증가량을 계산한다.
 - **모멘텀 점수**: 성장 속도, 저장소 나이 대비 스타 속도, 규모, fork, open issue, 최근 push를 합산한다.
 - **신뢰도 표시**: 첫 관측은 실제 성장으로 간주하지 않고 `low` 신뢰도로 기록한다.
@@ -57,7 +58,7 @@ Search 쿼리 하나당 최대 1,000개만 가져오므로 이것을 “GitHub �
 - **스냅샷 타임라인**: 저장된 시점으로 드래그해 과거 랭킹을 조회한다.
 - **페이지네이션**: 중앙 정렬된 이전·다음 버튼과 최대 10개 페이지 번호를 제공한다.
 - **실제 Repository 카드**: GitHub Open Graph 이미지를 캐시해 저장소별로 표시한다.
-- **Star History 활동 요약**: 온디맨드 데이터가 있으면 5축 활동 레이더를 표시한다.
+- **자체 Star 성장 그래프**: 최초 관측 이후 직접 저장한 Star 시계열을 행별 스파크라인으로 표시한다.
 - **반응형 화면**: 데스크톱 표와 모바일 카드 레이아웃, 라이트·다크 테마를 제공한다.
 
 ### 저장과 자동화
@@ -88,7 +89,10 @@ score = log1p(observedStarsPerDay) × 55
 - 동점이면 `owner/repository` 이름 순으로 정렬해 결과를 결정적으로 유지한다.
 
 ```text
-Trending + Search + observed pool
+Trending + Search + retained pool
+                 │
+                 ▼
+    retention filter and dedupe
                  │
                  ▼
         GitHub GraphQL metadata
@@ -157,6 +161,8 @@ npm run collect:remote
 
 Oracle용 Compose를 실행하기 전에 `.env.example`의 필수 값을 채우고 Cloudflare Tunnel 설정 예제를 복사해 Tunnel ID와 hostname을 입력해야 한다.
 
+Compose는 PostgreSQL, PostgREST, Node 웹 서버, Cloudflare Tunnel을 실행한다. 웹 서버는 정적 UI를 제공하고, 타임라인 메타데이터와 선택한 스냅샷만 PostgREST에서 조회하며, `/rpc/*` 수집 요청을 내부 PostgREST로 전달한다.
+
 ```bash
 cp deploy/oracle/.env.example deploy/oracle/.env
 cp deploy/oracle/cloudflared.yml.example deploy/oracle/cloudflared.yml
@@ -188,18 +194,17 @@ GitHub Actions에는 다음을 등록한다.
 
 ## 상태와 범위
 
-- 개인 프로젝트이며 API와 수집 파이프라인을 먼저 운영 중이다.
-- 공개 웹 UI 배포는 아직 완료되지 않았으며 API와 예약 수집기는 운영 중이다.
-- Star History 연동은 문서화된 공식 API가 아닌 온디맨드 보조 데이터이며, 실패하면 해당 저장소에 데이터 부족 상태를 표시한다.
-- GitHub 또는 Star History의 공식 제품이 아니며 각 서비스의 상표와 이용 조건을 따른다.
+- 개인 프로젝트이며 공개 웹, API, 예약 수집기를 운영 중이다.
+- Star 그래프는 외부 서비스 없이 이 프로젝트가 직접 수집한 스냅샷만 사용한다.
+- GitHub 공식 제품이 아니며 GitHub의 상표와 이용 조건을 따른다.
 - 소스 저장소는 비공개이며 재배포 라이선스를 제공하지 않는다.
 
 ### 로드맵
 
 - [ ] 날짜 구간 분할과 완전성 상태를 포함한 저장소 후보군 백필
-- [ ] 공개 웹 UI에서 PostgREST 스냅샷 직접 조회
+- [x] 공개 웹 UI에서 선택한 PostgREST 스냅샷 온디맨드 조회
 - [ ] 원격 DB 백업과 스냅샷 보존 정책
-- [ ] 외부 Star History 의존 없이 표시할 수 있는 공식 데이터 범위 확정
+- [x] 외부 서비스 의존 없는 자체 관측 Star 성장 그래프
 
 ---
 

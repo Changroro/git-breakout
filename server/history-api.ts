@@ -2,7 +2,6 @@ import { resolve } from "node:path";
 import type { Connect, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { loadRepositoryCard } from "./card-cache.ts";
 import { HistoryDatabase } from "./history.ts";
-import { loadStarHistoryRepository } from "./star-history.ts";
 
 function attachHistoryApi(
   middlewares: Connect.Server,
@@ -12,7 +11,7 @@ function attachHistoryApi(
   const cardCacheDirectory = resolve(process.cwd(), "data", "repository-cards");
   httpServer?.once("close", () => database.close());
 
-  middlewares.use("/api/history", (request, response) => {
+  middlewares.use("/api/timeline", (request, response) => {
     response.setHeader("Content-Type", "application/json; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
     if (request.method !== "GET") {
@@ -24,12 +23,54 @@ function attachHistoryApi(
 
     try {
       response.statusCode = 200;
-      response.end(JSON.stringify(database.readHistory()));
+      const history = database.readHistory();
+      response.end(JSON.stringify({
+        schema_version: "1.0",
+        snapshots: history.snapshots.map((snapshot) => ({
+          id: snapshot.id,
+          captured_at: snapshot.captured_at,
+          source: snapshot.source,
+          repository_count: snapshot.repositories.length,
+        })),
+      }));
     } catch (error) {
       response.statusCode = 500;
       response.end(
         JSON.stringify({ error: error instanceof Error ? error.message : "Unknown history error" }),
       );
+    }
+  });
+
+  middlewares.use("/api/snapshot", (request, response) => {
+    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    response.setHeader("Cache-Control", "no-store");
+    if (request.method !== "GET") {
+      response.statusCode = 405;
+      response.setHeader("Allow", "GET");
+      response.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    const requestUrl = new URL(request.url ?? "", "http://localhost");
+    const snapshotId = requestUrl.searchParams.get("id");
+    if (snapshotId === null) {
+      response.statusCode = 400;
+      response.end(JSON.stringify({ error: "Snapshot id is required" }));
+      return;
+    }
+    try {
+      const snapshot = database.readHistory().snapshots.find((item) => item.id === snapshotId);
+      if (snapshot === undefined) {
+        response.statusCode = 404;
+        response.end(JSON.stringify({ error: `Snapshot ${snapshotId} does not exist` }));
+        return;
+      }
+      response.statusCode = 200;
+      response.end(JSON.stringify(snapshot));
+    } catch (error) {
+      response.statusCode = 500;
+      response.end(JSON.stringify({
+        error: error instanceof Error ? error.message : "Unknown snapshot error",
+      }));
     }
   });
 
@@ -64,7 +105,7 @@ function attachHistoryApi(
     }
   });
 
-  middlewares.use("/api/star-history", async (request, response) => {
+  middlewares.use("/api/star-series", (request, response) => {
     response.setHeader("Content-Type", "application/json; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
     if (request.method !== "GET") {
@@ -75,21 +116,27 @@ function attachHistoryApi(
     }
 
     const requestUrl = new URL(request.url ?? "", "http://localhost");
-    const repositoryName = requestUrl.searchParams.get("repository");
-    if (repositoryName === null || !/^[^/\s]+\/[^/\s]+$/.test(repositoryName)) {
+    const snapshotId = requestUrl.searchParams.get("snapshot");
+    const repositoryNames = requestUrl.searchParams.getAll("repository");
+    if (snapshotId === null) {
       response.statusCode = 400;
-      response.end(JSON.stringify({ error: "Repository must use owner/name format" }));
+      response.end(JSON.stringify({ error: "Snapshot id is required" }));
       return;
     }
 
     try {
-      const lookup = await loadStarHistoryRepository({ repositoryName, database });
+      const snapshot = database.readHistory().snapshots.find((item) => item.id === snapshotId);
+      if (snapshot === undefined) {
+        response.statusCode = 404;
+        response.end(JSON.stringify({ error: `Snapshot ${snapshotId} does not exist` }));
+        return;
+      }
       response.statusCode = 200;
-      response.end(JSON.stringify(lookup));
+      response.end(JSON.stringify(database.readStarSeries(repositoryNames, snapshot.captured_at)));
     } catch (error) {
-      response.statusCode = 502;
+      response.statusCode = error instanceof TypeError ? 400 : 500;
       response.end(JSON.stringify({
-        error: error instanceof Error ? error.message : "Unknown Star History error",
+        error: error instanceof Error ? error.message : "Unknown star series error",
       }));
     }
   });

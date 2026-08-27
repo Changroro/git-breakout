@@ -120,6 +120,12 @@ describe("HistoryDatabase", () => {
   it("stores a two-hour interval and prevents overlapping collector leases", () => {
     const database = createDatabase();
     expect(database.readCollectionIntervalMinutes()).toBe(120);
+    expect(database.readRetentionPolicy()).toEqual({
+      graceDays: 14,
+      growthDays: 7,
+      pushDays: 30,
+      repositoryLimit: 1_000,
+    });
     expect(database.acquireCollectorLease(
       "owner-1",
       "2026-08-25T00:00:00.000Z",
@@ -131,6 +137,43 @@ describe("HistoryDatabase", () => {
       "2026-08-25T00:31:00.000Z",
     )).toBe(false);
     database.releaseCollectorLease("owner-1");
+    database.close();
+  });
+
+  it("retains growing repositories and cuts off inactive repositories after fourteen days", () => {
+    const database = createDatabase();
+    const inactive = {
+      ...sampleRepositories[0],
+      pushed_at: "2026-07-01T00:00:00.000Z",
+    };
+    const growing = {
+      ...sampleRepositories[1],
+      pushed_at: "2026-07-01T00:00:00.000Z",
+    };
+    database.appendSnapshot({
+      id: "run-1",
+      capturedAt: "2026-08-01T00:00:00.000Z",
+      source: "github_combined",
+      repositories: [inactive, growing],
+    });
+    database.appendSnapshot({
+      id: "run-2",
+      capturedAt: "2026-08-27T00:00:00.000Z",
+      source: "github_combined",
+      repositories: [
+        inactive,
+        {
+          ...growing,
+          metrics: {
+            ...growing.metrics,
+            stars: growing.metrics.stars === null ? null : growing.metrics.stars + 1,
+          },
+        },
+      ],
+    });
+
+    expect(database.readRetainedRepositoryNames()).toEqual([growing.full_name]);
+    expect(database.readHistory().snapshots[0].repositories).toHaveLength(2);
     database.close();
   });
 
@@ -159,6 +202,51 @@ describe("HistoryDatabase", () => {
       capturedAt: "2026-08-25T00:00:00.000Z",
       stars: sampleRepositories[0].metrics.stars,
     }]);
+    database.close();
+  });
+
+  it("reads repository star series through a selected capture time", () => {
+    const database = createDatabase();
+    const fullName = sampleRepositories[0].full_name;
+    database.appendSnapshot({
+      id: "run-1",
+      capturedAt: "2026-08-25T00:00:00.000Z",
+      source: "github_combined",
+      repositories: sampleRepositories,
+    });
+    database.appendSnapshot({
+      id: "run-2",
+      capturedAt: "2026-08-25T02:00:00.000Z",
+      source: "github_combined",
+      repositories: sampleRepositories.map((repository) => repository.full_name === fullName
+        ? {
+          ...repository,
+          metrics: {
+            ...repository.metrics,
+            stars: repository.metrics.stars === null ? null : repository.metrics.stars + 5,
+          },
+        }
+        : repository),
+    });
+
+    expect(database.readStarSeries([fullName], "2026-08-25T02:00:00.000Z")).toEqual({
+      schema_version: "1.0",
+      series: [{
+        full_name: fullName,
+        points: [
+          {
+            captured_at: "2026-08-25T00:00:00.000Z",
+            stars: sampleRepositories[0].metrics.stars,
+          },
+          {
+            captured_at: "2026-08-25T02:00:00.000Z",
+            stars: sampleRepositories[0].metrics.stars === null
+              ? null
+              : sampleRepositories[0].metrics.stars + 5,
+          },
+        ],
+      }],
+    });
     database.close();
   });
 });

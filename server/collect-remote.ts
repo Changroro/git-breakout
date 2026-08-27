@@ -4,6 +4,7 @@ import { createRepositoryCandidate } from "./collector.ts";
 import { BOOTSTRAP_REPOSITORY_NAMES } from "./bootstrap-repositories.ts";
 import { fetchGitHubRepositories } from "./github.ts";
 import { RemoteHistoryApi } from "./remote-history.ts";
+import { selectRetainedRepositoryNames } from "./retention.ts";
 
 function requireEnvironment(name: string): string {
   const value = process.env[name];
@@ -29,13 +30,17 @@ try {
   const observationsByName = new Map(
     context.repositories.map((repository) => [repository.fullName.toLowerCase(), repository.observations]),
   );
+  const retainedRepositoryNames = context.latestCapturedAt === null
+    ? [...BOOTSTRAP_REPOSITORY_NAMES]
+    : selectRetainedRepositoryNames(
+      context.repositories,
+      context.latestCapturedAt,
+      context.retentionPolicy,
+    );
   const repositories = await fetchGitHubRepositories({
     token: githubToken,
     capturedAt: startedAt,
-    previouslyObservedNames: [
-      ...context.repositories.map((repository) => repository.fullName),
-      ...BOOTSTRAP_REPOSITORY_NAMES,
-    ],
+    previouslyObservedNames: retainedRepositoryNames,
   });
   const capturedAt = new Date().toISOString();
   const candidates = repositories.map((repository) => createRepositoryCandidate(
@@ -52,7 +57,7 @@ try {
     repositories: rankedRepositories,
   });
   process.stdout.write(
-    `Collected ${rankedRepositories.length} repositories in ${runId} at ${capturedAt}\n`,
+    `Collected ${rankedRepositories.length} repositories after retaining ${retainedRepositoryNames.length} of ${context.repositories.length} observed repositories in ${runId} at ${capturedAt}\n`,
   );
 } catch (error) {
   if (started) {

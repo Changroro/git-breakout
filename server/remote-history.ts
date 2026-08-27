@@ -1,11 +1,15 @@
 import type { RankedRepository } from "../src/lib/ranking.ts";
 import type { StarObservation } from "./history.ts";
+import type {
+  RepositoryRetentionCandidate,
+  RetentionPolicy,
+} from "./retention.ts";
 
 type CollectionContext = {
   latestCapturedAt: string | null;
   intervalMinutes: number;
-  repositories: Array<{
-    fullName: string;
+  retentionPolicy: RetentionPolicy;
+  repositories: Array<RepositoryRetentionCandidate & {
     observations: StarObservation[];
   }>;
 };
@@ -46,6 +50,20 @@ function requireUuid(value: unknown, field: string): string {
     throw new TypeError(`${field} must use UUID format`);
   }
   return value;
+}
+
+function requirePositiveInteger(value: unknown, field: string): number {
+  if (!Number.isInteger(value) || (value as number) <= 0) {
+    throw new RangeError(`${field} must be a positive integer`);
+  }
+  return value as number;
+}
+
+function requireNonNegativeInteger(value: unknown, field: string): number {
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    throw new RangeError(`${field} must be a non-negative integer`);
+  }
+  return value as number;
 }
 
 export function parseSnapshotTimeline(value: unknown): SnapshotTimelineEntry[] {
@@ -89,6 +107,19 @@ export function parseCollectionContext(value: unknown): CollectionContext {
   if (!Number.isInteger(context.interval_minutes) || (context.interval_minutes as number) <= 0) {
     throw new RangeError("interval_minutes must be a positive integer");
   }
+  const retentionPolicyValue = requireRecord(context.retention_policy, "retention_policy");
+  const retentionPolicy = {
+    graceDays: requirePositiveInteger(retentionPolicyValue.grace_days, "retention_policy.grace_days"),
+    growthDays: requirePositiveInteger(
+      retentionPolicyValue.growth_days,
+      "retention_policy.growth_days",
+    ),
+    pushDays: requirePositiveInteger(retentionPolicyValue.push_days, "retention_policy.push_days"),
+    repositoryLimit: requirePositiveInteger(
+      retentionPolicyValue.repository_limit,
+      "retention_policy.repository_limit",
+    ),
+  };
   if (!Array.isArray(context.repositories)) {
     throw new TypeError("repositories must be an array");
   }
@@ -109,24 +140,54 @@ export function parseCollectionContext(value: unknown): CollectionContext {
         observationValue,
         `repositories[${repositoryIndex}].observations[${observationIndex}]`,
       );
-      if (!Number.isInteger(observation.stars) || (observation.stars as number) < 0) {
-        throw new RangeError(
-          `repositories[${repositoryIndex}].observations[${observationIndex}].stars must be a non-negative integer`,
-        );
-      }
       return {
         capturedAt: requireTimestamp(
           observation.captured_at,
           `repositories[${repositoryIndex}].observations[${observationIndex}].captured_at`,
         ),
-        stars: observation.stars as number,
+        stars: requireNonNegativeInteger(
+          observation.stars,
+          `repositories[${repositoryIndex}].observations[${observationIndex}].stars`,
+        ),
       };
     });
-    return { fullName, observations };
+    return {
+      fullName,
+      firstSeenAt: requireTimestamp(
+        repository.first_seen_at,
+        `repositories[${repositoryIndex}].first_seen_at`,
+      ),
+      latestCapturedAt: requireTimestamp(
+        repository.latest_captured_at,
+        `repositories[${repositoryIndex}].latest_captured_at`,
+      ),
+      latestPushedAt: repository.latest_pushed_at === null
+        ? null
+        : requireTimestamp(
+          repository.latest_pushed_at,
+          `repositories[${repositoryIndex}].latest_pushed_at`,
+        ),
+      latestRank: requirePositiveInteger(
+        repository.latest_rank,
+        `repositories[${repositoryIndex}].latest_rank`,
+      ),
+      latestStars: requireNonNegativeInteger(
+        repository.latest_stars,
+        `repositories[${repositoryIndex}].latest_stars`,
+      ),
+      growthComparisonStars: repository.growth_comparison_stars === null
+        ? null
+        : requireNonNegativeInteger(
+          repository.growth_comparison_stars,
+          `repositories[${repositoryIndex}].growth_comparison_stars`,
+        ),
+      observations,
+    };
   });
   return {
     latestCapturedAt,
     intervalMinutes: context.interval_minutes as number,
+    retentionPolicy,
     repositories,
   };
 }

@@ -10,16 +10,16 @@
 [![Collector](https://img.shields.io/badge/Collector-Every%202%20hours-3FB950?style=flat-square)](.github/workflows/collect.yml)
 [![Status](https://img.shields.io/badge/Status-Personal%20project-8B949E?style=flat-square)](#status-and-scope)
 
-[한국어](README.md) · [Public API health](https://github-trend-radar.imbch.dev/rpc/health)
+[한국어](README.md) · [Public web](https://github-trend-radar.imbch.dev) · [API health](https://github-trend-radar.imbch.dev/rpc/health)
 
 </div>
 
 > [!IMPORTANT]
-> This is a personal project, not an official GitHub product. The public web UI has not been deployed yet; only the public API and collection data store currently run on Oracle A1.
+> This is a personal project, not an official GitHub product. The public web app, API, and collection data store run on Oracle A1.
 
 ## About
 
-GitHub Trend Radar does more than re-display the current Trending page. It merges current GitHub Trending entries, recently created repositories, recently pushed repositories, and every repository discovered in earlier runs. It then reranks that pool using repeatedly observed star growth and repository activity.
+GitHub Trend Radar does more than re-display the current Trending page. It merges current GitHub Trending entries, recently created repositories, recently pushed repositories, and previously observed repositories that still satisfy the retention policy. It then reranks that pool using repeatedly observed star growth and repository activity.
 
 `Momentum` measures **how quickly a repository is gaining attention now**, not its lifetime popularity. Observed growth has a much larger weight than total stars, so established repositories do not automatically dominate the ranking.
 
@@ -29,11 +29,11 @@ GitHub Trend Radar does more than re-display the current Trending page. It merge
 | --- | --- | --- |
 | GitHub Trending | Current daily, weekly, and monthly pages | Official exposure signals and current ranks |
 | GitHub Search | Repositories created in 7 days or pushed in 24 hours | Discover active repositories outside Trending |
-| Bootstrap seeds | Valid public repositories that have not been observed yet | Expand the initial observed pool |
-| Previously observed pool | Every repository collected successfully at least once | Continue tracking after it leaves Trending and Search windows |
+| Bootstrap seeds | Valid public repositories that have not been observed yet | Expand only the first collection pool |
+| Previously observed pool | Top 1,000 by prior momentum after a 14-day grace period, 7-day star growth, or a push within 30 days | Track relevant candidates after they leave Trending and Search |
 | GitHub GraphQL | Stars, forks, watchers, issues, language, topics, and push time | Refresh current metadata |
 
-Each Search query is capped at 1,000 results, so this project does not claim to be a complete ranking of every GitHub repository. Its coverage grows over time by retaining every repository it discovers.
+Each Search query is capped at 1,000 results, so this project does not claim to be a complete ranking of every GitHub repository. Repositories that fail the retention policy stop receiving new snapshots, but their existing history remains available. A later Trending or Search discovery automatically resumes observation.
 
 ## Screenshots
 
@@ -48,6 +48,7 @@ Every point on the timeline is a persisted ranking snapshot. Selecting a point r
 ### Discovery and ranking
 
 - **GitHub-wide discovery**: merges three Trending periods and two Search windows while validating renamed or unavailable repositories.
+- **14-day cutoff**: gives new repositories a 14-day grace period, then retains candidates with 7-day star growth or a push within 30 days.
 - **Two-hour observations**: derives 1-hour, 6-hour, and 24-hour star deltas from persisted measurements.
 - **Momentum score**: combines observed growth, age-adjusted star velocity, size, forks, open issues, and recent pushes.
 - **Confidence levels**: a first observation is not treated as real growth and is stored with `low` confidence.
@@ -57,7 +58,7 @@ Every point on the timeline is a persisted ranking snapshot. Selecting a point r
 - **Snapshot timeline**: drag across persisted timestamps to inspect earlier rankings.
 - **Pagination**: centered previous/next controls and at most ten visible page numbers.
 - **Real repository cards**: caches each repository's GitHub Open Graph image.
-- **Star History activity summary**: renders a five-axis activity radar when on-demand data is available.
+- **First-party star growth chart**: renders a row-level sparkline from star observations collected since discovery.
 - **Responsive UI**: desktop table, mobile cards, and light/dark themes.
 
 ### Storage and automation
@@ -88,7 +89,10 @@ score = log1p(observedStarsPerDay) × 55
 - Ties are resolved by `owner/repository` name for deterministic output.
 
 ```text
-Trending + Search + observed pool
+Trending + Search + retained pool
+                 │
+                 ▼
+    retention filter and dedupe
                  │
                  ▼
         GitHub GraphQL metadata
@@ -157,6 +161,8 @@ npm run collect:remote
 
 Before starting the Oracle Compose stack, fill every required `.env.example` value and copy the Cloudflare Tunnel example with your own Tunnel ID and hostname.
 
+Compose runs PostgreSQL, PostgREST, the Node web server, and Cloudflare Tunnel. The web server serves the static UI, loads timeline metadata and only the selected snapshot from PostgREST, and forwards `/rpc/*` collection requests to the internal PostgREST service.
+
 ```bash
 cp deploy/oracle/.env.example deploy/oracle/.env
 cp deploy/oracle/cloudflared.yml.example deploy/oracle/cloudflared.yml
@@ -188,18 +194,17 @@ Configure these GitHub Actions values:
 
 ## Status and scope
 
-- This is a personal project with the API and collection pipeline operating first.
-- Public web UI deployment is not complete yet; the API and scheduled collector are operating.
-- Star History is an undocumented, on-demand auxiliary data source. Repositories show an insufficient-data state when that request fails.
-- This project is not affiliated with GitHub or Star History and remains subject to their trademarks and service terms.
+- This is a personal project with the public web app, API, and scheduled collector operating.
+- Star charts use only snapshots collected directly by this project, with no external data service.
+- This project is not affiliated with GitHub and remains subject to GitHub's trademarks and service terms.
 - The source repository is private and does not grant redistribution rights.
 
 ### Roadmap
 
 - [ ] Time-sliced repository discovery backfill with explicit completeness states
-- [ ] Direct PostgREST snapshot reads from the public web UI
+- [x] On-demand PostgREST snapshot reads from the public web UI
 - [ ] Remote database backup and snapshot retention policy
-- [ ] Define the official-data-only replacement scope for Star History
+- [x] First-party observed star growth charts without an external data service
 
 ---
 
