@@ -7,9 +7,11 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "collect": "tsx server/collect.ts",
+    "collect:remote": "tsx server/collect-remote.ts",
     "collector:worker": "tsx server/collector-worker.ts",
     "preview": "vite preview",
     "history:import": "tsx server/import-history.ts",
+    "history:import:remote": "tsx server/import-remote-history.ts",
     "test": "vitest run",
     "typecheck": "tsc -b"
   },

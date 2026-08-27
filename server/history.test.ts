@@ -18,6 +18,13 @@ function createDatabase() {
 }
 
 describe("HistoryDatabase", () => {
+  it("starts without synthetic snapshots", () => {
+    const database = createDatabase();
+
+    expect(() => database.readHistory()).toThrow("No completed ranking snapshots are available");
+    database.close();
+  });
+
   it("persists a completed snapshot with ranked repositories", () => {
     const database = createDatabase();
     database.appendSnapshot({
@@ -70,6 +77,28 @@ describe("HistoryDatabase", () => {
     database.close();
   });
 
+  it("removes seeded samples when the first live collection completes", () => {
+    const database = createDatabase();
+    database.appendSnapshot({
+      id: "sample-run",
+      capturedAt: "2026-08-24T00:00:00.000Z",
+      source: "sample",
+      repositories: sampleRepositories,
+    });
+    database.startCollectorRun("run-1", "2026-08-25T00:00:00.000Z");
+    database.completeCollectorRun({
+      id: "run-1",
+      capturedAt: "2026-08-25T00:02:00.000Z",
+      source: "github_combined",
+      repositories: sampleRepositories,
+    });
+
+    expect(database.readHistory().snapshots.map((snapshot) => snapshot.source)).toEqual([
+      "github_combined",
+    ]);
+    database.close();
+  });
+
   it("records failed collector runs without exposing a snapshot", () => {
     const database = createDatabase();
     database.startCollectorRun("run-1", "2026-08-25T00:00:00.000Z");
@@ -102,6 +131,34 @@ describe("HistoryDatabase", () => {
       "2026-08-25T00:31:00.000Z",
     )).toBe(false);
     database.releaseCollectorLease("owner-1");
+    database.close();
+  });
+
+  it("keeps the observed repository pool and reads growth across snapshot sources", () => {
+    const database = createDatabase();
+    database.appendSnapshot({
+      id: "sample-run",
+      capturedAt: "2026-08-24T00:00:00.000Z",
+      source: "sample",
+      repositories: sampleRepositories,
+    });
+    database.appendSnapshot({
+      id: "run-1",
+      capturedAt: "2026-08-25T00:00:00.000Z",
+      source: "github_official",
+      repositories: sampleRepositories,
+    });
+
+    expect(database.readObservedRepositoryNames()).toHaveLength(30);
+    expect(database.readObservedRepositoryNames()).toContain(sampleRepositories[0].full_name);
+    expect(database.readLatestCollectionCapturedAt()).toBe("2026-08-25T00:00:00.000Z");
+    expect(database.readStarObservations(
+      sampleRepositories[0].full_name,
+      "2026-08-25T02:00:00.000Z",
+    )).toEqual([{
+      capturedAt: "2026-08-25T00:00:00.000Z",
+      stars: sampleRepositories[0].metrics.stars,
+    }]);
     database.close();
   });
 });

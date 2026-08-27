@@ -1,0 +1,30 @@
+name: Collect repository rankings
+
+on:
+  schedule:
+    - cron: "17 1-23/2 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: trend-radar-collector
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run collect:remote
+        env:
+          GITHUB_TOKEN: ${{ secrets.COLLECTOR_GITHUB_TOKEN }}
+          TREND_RADAR_API_URL: ${{ vars.TREND_RADAR_API_URL }}
+          TREND_RADAR_COLLECTOR_TOKEN: ${{ secrets.TREND_RADAR_COLLECTOR_TOKEN }}

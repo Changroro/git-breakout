@@ -1,7 +1,6 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
-import { sampleSnapshots } from "../src/data/repositories.ts";
 import type { HistoryResponse, RankingSnapshot } from "../src/lib/history.ts";
 import { rankRepositories, type RepositoryCandidate, type RankedRepository } from "../src/lib/ranking.ts";
 
@@ -38,6 +37,14 @@ export type CollectorRun = {
   finished_at: string | null;
   status: "running" | "completed" | "failed";
   error_message: string | null;
+};
+
+export type StarHistoryCacheEntry = {
+  fullName: string;
+  status: "available" | "unavailable" | "failed";
+  checkedAt: string;
+  payload: unknown | null;
+  errorMessage: string | null;
 };
 
 export class HistoryDatabase {
@@ -90,6 +97,19 @@ export class HistoryDatabase {
         owner_id TEXT NOT NULL,
         acquired_at TEXT NOT NULL,
         expires_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS star_history_repositories (
+        full_name TEXT PRIMARY KEY COLLATE NOCASE,
+        status TEXT NOT NULL CHECK (status IN ('available', 'unavailable', 'failed')),
+        checked_at TEXT NOT NULL,
+        payload_json TEXT,
+        error_message TEXT,
+        CHECK (
+          (status = 'available' AND payload_json IS NOT NULL AND error_message IS NULL) OR
+          (status = 'unavailable' AND payload_json IS NULL AND error_message IS NULL) OR
+          (status = 'failed' AND payload_json IS NULL AND error_message IS NOT NULL)
+        )
       );
 
       INSERT OR IGNORE INTO collector_settings (id, interval_minutes, updated_at)
@@ -145,6 +165,16 @@ export class HistoryDatabase {
     });
   }
 
+  private deleteSampleSnapshots(): void {
+    this.database.prepare(`
+      DELETE FROM ranking_snapshot_repositories
+      WHERE snapshot_id IN (
+        SELECT id FROM ranking_snapshots WHERE source = 'sample'
+      )
+    `).run();
+    this.database.prepare("DELETE FROM ranking_snapshots WHERE source = 'sample'").run();
+  }
+
   private validateSnapshot(input: SnapshotInput): void {
     if (input.id.trim() === "") {
       throw new TypeError("Snapshot id is required");
@@ -178,6 +208,7 @@ export class HistoryDatabase {
   completeCollectorRun(input: SnapshotInput): void {
     this.validateSnapshot(input);
     this.database.transaction(() => {
+      this.deleteSampleSnapshots();
       this.insertCompletedSnapshot(input);
       const result = this.database.prepare(`
         UPDATE collector_runs
@@ -250,13 +281,109 @@ export class HistoryDatabase {
     return row.interval_minutes;
   }
 
-  readStarObservations(fullName: string, before: string, source: string): StarObservation[] {
+  readStarHistoryCache(fullName: string): StarHistoryCacheEntry | null {
+    if (!/^[^/\s]+\/[^/\s]+$/.test(fullName)) {
+      throw new TypeError("Star History repository must use owner/name format");
+    }
+    const row = this.database.prepare(`
+      SELECT full_name, status, checked_at, payload_json, error_message
+      FROM star_history_repositories
+      WHERE full_name = ? COLLATE NOCASE
+    `).get(fullName) as {
+      full_name: string;
+      status: StarHistoryCacheEntry["status"];
+      checked_at: string;
+      payload_json: string | null;
+      error_message: string | null;
+    } | undefined;
+    if (row === undefined) {
+      return null;
+    }
+    return {
+      fullName: row.full_name,
+      status: row.status,
+      checkedAt: row.checked_at,
+      payload: row.payload_json === null ? null : JSON.parse(row.payload_json),
+      errorMessage: row.error_message,
+    };
+  }
+
+  writeStarHistoryCache(entry: StarHistoryCacheEntry): void {
+    if (!/^[^/\s]+\/[^/\s]+$/.test(entry.fullName)) {
+      throw new TypeError("Star History repository must use owner/name format");
+    }
+    if (!Number.isFinite(Date.parse(entry.checkedAt))) {
+      throw new TypeError("Star History checkedAt must be a valid ISO-8601 timestamp");
+    }
+    const validEntry =
+      (entry.status === "available" && entry.payload !== null && entry.errorMessage === null) ||
+      (entry.status === "unavailable" && entry.payload === null && entry.errorMessage === null) ||
+      (entry.status === "failed" && entry.payload === null && entry.errorMessage !== null);
+    if (!validEntry) {
+      throw new TypeError("Star History cache entry does not match its status");
+    }
+    this.database.prepare(`
+      INSERT INTO star_history_repositories (
+        full_name, status, checked_at, payload_json, error_message
+      ) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(full_name) DO UPDATE SET
+        status = excluded.status,
+        checked_at = excluded.checked_at,
+        payload_json = excluded.payload_json,
+        error_message = excluded.error_message
+    `).run(
+      entry.fullName,
+      entry.status,
+      entry.checkedAt,
+      entry.payload === null ? null : JSON.stringify(entry.payload),
+      entry.errorMessage,
+    );
+  }
+
+  readObservedRepositoryNames(): string[] {
+    const rows = this.database.prepare(`
+      SELECT repositories.full_name
+      FROM ranking_snapshot_repositories AS repositories
+      JOIN ranking_snapshots AS snapshots ON snapshots.id = repositories.snapshot_id
+      WHERE snapshots.status = 'completed'
+        AND snapshots.source IN ('github_official', 'github_combined')
+      ORDER BY snapshots.captured_at DESC, repositories.rank ASC
+    `).all() as Array<{ full_name: string }>;
+    const seen = new Set<string>();
+    return rows.flatMap((row) => {
+      const key = row.full_name.toLowerCase();
+      if (seen.has(key)) {
+        return [];
+      }
+      seen.add(key);
+      return [row.full_name];
+    });
+  }
+
+  readLatestCollectionCapturedAt(): string | null {
+    const row = this.database.prepare(`
+      SELECT captured_at
+      FROM ranking_snapshots
+      WHERE status = 'completed'
+        AND source IN ('github_official', 'github_combined')
+      ORDER BY captured_at DESC
+      LIMIT 1
+    `).get() as { captured_at: string } | undefined;
+    if (row === undefined) {
+      return null;
+    }
+    if (!Number.isFinite(Date.parse(row.captured_at))) {
+      throw new TypeError("Latest collection timestamp is invalid");
+    }
+    return row.captured_at;
+  }
+
+  readStarObservations(fullName: string, before: string): StarObservation[] {
     if (
       fullName.trim() === "" ||
-      source.trim() === "" ||
       !Number.isFinite(Date.parse(before))
     ) {
-      throw new TypeError("Star history requires repository name, source, and valid timestamp");
+      throw new TypeError("Star history requires repository name and valid timestamp");
     }
     const rows = this.database.prepare(`
       SELECT snapshots.captured_at, repositories.payload_json
@@ -264,11 +391,11 @@ export class HistoryDatabase {
       JOIN ranking_snapshots AS snapshots ON snapshots.id = repositories.snapshot_id
       WHERE repositories.full_name = ? COLLATE NOCASE
         AND snapshots.status = 'completed'
-        AND snapshots.source = ?
+        AND snapshots.source IN ('github_official', 'github_combined')
         AND snapshots.captured_at < ?
       ORDER BY snapshots.captured_at DESC
       LIMIT 20
-    `).all(fullName, source, before) as ObservationRow[];
+    `).all(fullName, before) as ObservationRow[];
     return rows.map((row) => {
       const repository = JSON.parse(row.payload_json) as RankedRepository;
       const stars = repository.metrics.stars;
@@ -276,19 +403,6 @@ export class HistoryDatabase {
         throw new TypeError(`Stored star observation for ${fullName} is invalid`);
       }
       return { capturedAt: row.captured_at, stars };
-    });
-  }
-
-  seedSamplesIfEmpty(): void {
-    const row = this.database
-      .prepare("SELECT COUNT(*) AS count FROM ranking_snapshots")
-      .get() as { count: number };
-    if (row.count > 0) {
-      return;
-    }
-
-    sampleSnapshots.forEach((snapshot) => {
-      this.appendSnapshot(snapshot);
     });
   }
 

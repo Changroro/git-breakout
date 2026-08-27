@@ -38,15 +38,33 @@ type GraphqlRepository = {
 
 type GraphqlResponse = {
   data?: Record<string, GraphqlRepository | null>;
-  errors?: Array<{ message?: unknown }>;
+  errors?: Array<{ type?: unknown; path?: unknown; message?: unknown }>;
+};
+
+type SearchResponse = {
+  total_count?: unknown;
+  items?: unknown;
 };
 
 const PERIODS: readonly TrendingPeriod[] = ["daily", "weekly", "monthly"];
 const GRAPHQL_BATCH_SIZE = 20;
+const SEARCH_PAGE_SIZE = 100;
+const SEARCH_RESULT_LIMIT = 1_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 
 function emptyRanks(): OfficialRanks {
   return { daily: null, weekly: null, monthly: null };
+}
+
+function validateFullName(value: string): void {
+  const segments = value.split("/");
+  if (
+    value.trim() !== value ||
+    segments.length !== 2 ||
+    segments.some((segment) => segment.length === 0)
+  ) {
+    throw new TypeError(`Repository ${value} must use owner/name format`);
+  }
 }
 
 function requireResponseOk(response: Response, source: string): void {
@@ -133,6 +151,131 @@ function mergeOfficialRepositories(
   return [...merged.values()];
 }
 
+async function fetchOfficialRepositories(
+  fetchImplementation: typeof fetch,
+): Promise<OfficialRepository[]> {
+  return mergeOfficialRepositories(
+    await Promise.all(PERIODS.map((period) => fetchTrendingPeriod(period, fetchImplementation))),
+  );
+}
+
+function parseSearchResponse(payload: SearchResponse, query: string): {
+  totalCount: number;
+  names: string[];
+} {
+  if (
+    !Number.isInteger(payload.total_count) ||
+    (payload.total_count as number) < 0 ||
+    !Array.isArray(payload.items)
+  ) {
+    throw new TypeError(`GitHub Search returned an invalid response for ${query}`);
+  }
+  const names = payload.items.map((item) => {
+    if (
+      typeof item !== "object" ||
+      item === null ||
+      !("full_name" in item) ||
+      typeof item.full_name !== "string"
+    ) {
+      throw new TypeError(`GitHub Search returned an invalid repository for ${query}`);
+    }
+    validateFullName(item.full_name);
+    return item.full_name;
+  });
+  return { totalCount: payload.total_count as number, names };
+}
+
+async function searchRepositoryNames(
+  query: string,
+  token: string,
+  fetchImplementation: typeof fetch,
+): Promise<string[]> {
+  const names: string[] = [];
+  let page = 1;
+  let expectedCount: number | null = null;
+
+  while (names.length < (expectedCount ?? SEARCH_RESULT_LIMIT)) {
+    const url = new URL("https://api.github.com/search/repositories");
+    url.search = new URLSearchParams({
+      q: query,
+      sort: "stars",
+      order: "desc",
+      per_page: String(SEARCH_PAGE_SIZE),
+      page: String(page),
+    }).toString();
+    const response = await fetchImplementation(url, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "User-Agent": "ai-trend-radar/0.0.0",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+    requireResponseOk(response, `GitHub Search ${query}`);
+    const result = parseSearchResponse(await response.json() as SearchResponse, query);
+    expectedCount ??= Math.min(result.totalCount, SEARCH_RESULT_LIMIT);
+    if (result.names.length === 0 && names.length < expectedCount) {
+      throw new Error(`GitHub Search pagination ended early for ${query}`);
+    }
+    names.push(...result.names.slice(0, expectedCount - names.length));
+    page += 1;
+  }
+
+  return names;
+}
+
+export async function searchGitHubRepositoryNames(
+  token: string,
+  capturedAt: string,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<string[]> {
+  if (token.trim() === "") {
+    throw new TypeError("GITHUB_TOKEN is required");
+  }
+  const capturedTimestamp = Date.parse(capturedAt);
+  if (!Number.isFinite(capturedTimestamp)) {
+    throw new TypeError("capturedAt must be a valid ISO-8601 timestamp");
+  }
+  const createdAfter = new Date(capturedTimestamp - 7 * 86_400_000).toISOString();
+  const pushedAfter = new Date(capturedTimestamp - 86_400_000).toISOString();
+  const names = [
+    ...await searchRepositoryNames(`created:>=${createdAfter}`, token, fetchImplementation),
+    ...await searchRepositoryNames(`pushed:>=${pushedAfter}`, token, fetchImplementation),
+  ];
+  const seen = new Set<string>();
+  return names.filter((name) => {
+    const key = name.toLowerCase();
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function mergeRepositoryCandidates(
+  official: readonly OfficialRepository[],
+  searchedNames: readonly string[],
+  previouslyObservedNames: readonly string[],
+): OfficialRepository[] {
+  const merged = new Map<string, OfficialRepository>();
+  official.forEach((repository) => {
+    merged.set(repository.fullName.toLowerCase(), {
+      fullName: repository.fullName,
+      ranks: { ...repository.ranks },
+    });
+  });
+  [...searchedNames, ...previouslyObservedNames].forEach((fullName) => {
+    validateFullName(fullName);
+    const key = fullName.toLowerCase();
+    if (!merged.has(key)) {
+      merged.set(key, { fullName, ranks: emptyRanks() });
+    }
+  });
+  return [...merged.values()];
+}
+
 function createMetadataQuery(repositories: readonly OfficialRepository[]): {
   query: string;
   variables: Record<string, string>;
@@ -174,9 +317,17 @@ function createMetadataQuery(repositories: readonly OfficialRepository[]): {
 }
 
 function validateGraphqlRepository(value: GraphqlRepository, requestedName: string): void {
+  const repositoryUrl = URL.parse(value.url);
+  let canonicalNameIsValid = true;
+  try {
+    validateFullName(value.nameWithOwner);
+  } catch {
+    canonicalNameIsValid = false;
+  }
   if (
-    value.nameWithOwner.toLowerCase() !== requestedName.toLowerCase() ||
-    URL.parse(value.url)?.protocol !== "https:" ||
+    !canonicalNameIsValid ||
+    repositoryUrl?.protocol !== "https:" ||
+    repositoryUrl.pathname.toLowerCase() !== `/${value.nameWithOwner.toLowerCase()}` ||
     URL.parse(value.openGraphImageUrl)?.protocol !== "https:" ||
     !Number.isFinite(Date.parse(value.createdAt)) ||
     !Number.isFinite(Date.parse(value.pushedAt)) ||
@@ -187,6 +338,31 @@ function validateGraphqlRepository(value: GraphqlRepository, requestedName: stri
   ) {
     throw new TypeError(`GitHub GraphQL returned invalid metadata for ${requestedName}`);
   }
+}
+
+function mergeCanonicalMetadata(
+  repositories: readonly GitHubRepositorySnapshot[],
+): GitHubRepositorySnapshot[] {
+  const merged = new Map<string, GitHubRepositorySnapshot>();
+  repositories.forEach((repository) => {
+    const key = repository.fullName.toLowerCase();
+    const existing = merged.get(key);
+    if (existing === undefined) {
+      merged.set(key, { ...repository, officialRanks: { ...repository.officialRanks } });
+      return;
+    }
+    PERIODS.forEach((period) => {
+      const existingRank = existing.officialRanks[period];
+      const incomingRank = repository.officialRanks[period];
+      if (existingRank !== null && incomingRank !== null && existingRank !== incomingRank) {
+        throw new Error(`Canonical repository ${repository.fullName} has conflicting ${period} ranks`);
+      }
+      if (incomingRank !== null) {
+        existing.officialRanks[period] = incomingRank;
+      }
+    });
+  });
+  return [...merged.values()];
 }
 
 async function fetchMetadataBatch(
@@ -209,21 +385,45 @@ async function fetchMetadataBatch(
   });
   requireResponseOk(response, "GitHub GraphQL");
   const payload = await response.json() as GraphqlResponse;
-  if (payload.errors !== undefined && payload.errors.length > 0) {
-    const messages = payload.errors.map((error) => String(error.message)).join("; ");
-    throw new Error(`GitHub GraphQL failed: ${messages}`);
-  }
   if (payload.data === undefined) {
     throw new TypeError("GitHub GraphQL response is missing data");
   }
+  const unavailableIndexes = new Set<number>();
+  const fatalErrors: string[] = [];
+  payload.errors?.forEach((error) => {
+    const path = Array.isArray(error.path) ? error.path : [];
+    const match = path.length === 1 && typeof path[0] === "string"
+      ? /^repository(\d+)$/.exec(path[0])
+      : null;
+    const index = match === null ? Number.NaN : Number(match[1]);
+    const repository = repositories[index];
+    const message = typeof error.message === "string" ? error.message : String(error.message);
+    if (
+      error.type === "NOT_FOUND" &&
+      repository !== undefined &&
+      payload.data?.[`repository${index}`] === null &&
+      message === `Could not resolve to a Repository with the name '${repository.fullName}'.`
+    ) {
+      unavailableIndexes.add(index);
+      process.stderr.write(`Skipping unavailable GitHub repository ${repository.fullName}: ${message}\n`);
+      return;
+    }
+    fatalErrors.push(message);
+  });
+  if (fatalErrors.length > 0) {
+    throw new Error(`GitHub GraphQL failed: ${fatalErrors.join("; ")}`);
+  }
 
-  return repositories.map((repository, index) => {
+  return repositories.flatMap((repository, index) => {
+    if (unavailableIndexes.has(index)) {
+      return [];
+    }
     const metadata = payload.data?.[`repository${index}`];
     if (metadata === null || metadata === undefined) {
       throw new Error(`GitHub repository ${repository.fullName} is unavailable`);
     }
     validateGraphqlRepository(metadata, repository.fullName);
-    return {
+    return [{
       fullName: metadata.nameWithOwner,
       url: metadata.url,
       openGraphImageUrl: metadata.openGraphImageUrl,
@@ -239,7 +439,7 @@ async function fetchMetadataBatch(
         open_issues: metadata.issues.totalCount,
       },
       officialRanks: { ...repository.ranks },
-    };
+    }];
   });
 }
 
@@ -250,9 +450,7 @@ export async function fetchGitHubTrendingRepositories(
   if (token.trim() === "") {
     throw new TypeError("GITHUB_TOKEN is required");
   }
-  const official = mergeOfficialRepositories(
-    await Promise.all(PERIODS.map((period) => fetchTrendingPeriod(period, fetchImplementation))),
-  );
+  const official = await fetchOfficialRepositories(fetchImplementation);
   const metadata: GitHubRepositorySnapshot[] = [];
   for (let start = 0; start < official.length; start += GRAPHQL_BATCH_SIZE) {
     metadata.push(
@@ -263,5 +461,38 @@ export async function fetchGitHubTrendingRepositories(
       ),
     );
   }
-  return metadata;
+  return mergeCanonicalMetadata(metadata);
+}
+
+export async function fetchGitHubRepositories({
+  token,
+  capturedAt,
+  previouslyObservedNames,
+  fetchImplementation = fetch,
+}: {
+  token: string;
+  capturedAt: string;
+  previouslyObservedNames: readonly string[];
+  fetchImplementation?: typeof fetch;
+}): Promise<GitHubRepositorySnapshot[]> {
+  if (token.trim() === "") {
+    throw new TypeError("GITHUB_TOKEN is required");
+  }
+  if (!Number.isFinite(Date.parse(capturedAt))) {
+    throw new TypeError("capturedAt must be a valid ISO-8601 timestamp");
+  }
+  const official = await fetchOfficialRepositories(fetchImplementation);
+  const searchedNames = await searchGitHubRepositoryNames(token, capturedAt, fetchImplementation);
+  const candidates = mergeRepositoryCandidates(official, searchedNames, previouslyObservedNames);
+  const metadata: GitHubRepositorySnapshot[] = [];
+  for (let start = 0; start < candidates.length; start += GRAPHQL_BATCH_SIZE) {
+    metadata.push(
+      ...await fetchMetadataBatch(
+        candidates.slice(start, start + GRAPHQL_BATCH_SIZE),
+        token,
+        fetchImplementation,
+      ),
+    );
+  }
+  return mergeCanonicalMetadata(metadata);
 }

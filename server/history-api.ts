@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import type { Connect, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { loadRepositoryCard } from "./card-cache.ts";
 import { HistoryDatabase } from "./history.ts";
+import { loadStarHistoryRepository } from "./star-history.ts";
 
 function attachHistoryApi(
   middlewares: Connect.Server,
@@ -9,7 +10,6 @@ function attachHistoryApi(
 ): void {
   const database = new HistoryDatabase(resolve(process.cwd(), "data", "ranking-history.sqlite"));
   const cardCacheDirectory = resolve(process.cwd(), "data", "repository-cards");
-  database.seedSamplesIfEmpty();
   httpServer?.once("close", () => database.close());
 
   middlewares.use("/api/history", (request, response) => {
@@ -60,6 +60,36 @@ function attachHistoryApi(
       response.setHeader("Content-Type", "application/json; charset=utf-8");
       response.end(JSON.stringify({
         error: error instanceof Error ? error.message : "Unknown card image error",
+      }));
+    }
+  });
+
+  middlewares.use("/api/star-history", async (request, response) => {
+    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    response.setHeader("Cache-Control", "no-store");
+    if (request.method !== "GET") {
+      response.statusCode = 405;
+      response.setHeader("Allow", "GET");
+      response.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+
+    const requestUrl = new URL(request.url ?? "", "http://localhost");
+    const repositoryName = requestUrl.searchParams.get("repository");
+    if (repositoryName === null || !/^[^/\s]+\/[^/\s]+$/.test(repositoryName)) {
+      response.statusCode = 400;
+      response.end(JSON.stringify({ error: "Repository must use owner/name format" }));
+      return;
+    }
+
+    try {
+      const lookup = await loadStarHistoryRepository({ repositoryName, database });
+      response.statusCode = 200;
+      response.end(JSON.stringify(lookup));
+    } catch (error) {
+      response.statusCode = 502;
+      response.end(JSON.stringify({
+        error: error instanceof Error ? error.message : "Unknown Star History error",
       }));
     }
   });

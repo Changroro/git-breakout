@@ -1,0 +1,7 @@
+tunnel: <TUNNEL-UUID>
+credentials-file: /etc/cloudflared/credentials.json
+
+ingress:
+  - hostname: <PUBLIC-HOSTNAME>
+    service: http://rest:3000
+  - service: http_status:404

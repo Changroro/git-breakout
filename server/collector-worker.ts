@@ -1,4 +1,8 @@
-import { collectOnce, defaultDatabasePath } from "./collector.ts";
+import {
+  collectOnce,
+  defaultDatabasePath,
+  millisecondsUntilNextCollection,
+} from "./collector.ts";
 import { HistoryDatabase } from "./history.ts";
 
 const configuredGithubToken = process.env.GITHUB_TOKEN;
@@ -9,7 +13,13 @@ const githubToken: string = configuredGithubToken;
 
 const databasePath = defaultDatabasePath();
 const settingsDatabase = new HistoryDatabase(databasePath);
-const intervalMilliseconds = settingsDatabase.readCollectionIntervalMinutes() * 60_000;
+const intervalMinutes = settingsDatabase.readCollectionIntervalMinutes();
+const intervalMilliseconds = intervalMinutes * 60_000;
+const initialDelayMilliseconds = millisecondsUntilNextCollection(
+  new Date(),
+  settingsDatabase.readLatestCollectionCapturedAt(),
+  intervalMinutes,
+);
 settingsDatabase.close();
 const failureRetryMilliseconds = 5 * 60_000;
 
@@ -41,4 +51,8 @@ function stop(): void {
 
 process.once("SIGINT", stop);
 process.once("SIGTERM", stop);
-await runAndSchedule();
+if (initialDelayMilliseconds === 0) {
+  await runAndSchedule();
+} else {
+  timeout = setTimeout(() => void runAndSchedule(), initialDelayMilliseconds);
+}

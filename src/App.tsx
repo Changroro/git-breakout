@@ -13,6 +13,11 @@ import {
 import { parseHistoryResponse, resolveSnapshotId, type RankingSnapshot } from "./lib/history";
 import { getVisiblePages, parsePage } from "./lib/pagination";
 import type { RankedRepository } from "./lib/ranking";
+import {
+  parseStarHistoryLookup,
+  type StarHistoryLookup,
+  type StarHistoryPercentiles,
+} from "./lib/star-history";
 
 const PAGE_SIZE = 10;
 const numberFormatter = new Intl.NumberFormat("ko-KR", {
@@ -34,6 +39,10 @@ const timelineDateFormatter = new Intl.DateTimeFormat("en-US", {
 });
 
 type Theme = "light" | "dark";
+type StarHistoryState =
+  | { status: "loading" }
+  | StarHistoryLookup
+  | { status: "error"; message: string };
 
 function formatCapturedAt(value: string): string {
   return `${capturedAtFormatter.format(new Date(value))} KST`;
@@ -76,14 +85,6 @@ function requireDisplayValue<T>(value: T | null, field: string, fullName: string
   return value;
 }
 
-function growthLabel(repository: RankedRepository) {
-  const delta = repository.growth.stars_delta_24h;
-  if (delta === null) {
-    return repository.firstObservation ? "New" : "—";
-  }
-  return `+${numberFormatter.format(delta)}`;
-}
-
 function sourceLabel(source: string): string {
   if (source === "sample") {
     return "Sample snapshot";
@@ -91,7 +92,45 @@ function sourceLabel(source: string): string {
   if (source === "github_official") {
     return "Official GitHub Trending";
   }
+  if (source === "github_combined") {
+    return "Official Trending + GitHub-wide discovery";
+  }
   throw new TypeError(`Unknown ranking source ${source}`);
+}
+
+function useStarHistory(repositoryName: string): StarHistoryState {
+  const [state, setState] = useState<StarHistoryState>({ status: "loading" });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setState({ status: "loading" });
+
+    async function load() {
+      try {
+        const response = await fetch(`/api/star-history?${new URLSearchParams({
+          repository: repositoryName,
+        }).toString()}`, {
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Star History request failed with status ${response.status}`);
+        }
+        setState(parseStarHistoryLookup(await response.json()));
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          const message = error instanceof Error ? error.message : "Unknown Star History error";
+          console.error(`${repositoryName}: ${message}`);
+          setState({ status: "error", message });
+        }
+      }
+    }
+
+    void load();
+    return () => controller.abort();
+  }, [repositoryName]);
+
+  return state;
 }
 
 function RepositoryCardThumbnail({ repository }: { repository: RankedRepository }) {
@@ -116,6 +155,79 @@ function RepositoryCardThumbnail({ repository }: { repository: RankedRepository 
   />;
 }
 
+const radarAxes: Array<keyof Pick<
+  StarHistoryPercentiles,
+  "stars" | "contributors" | "new_stars" | "pushes" | "forks"
+>> = ["stars", "contributors", "new_stars", "pushes", "forks"];
+
+function radarPoints(percentiles: StarHistoryPercentiles, scale = 1): string {
+  return radarAxes.map((axis, index) => {
+    const angle = -Math.PI / 2 + index * (Math.PI * 2 / radarAxes.length);
+    const radius = 29 * scale * (percentiles[axis] / 100);
+    return `${(50 + Math.cos(angle) * radius).toFixed(1)},${(
+      38 + Math.sin(angle) * radius
+    ).toFixed(1)}`;
+  }).join(" ");
+}
+
+function RepositoryActivity({
+  repositoryName,
+  state,
+}: {
+  repositoryName: string;
+  state: StarHistoryState;
+}) {
+  if (state.status === "loading") {
+    return <span className="repository-activity repository-activity-status">Loading stats</span>;
+  }
+  if (state.status === "unavailable") {
+    return <span className="repository-activity repository-activity-status">No Star History data</span>;
+  }
+  if (state.status === "error") {
+    return <span className="repository-activity repository-activity-status" title={state.message}>Stats failed</span>;
+  }
+
+  const percentiles = state.repo.weekly_percentiles;
+  return (
+    <span className="repository-activity">
+      <svg
+        aria-label={`${repositoryName} activity percentiles from Star History`}
+        className="activity-radar"
+        role="img"
+        viewBox="0 0 100 76"
+      >
+        {[0.25, 0.5, 0.75, 1].map((scale) => (
+          <polygon className="activity-radar-grid" key={scale} points={radarPoints({
+            stars: 100,
+            contributors: 100,
+            new_stars: 100,
+            pushes: 100,
+            forks: 100,
+            issues_closed: 100,
+          }, scale)} />
+        ))}
+        {radarAxes.map((_, index) => {
+          const angle = -Math.PI / 2 + index * (Math.PI * 2 / radarAxes.length);
+          return <line
+            className="activity-radar-axis"
+            key={index}
+            x1="50"
+            x2={(50 + Math.cos(angle) * 29).toFixed(1)}
+            y1="38"
+            y2={(38 + Math.sin(angle) * 29).toFixed(1)}
+          />;
+        })}
+        <polygon className="activity-radar-value" points={radarPoints(percentiles)} />
+        {radarPoints(percentiles).split(" ").map((point, index) => {
+          const [cx, cy] = point.split(",");
+          return <circle className="activity-radar-dot" cx={cx} cy={cy} key={index} r="2" />;
+        })}
+      </svg>
+      <span className="activity-radar-label">Star History</span>
+    </span>
+  );
+}
+
 function RankingRow({
   repository,
   rowIndex,
@@ -125,6 +237,7 @@ function RankingRow({
 }) {
   const language = repository.language ?? "—";
   const stars = requireDisplayValue(repository.metrics.stars, "metrics.stars", repository.full_name);
+  const starHistory = useStarHistory(repository.full_name);
 
   return (
     <li className="ranking-row">
@@ -145,14 +258,22 @@ function RankingRow({
           <div className="mobile-meta">
             <span>{language}</span>
             <span className="mobile-stars"><StarIcon size={12} />{numberFormatter.format(stars)}</span>
-            <span className="mobile-growth">24h {growthLabel(repository)}</span>
+            {starHistory.status === "available" ? (
+              <span className="mobile-star-history">
+                SH +{numberFormatter.format(starHistory.repo.weekly_activity.new_stars)}★ · {numberFormatter.format(starHistory.repo.weekly_activity.pushes)} pushes
+              </span>
+            ) : starHistory.status === "unavailable" ? (
+              <span>SH unavailable</span>
+            ) : starHistory.status === "error" ? (
+              <span title={starHistory.message}>SH failed</span>
+            ) : (
+              <span>SH loading</span>
+            )}
           </div>
         </div>
         <span className="cell language">{language}</span>
         <span className="cell stars">{numberFormatter.format(stars)}</span>
-        <span className={`growth ${repository.growth.stars_delta_24h === null ? "growth-unavailable" : ""}`}>
-          {growthLabel(repository)}
-        </span>
+        <RepositoryActivity repositoryName={repository.full_name} state={starHistory} />
       </div>
     </li>
   );
@@ -339,7 +460,7 @@ function RankingPage({
   return (
     <main className="page-container">
       <section className="page-intro" aria-labelledby="page-title">
-        <h1 id="page-title">GitHub Trending</h1>
+        <h1 id="page-title">GitHub Momentum</h1>
         <p className="last-updated">
           <HistoryIcon size={14} />
           <span>
@@ -356,7 +477,7 @@ function RankingPage({
           <div className="board-title">
             <RepoIcon size={18} />
             <div>
-              <h2>Trending repositories</h2>
+              <h2>Repository momentum</h2>
               <p>{sourceLabel(selectedSnapshot.source)}</p>
             </div>
           </div>
@@ -369,7 +490,7 @@ function RankingPage({
           <span>Repository</span>
           <span>Language</span>
           <span className="stars-heading"><StarIcon size={12} />Stars</span>
-          <span>Stars gained (24h)</span>
+          <span>Star History</span>
         </div>
 
         <ol className="ranking-list" start={start + 1} key={`${selectedId}-${currentPage}`}>

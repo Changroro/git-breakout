@@ -1,0 +1,67 @@
+name: github-trend-radar
+
+services:
+  db:
+    image: postgres:17.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGREST_DB_PASSWORD: ${POSTGREST_DB_PASSWORD:?POSTGREST_DB_PASSWORD is required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./db/init.sh:/docker-entrypoint-initdb.d/01-init.sh:ro
+      - ./db/schema.sql:/opt/trend-radar/schema.sql:ro
+    networks:
+      - internal
+
+  rest:
+    image: postgrest/postgrest:v14.12
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGREST_DB_PASSWORD:?POSTGREST_DB_PASSWORD is required}@db:5432/${POSTGRES_DB:?POSTGRES_DB is required}
+      PGRST_DB_SCHEMAS: api
+      PGRST_DB_ANON_ROLE: web_anon
+      PGRST_JWT_SECRET: ${POSTGREST_JWT_SECRET:?POSTGREST_JWT_SECRET is required}
+      PGRST_SERVER_PORT: 3000
+      PGRST_ADMIN_SERVER_PORT: 3001
+    healthcheck:
+      test: ["CMD", "postgrest", "--dump-config"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    ports:
+      - "127.0.0.1:${POSTGREST_PORT:?POSTGREST_PORT is required}:3000"
+    networks:
+      - internal
+      - edge
+
+  tunnel:
+    image: cloudflare/cloudflared:2026.8.2
+    restart: unless-stopped
+    depends_on:
+      rest:
+        condition: service_healthy
+    command: tunnel --no-autoupdate --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./cloudflared.yml:/etc/cloudflared/config.yml:ro
+      - ${CLOUDFLARED_CREDENTIALS_FILE:?CLOUDFLARED_CREDENTIALS_FILE is required}:/etc/cloudflared/credentials.json:ro
+    networks:
+      - edge
+
+networks:
+  internal:
+    internal: true
+  edge:
+
+volumes:
+  db-data:

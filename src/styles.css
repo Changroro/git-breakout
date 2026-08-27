@@ -472,6 +472,65 @@ h1 {
   text-align: center;
 }
 
+.repository-activity {
+  position: relative;
+  width: 112px;
+  height: 72px;
+  display: grid;
+  place-items: center;
+  justify-self: end;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--canvas);
+}
+
+.repository-activity-status {
+  padding: 8px;
+  color: var(--text-muted);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  line-height: 1.25;
+  text-align: center;
+}
+
+.activity-radar {
+  width: 100%;
+  height: 100%;
+  padding: 3px 12px 6px;
+}
+
+.activity-radar-grid,
+.activity-radar-axis {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 0.8;
+}
+
+.activity-radar-value {
+  fill: var(--accent-soft);
+  fill-opacity: 0.78;
+  stroke: var(--accent);
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.activity-radar-dot {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 1.2;
+}
+
+.activity-radar-label {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  color: var(--text-muted);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 7px;
+  letter-spacing: 0.02em;
+}
+
 @keyframes row-flip-in {
   0% {
     opacity: 0;
@@ -521,27 +580,12 @@ h1 {
   white-space: nowrap;
 }
 
-.cell,
-.growth {
+.cell {
   text-align: right;
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-}
-
-.cell {
   color: var(--text-secondary);
-}
-
-.growth {
-  color: var(--accent-text);
-  font-weight: 700;
-}
-
-.growth-unavailable {
-  color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 600;
 }
 
 .mobile-meta {
@@ -554,7 +598,7 @@ h1 {
   gap: 4px;
 }
 
-.mobile-growth {
+.mobile-star-history {
   color: var(--accent-text);
   font-weight: 700;
 }
@@ -689,8 +733,19 @@ h1 {
 
   .language,
   .stars,
-  .growth {
+  .repository-activity {
     display: none;
+  }
+
+  .repository-thumbnail {
+    width: 78px;
+    height: 39px;
+    border-radius: 5px;
+  }
+
+  .repository-thumbnail-error {
+    padding: 5px;
+    font-size: 7px;
   }
 
   .mobile-meta {
@@ -708,17 +763,6 @@ h1 {
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 1;
-  }
-
-  .repository-thumbnail {
-    width: 78px;
-    height: 39px;
-    border-radius: 5px;
-  }
-
-  .repository-thumbnail-error {
-    padding: 5px;
-    font-size: 6px;
   }
 
   .board-footer {

@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+psql \
+  --set=ON_ERROR_STOP=1 \
+  --set=authenticator_password="$POSTGREST_DB_PASSWORD" \
+  --username "$POSTGRES_USER" \
+  --dbname "$POSTGRES_DB" \
+  --file /opt/trend-radar/schema.sql

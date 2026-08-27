@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { RepositoryCandidate, RepositoryGrowth } from "../src/lib/ranking.ts";
-import { loadRepositoryCard } from "./card-cache.ts";
-import { fetchGitHubTrendingRepositories, type GitHubRepositorySnapshot } from "./github.ts";
+import { BOOTSTRAP_REPOSITORY_NAMES } from "./bootstrap-repositories.ts";
+import { fetchGitHubRepositories, type GitHubRepositorySnapshot } from "./github.ts";
 import { HistoryDatabase, type StarObservation } from "./history.ts";
 
 const HOUR_MS = 3_600_000;
+const MINUTE_MS = 60_000;
 const DAY_MS = 86_400_000;
 const WINDOW_TOLERANCE_MS = 30 * 60_000;
 const LEASE_DURATION_MS = 30 * 60_000;
@@ -15,6 +16,28 @@ export type CollectionResult = {
   capturedAt: string;
   repositoryCount: number;
 };
+
+export function millisecondsUntilNextCollection(
+  now: Date,
+  latestCapturedAt: string | null,
+  intervalMinutes: number,
+): number {
+  const nowTimestamp = now.getTime();
+  if (!Number.isFinite(nowTimestamp)) {
+    throw new TypeError("now must be a valid date");
+  }
+  if (!Number.isInteger(intervalMinutes) || intervalMinutes <= 0) {
+    throw new RangeError("intervalMinutes must be a positive integer");
+  }
+  if (latestCapturedAt === null) {
+    return 0;
+  }
+  const latestTimestamp = Date.parse(latestCapturedAt);
+  if (!Number.isFinite(latestTimestamp) || latestTimestamp > nowTimestamp) {
+    throw new RangeError("Latest collection timestamp must be valid and not in the future");
+  }
+  return Math.max(0, latestTimestamp + intervalMinutes * MINUTE_MS - nowTimestamp);
+}
 
 function deltaAtWindow(
   stars: number,
@@ -39,6 +62,7 @@ export function calculateGrowth(
   stars: number,
   capturedAt: string,
   observations: readonly StarObservation[],
+  observationIntervalMinutes: number,
 ): {
   growth: RepositoryGrowth;
   observedStarsPerDay: number | null;
@@ -51,39 +75,58 @@ export function calculateGrowth(
   if (!Number.isInteger(stars) || stars < 0) {
     throw new RangeError("stars must be a non-negative integer");
   }
+  if (!Number.isInteger(observationIntervalMinutes) || observationIntervalMinutes <= 0) {
+    throw new RangeError("observationIntervalMinutes must be a positive integer");
+  }
+  const validatedObservations = observations.map((observation) => {
+    const elapsed = capturedTimestamp - Date.parse(observation.capturedAt);
+    if (
+      !Number.isInteger(observation.stars) ||
+      observation.stars < 0 ||
+      !Number.isFinite(elapsed) ||
+      elapsed <= 0
+    ) {
+      throw new RangeError("Previous observations must contain valid stars and precede capturedAt");
+    }
+    return { observation, elapsed };
+  });
+  const growth = {
+    stars_delta_1h: deltaAtWindow(stars, capturedTimestamp, observations, 1),
+    stars_delta_6h: deltaAtWindow(stars, capturedTimestamp, observations, 6),
+    stars_delta_24h: deltaAtWindow(stars, capturedTimestamp, observations, 24),
+  };
   if (observations.length === 0) {
     return {
-      growth: {
-        stars_delta_1h: null,
-        stars_delta_6h: null,
-        stars_delta_24h: null,
-      },
+      growth,
       observedStarsPerDay: null,
       firstObservation: true,
     };
   }
 
-  const latest = observations[0];
-  const elapsed = capturedTimestamp - Date.parse(latest.capturedAt);
-  if (!Number.isFinite(elapsed) || elapsed <= 0) {
-    throw new RangeError("Previous observation must be earlier than capturedAt");
+  const baseline = validatedObservations
+    .filter(({ elapsed }) => elapsed >= observationIntervalMinutes * MINUTE_MS)
+    .sort((left, right) => left.elapsed - right.elapsed)[0];
+  if (baseline === undefined) {
+    return {
+      growth,
+      observedStarsPerDay: null,
+      firstObservation: true,
+    };
   }
-  const observedStarsPerDay = Math.max(0, stars - latest.stars) / (elapsed / DAY_MS);
+  const observedStarsPerDay = Math.max(0, stars - baseline.observation.stars) /
+    (baseline.elapsed / DAY_MS);
   return {
-    growth: {
-      stars_delta_1h: deltaAtWindow(stars, capturedTimestamp, observations, 1),
-      stars_delta_6h: deltaAtWindow(stars, capturedTimestamp, observations, 6),
-      stars_delta_24h: deltaAtWindow(stars, capturedTimestamp, observations, 24),
-    },
+    growth,
     observedStarsPerDay,
     firstObservation: false,
   };
 }
 
-function toCandidate(
+export function createRepositoryCandidate(
   repository: GitHubRepositorySnapshot,
   capturedAt: string,
-  database: HistoryDatabase,
+  observations: readonly StarObservation[],
+  observationIntervalMinutes: number,
 ): RepositoryCandidate {
   const stars = repository.metrics.stars;
   if (stars === null) {
@@ -92,7 +135,8 @@ function toCandidate(
   const observation = calculateGrowth(
     stars,
     capturedAt,
-    database.readStarObservations(repository.fullName, capturedAt, "github_official"),
+    observations,
+    observationIntervalMinutes,
   );
   return {
     full_name: repository.fullName,
@@ -140,22 +184,27 @@ export async function collectOnce({
   try {
     database.startCollectorRun(runId, startedAt);
     runStarted = true;
-    const repositories = await fetchGitHubTrendingRepositories(githubToken, fetchImplementation);
-    const cardCacheDirectory = resolve(dirname(databasePath), "repository-cards");
-    for (const repository of repositories) {
-      await loadRepositoryCard(
-        repository.fullName,
-        repository.openGraphImageUrl,
-        cardCacheDirectory,
-        fetchImplementation,
-      );
-    }
+    const repositories = await fetchGitHubRepositories({
+      token: githubToken,
+      capturedAt: startedAt,
+      previouslyObservedNames: [
+        ...database.readObservedRepositoryNames(),
+        ...BOOTSTRAP_REPOSITORY_NAMES,
+      ],
+      fetchImplementation,
+    });
     const capturedAt = now().toISOString();
-    const candidates = repositories.map((repository) => toCandidate(repository, capturedAt, database));
+    const observationIntervalMinutes = database.readCollectionIntervalMinutes();
+    const candidates = repositories.map((repository) => createRepositoryCandidate(
+      repository,
+      capturedAt,
+      database.readStarObservations(repository.fullName, capturedAt),
+      observationIntervalMinutes,
+    ));
     database.completeCollectorRun({
       id: runId,
       capturedAt,
-      source: "github_official",
+      source: "github_combined",
       repositories: candidates,
     });
     return { runId, capturedAt, repositoryCount: candidates.length };
