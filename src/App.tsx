@@ -1,14 +1,19 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import * as Slider from "@radix-ui/react-slider";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
+  FilterIcon,
   HistoryIcon,
   MarkGithubIcon,
   MoonIcon,
   RepoIcon,
+  SearchIcon,
+  SidebarCollapseIcon,
+  SidebarExpandIcon,
   StarIcon,
   SunIcon,
+  XIcon,
 } from "@primer/octicons-react";
 import {
   parseRankingSnapshot,
@@ -18,6 +23,14 @@ import {
   type RankingSnapshotMetadata,
 } from "./lib/history";
 import { getVisiblePages, parsePage } from "./lib/pagination";
+import {
+  buildRankingHref,
+  buildRepositoryFilterOptions,
+  filterRepositories,
+  parseRepositoryFilters,
+  type RepositoryFilterOption,
+  type RepositoryFilters,
+} from "./lib/repository-filters";
 import type { RankedRepository } from "./lib/ranking";
 import {
   buildSparklinePoints,
@@ -27,6 +40,8 @@ import {
 
 const PAGE_SIZE = 10;
 const SNAPSHOT_CACHE_LIMIT = 5;
+const DEFAULT_TOPIC_LIMIT = 12;
+const SEARCH_TOPIC_LIMIT = 40;
 const numberFormatter = new Intl.NumberFormat("ko-KR", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -127,6 +142,10 @@ function useRepositoryStarSeries(
 
   useEffect(() => {
     const controller = new AbortController();
+    if (repositories.length === 0) {
+      setState({ status: "ready", requestKey, series: new Map() });
+      return () => controller.abort();
+    }
     setState({ status: "loading", requestKey });
 
     async function load() {
@@ -269,7 +288,7 @@ function RankingRow({
   rowIndex: number;
   starSeries: StarSeriesState;
 }) {
-  const language = repository.language ?? "—";
+  const language = repository.language ?? "-";
   const stars = requireDisplayValue(repository.metrics.stars, "metrics.stars", repository.full_name);
   const series = resolveRepositorySeries(repository.full_name, starSeries);
 
@@ -309,19 +328,16 @@ function RankingRow({
   );
 }
 
-function pageHref(page: number, snapshotId: string): string {
-  const parameters = new URLSearchParams({ page: String(page), snapshot: snapshotId });
-  return `?${parameters.toString()}`;
-}
-
 function Pagination({
   currentPage,
   totalPages,
   snapshotId,
+  filters,
 }: {
   currentPage: number;
   totalPages: number;
   snapshotId: string;
+  filters: RepositoryFilters;
 }) {
   const visiblePages = getVisiblePages(currentPage, totalPages);
 
@@ -332,7 +348,7 @@ function Pagination({
           <ChevronLeftIcon size={16} />
         </span>
       ) : (
-        <a className="page-link page-arrow" href={pageHref(currentPage - 1, snapshotId)} aria-label="Previous page">
+        <a className="page-link page-arrow" href={buildRankingHref(currentPage - 1, snapshotId, filters)} aria-label="Previous page">
           <ChevronLeftIcon size={16} />
         </a>
       )}
@@ -340,7 +356,7 @@ function Pagination({
         {visiblePages.map((page) => (
           <a
             className={`page-link page-number ${page === currentPage ? "page-current" : ""} ${Math.abs(page - currentPage) <= 1 ? "page-near" : ""}`}
-            href={pageHref(page, snapshotId)}
+            href={buildRankingHref(page, snapshotId, filters)}
             aria-current={page === currentPage ? "page" : undefined}
             key={page}
           >
@@ -353,11 +369,246 @@ function Pagination({
           <ChevronRightIcon size={16} />
         </span>
       ) : (
-        <a className="page-link page-arrow" href={pageHref(currentPage + 1, snapshotId)} aria-label="Next page">
+        <a className="page-link page-arrow" href={buildRankingHref(currentPage + 1, snapshotId, filters)} aria-label="Next page">
           <ChevronRightIcon size={16} />
         </a>
       )}
     </nav>
+  );
+}
+
+function activeFilterCount(filters: RepositoryFilters): number {
+  return Number(filters.language !== null) + Number(filters.topic !== null);
+}
+
+function FilterOptionButton({
+  option,
+  selected,
+  onSelect,
+}: {
+  option: RepositoryFilterOption;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      aria-pressed={selected}
+      className={`filter-option ${selected ? "filter-option-selected" : ""}`}
+      onClick={onSelect}
+      type="button"
+    >
+      <span>{option.label}</span>
+      <span className="filter-option-count">{option.count}</span>
+    </button>
+  );
+}
+
+function FilterPanel({
+  idPrefix,
+  filters,
+  languageOptions,
+  topicOptions,
+  onChange,
+}: {
+  idPrefix: string;
+  filters: RepositoryFilters;
+  languageOptions: readonly RepositoryFilterOption[];
+  topicOptions: readonly RepositoryFilterOption[];
+  onChange: (filters: RepositoryFilters) => void;
+}) {
+  const [topicSearch, setTopicSearch] = useState("");
+  const normalizedSearch = topicSearch.trim().toLocaleLowerCase("en-US");
+  const matchingTopics = topicOptions.filter((option) => (
+    normalizedSearch === "" || option.label.toLocaleLowerCase("en-US").includes(normalizedSearch)
+  ));
+  const topicLimit = normalizedSearch === "" ? DEFAULT_TOPIC_LIMIT : SEARCH_TOPIC_LIMIT;
+  const visibleTopics = matchingTopics.slice(0, topicLimit);
+  const selectedTopic = topicOptions.find((option) => option.value === filters.topic);
+  if (
+    normalizedSearch === ""
+    && selectedTopic !== undefined
+    && !visibleTopics.some((option) => option.value === selectedTopic.value)
+  ) {
+    visibleTopics.push(selectedTopic);
+  }
+
+  return (
+    <div className="filter-panel">
+      <section className="filter-group" aria-labelledby={`${idPrefix}-language-filter-title`}>
+        <div className="filter-group-heading">
+          <h3 id={`${idPrefix}-language-filter-title`}>Language</h3>
+          {filters.language === null ? null : (
+            <button type="button" onClick={() => onChange({ ...filters, language: null })}>Clear</button>
+          )}
+        </div>
+        <div className="filter-options filter-options-language">
+          {languageOptions.map((option) => (
+            <FilterOptionButton
+              key={option.value}
+              option={option}
+              selected={filters.language === option.value}
+              onSelect={() => onChange({ ...filters, language: option.value })}
+            />
+          ))}
+        </div>
+      </section>
+
+      <section className="filter-group" aria-labelledby={`${idPrefix}-topic-filter-title`}>
+        <div className="filter-group-heading">
+          <h3 id={`${idPrefix}-topic-filter-title`}>Topics</h3>
+          {filters.topic === null ? null : (
+            <button type="button" onClick={() => onChange({ ...filters, topic: null })}>Clear</button>
+          )}
+        </div>
+        <label className="topic-search">
+          <span>Search topics</span>
+          <span className="topic-search-field">
+            <SearchIcon size={14} />
+            <input
+              type="search"
+              value={topicSearch}
+              placeholder="e.g. ai"
+              onChange={(event) => setTopicSearch(event.target.value)}
+            />
+          </span>
+        </label>
+        <div className="filter-options">
+          {visibleTopics.map((option) => (
+            <FilterOptionButton
+              key={option.value}
+              option={option}
+              selected={filters.topic === option.value}
+              onSelect={() => onChange({ ...filters, topic: option.value })}
+            />
+          ))}
+        </div>
+        {visibleTopics.length === 0 ? (
+          <p className="filter-options-empty">No topics found</p>
+        ) : normalizedSearch === "" && matchingTopics.length > DEFAULT_TOPIC_LIMIT ? (
+          <p className="filter-options-note">Showing top {DEFAULT_TOPIC_LIMIT}. Search to find more.</p>
+        ) : null}
+      </section>
+
+      {activeFilterCount(filters) === 0 ? null : (
+        <button
+          className="clear-filters-button"
+          type="button"
+          onClick={() => onChange({ language: null, topic: null })}
+        >
+          Clear all filters
+        </button>
+      )}
+    </div>
+  );
+}
+
+function DesktopFilters({
+  collapsed,
+  filters,
+  languageOptions,
+  topicOptions,
+  onChange,
+  onToggle,
+}: {
+  collapsed: boolean;
+  filters: RepositoryFilters;
+  languageOptions: readonly RepositoryFilterOption[];
+  topicOptions: readonly RepositoryFilterOption[];
+  onChange: (filters: RepositoryFilters) => void;
+  onToggle: () => void;
+}) {
+  const count = activeFilterCount(filters);
+  return (
+    <aside className={`filter-sidebar ${collapsed ? "filter-sidebar-collapsed" : ""}`} aria-label="Repository filters">
+      <div className="filter-sidebar-heading">
+        {collapsed ? null : (
+          <span><FilterIcon size={16} />Filters {count === 0 ? null : <strong>{count}</strong>}</span>
+        )}
+        <button
+          aria-label={collapsed ? "Expand filters" : "Collapse filters"}
+          className="filter-sidebar-toggle"
+          onClick={onToggle}
+          type="button"
+        >
+          {collapsed ? <SidebarExpandIcon size={17} /> : <SidebarCollapseIcon size={17} />}
+        </button>
+      </div>
+      {collapsed ? null : (
+        <FilterPanel
+          idPrefix="desktop"
+          filters={filters}
+          languageOptions={languageOptions}
+          topicOptions={topicOptions}
+          onChange={onChange}
+        />
+      )}
+    </aside>
+  );
+}
+
+function MobileFilterDialog({
+  open,
+  filters,
+  languageOptions,
+  topicOptions,
+  onChange,
+  onClose,
+}: {
+  open: boolean;
+  filters: RepositoryFilters;
+  languageOptions: readonly RepositoryFilterOption[];
+  topicOptions: readonly RepositoryFilterOption[];
+  onChange: (filters: RepositoryFilters) => void;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) {
+      throw new Error("Mobile filter dialog is unavailable");
+    }
+    if (open && !dialog.open) {
+      dialog.showModal();
+    } else if (!open && dialog.open) {
+      dialog.close();
+    }
+  }, [open]);
+
+  return (
+    <dialog
+      aria-labelledby="mobile-filter-title"
+      className="mobile-filter-dialog"
+      ref={dialogRef}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onClose={onClose}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className="mobile-filter-sheet">
+        <div className="mobile-filter-heading">
+          <div>
+            <FilterIcon size={17} />
+            <h2 id="mobile-filter-title">Filters</h2>
+          </div>
+          <button aria-label="Close filters" onClick={onClose} type="button"><XIcon size={18} /></button>
+        </div>
+        <FilterPanel
+          idPrefix="mobile"
+          filters={filters}
+          languageOptions={languageOptions}
+          topicOptions={topicOptions}
+          onChange={onChange}
+        />
+        <button className="mobile-filter-done" onClick={onClose} type="button">Show results</button>
+      </div>
+    </dialog>
   );
 }
 
@@ -483,12 +734,35 @@ function RankingPage({
   snapshotError: string | null;
   onSelect: (snapshotId: string) => void;
 }) {
-  const totalPages = Math.ceil(selectedSnapshot.repositories.length / PAGE_SIZE);
+  const [filters, setFilters] = useState<RepositoryFilters>(() => (
+    parseRepositoryFilters(window.location.search)
+  ));
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
+  const filterOptions = useMemo(
+    () => buildRepositoryFilterOptions(selectedSnapshot.repositories),
+    [selectedSnapshot.repositories],
+  );
+  const filteredRepositories = useMemo(
+    () => filterRepositories(selectedSnapshot.repositories, filters),
+    [filters, selectedSnapshot.repositories],
+  );
+  const totalPages = Math.ceil(filteredRepositories.length / PAGE_SIZE);
   const requestedPage = new URLSearchParams(window.location.search).get("page");
-  const currentPage = parsePage(requestedPage, totalPages);
+  const currentPage = totalPages === 0 ? 1 : parsePage(requestedPage, totalPages);
   const start = (currentPage - 1) * PAGE_SIZE;
-  const repositories = selectedSnapshot.repositories.slice(start, start + PAGE_SIZE);
+  const repositories = filteredRepositories.slice(start, start + PAGE_SIZE);
   const starSeries = useRepositoryStarSeries(selectedSnapshot.id, repositories);
+  const filterCount = activeFilterCount(filters);
+
+  function changeFilters(nextFilters: RepositoryFilters) {
+    window.history.replaceState(
+      null,
+      "",
+      buildRankingHref(1, selectedSnapshot.id, nextFilters),
+    );
+    setFilters(nextFilters);
+  }
 
   return (
     <main className="page-container">
@@ -505,11 +779,30 @@ function RankingPage({
         <Timeline snapshots={snapshots} selectedId={selectedId} onSelect={onSelect} />
       </section>
 
-      <section
-        aria-busy={isSnapshotLoading}
-        className={`ranking-board ${isSnapshotLoading ? "ranking-board-loading" : ""}`}
-        aria-label="Repository ranking"
-      >
+      <div className={`ranking-layout ${isSidebarCollapsed ? "ranking-layout-collapsed" : ""}`}>
+        <DesktopFilters
+          collapsed={isSidebarCollapsed}
+          filters={filters}
+          languageOptions={filterOptions.languages}
+          topicOptions={filterOptions.topics}
+          onChange={changeFilters}
+          onToggle={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
+        />
+        <div className="ranking-content">
+          <button
+            className="mobile-filter-trigger"
+            onClick={() => setIsMobileFiltersOpen(true)}
+            type="button"
+          >
+            <FilterIcon size={16} />
+            Filters
+            {filterCount === 0 ? null : <strong>{filterCount}</strong>}
+          </button>
+          <section
+            aria-busy={isSnapshotLoading}
+            className={`ranking-board ${isSnapshotLoading ? "ranking-board-loading" : ""}`}
+            aria-label="Repository ranking"
+          >
         <div className="board-heading">
           <div className="board-title">
             <RepoIcon size={18} />
@@ -524,7 +817,11 @@ function RankingPage({
                 <span className="snapshot-loading-spinner" />Updating snapshot
               </span>
             ) : null}
-            <span className="result-count">{selectedSnapshot.repositories.length} repositories</span>
+            <span className="result-count">
+              {filterCount === 0
+                ? `${selectedSnapshot.repositories.length} repositories`
+                : `${filteredRepositories.length} of ${selectedSnapshot.repositories.length} repositories`}
+            </span>
           </div>
         </div>
 
@@ -541,25 +838,52 @@ function RankingPage({
           <span>Stars gained</span>
         </div>
 
-        <ol className="ranking-list" start={start + 1} key={`${selectedSnapshot.id}-${currentPage}`}>
-          {repositories.map((repository, rowIndex) => (
-            <RankingRow
-              repository={repository}
-              rowIndex={rowIndex}
-              starSeries={starSeries}
-              key={repository.full_name}
-            />
-          ))}
-        </ol>
+        {repositories.length === 0 ? (
+          <div className="filter-empty-state">
+            <h3>No repositories match these filters</h3>
+            <p>Try another language or topic.</p>
+            <button type="button" onClick={() => changeFilters({ language: null, topic: null })}>
+              Clear filters
+            </button>
+          </div>
+        ) : (
+          <ol
+            className="ranking-list"
+            start={start + 1}
+            key={`${selectedSnapshot.id}-${currentPage}-${filters.language ?? "all"}-${filters.topic ?? "all"}`}
+          >
+            {repositories.map((repository, rowIndex) => (
+              <RankingRow
+                repository={repository}
+                rowIndex={rowIndex}
+                starSeries={starSeries}
+                key={repository.full_name}
+              />
+            ))}
+          </ol>
+        )}
 
-        <div className="board-footer">
-          <Pagination
-            currentPage={currentPage}
-            totalPages={totalPages}
-            snapshotId={selectedSnapshot.id}
-          />
+        {totalPages === 0 ? null : (
+          <div className="board-footer">
+            <Pagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              snapshotId={selectedSnapshot.id}
+              filters={filters}
+            />
+          </div>
+        )}
+          </section>
         </div>
-      </section>
+      </div>
+      <MobileFilterDialog
+        open={isMobileFiltersOpen}
+        filters={filters}
+        languageOptions={filterOptions.languages}
+        topicOptions={filterOptions.topics}
+        onChange={changeFilters}
+        onClose={() => setIsMobileFiltersOpen(false)}
+      />
     </main>
   );
 }
@@ -650,8 +974,11 @@ export default function App() {
     if (snapshots === null || !snapshots.some((snapshot) => snapshot.id === snapshotId)) {
       throw new RangeError(`Snapshot ${snapshotId} does not exist`);
     }
-    const parameters = new URLSearchParams({ page: "1", snapshot: snapshotId });
-    window.history.replaceState(null, "", `?${parameters.toString()}`);
+    window.history.replaceState(
+      null,
+      "",
+      buildRankingHref(1, snapshotId, parseRepositoryFilters(window.location.search)),
+    );
     setSelectedId(snapshotId);
   }
 
