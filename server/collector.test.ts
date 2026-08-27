@@ -57,7 +57,7 @@ describe("calculateGrowth", () => {
 });
 
 describe("millisecondsUntilNextCollection", () => {
-  it("waits for the remaining portion of the configured interval", () => {
+  it("waits from the previous completed run start", () => {
     expect(millisecondsUntilNextCollection(
       new Date("2026-08-25T01:00:00.000Z"),
       "2026-08-25T00:00:00.000Z",

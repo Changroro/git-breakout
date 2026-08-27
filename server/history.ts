@@ -275,6 +275,23 @@ export class HistoryDatabase {
     `).all() as CollectorRun[];
   }
 
+  readLatestCompletedCollectorStartedAt(): string | null {
+    const row = this.database.prepare(`
+      SELECT started_at
+      FROM collector_runs
+      WHERE status = 'completed'
+      ORDER BY started_at DESC
+      LIMIT 1
+    `).get() as { started_at: string } | undefined;
+    if (row === undefined) {
+      return null;
+    }
+    if (!Number.isFinite(Date.parse(row.started_at))) {
+      throw new TypeError("Latest completed collector start is invalid");
+    }
+    return row.started_at;
+  }
+
   acquireCollectorLease(ownerId: string, acquiredAt: string, expiresAt: string): boolean {
     if (
       ownerId.trim() === "" ||
