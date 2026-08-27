@@ -74,6 +74,20 @@ describe("HistoryDatabase", () => {
       error_message: null,
     }]);
     expect(database.readHistory().snapshots[0].id).toBe("run-1");
+    expect(database.readLatestCompletedCollectorStartedAt()).toBe("2026-08-25T00:00:00.000Z");
+    database.close();
+  });
+
+  it("does not use failed collector starts for the next scheduled run", () => {
+    const database = createDatabase();
+    database.startCollectorRun("run-1", "2026-08-25T00:00:00.000Z");
+    database.failCollectorRun(
+      "run-1",
+      "2026-08-25T00:01:00.000Z",
+      "temporary GitHub failure",
+    );
+
+    expect(database.readLatestCompletedCollectorStartedAt()).toBeNull();
     database.close();
   });
 

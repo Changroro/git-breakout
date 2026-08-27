@@ -19,7 +19,7 @@ export type CollectionResult = {
 
 export function millisecondsUntilNextCollection(
   now: Date,
-  latestCapturedAt: string | null,
+  latestCompletedStartedAt: string | null,
   intervalMinutes: number,
 ): number {
   const nowTimestamp = now.getTime();
@@ -29,12 +29,12 @@ export function millisecondsUntilNextCollection(
   if (!Number.isInteger(intervalMinutes) || intervalMinutes <= 0) {
     throw new RangeError("intervalMinutes must be a positive integer");
   }
-  if (latestCapturedAt === null) {
+  if (latestCompletedStartedAt === null) {
     return 0;
   }
-  const latestTimestamp = Date.parse(latestCapturedAt);
+  const latestTimestamp = Date.parse(latestCompletedStartedAt);
   if (!Number.isFinite(latestTimestamp) || latestTimestamp > nowTimestamp) {
-    throw new RangeError("Latest collection timestamp must be valid and not in the future");
+    throw new RangeError("Latest completed collector start must be valid and not in the future");
   }
   return Math.max(0, latestTimestamp + intervalMinutes * MINUTE_MS - nowTimestamp);
 }

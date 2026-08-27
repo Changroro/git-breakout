@@ -17,7 +17,7 @@ const intervalMinutes = settingsDatabase.readCollectionIntervalMinutes();
 const intervalMilliseconds = intervalMinutes * 60_000;
 const initialDelayMilliseconds = millisecondsUntilNextCollection(
   new Date(),
-  settingsDatabase.readLatestCollectionCapturedAt(),
+  settingsDatabase.readLatestCompletedCollectorStartedAt(),
   intervalMinutes,
 );
 settingsDatabase.close();

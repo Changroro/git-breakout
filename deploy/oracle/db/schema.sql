@@ -121,18 +121,20 @@ as $$
 declare
   configured_lease_minutes integer;
   configured_interval_minutes integer;
-  latest_captured_at timestamptz;
+  latest_completed_started_at timestamptz;
 begin
   select interval_minutes, lease_minutes
   into strict configured_interval_minutes, configured_lease_minutes
   from radar.collector_settings
   where id;
 
-  select max(captured_at) into latest_captured_at from radar.snapshots;
-  if latest_captured_at is not null and
-     latest_captured_at + make_interval(mins => configured_interval_minutes) > p_started_at then
+  select max(started_at) into latest_completed_started_at
+  from radar.collector_runs
+  where status = 'completed';
+  if latest_completed_started_at is not null and
+     latest_completed_started_at + make_interval(mins => configured_interval_minutes) > p_started_at then
     raise exception 'Next collection is not due until %',
-      latest_captured_at + make_interval(mins => configured_interval_minutes);
+      latest_completed_started_at + make_interval(mins => configured_interval_minutes);
   end if;
 
   delete from radar.collector_lease where expires_at <= p_started_at;
