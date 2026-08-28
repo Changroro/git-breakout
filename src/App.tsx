@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent,
+} from "react";
 import * as Slider from "@radix-ui/react-slider";
 import {
   CheckIcon,
@@ -7,6 +14,7 @@ import {
   FilterIcon,
   HistoryIcon,
   MarkGithubIcon,
+  MailIcon,
   MoonIcon,
   RepoIcon,
   SearchIcon,
@@ -1249,6 +1257,80 @@ function RankingPage({
   );
 }
 
+export function InitialLoadingState() {
+  return (
+    <main
+      aria-busy="true"
+      aria-label="Loading repository rankings"
+      className="page-container initial-loading-state"
+    >
+      <span className="visually-hidden" role="status">Loading repository rankings</span>
+      <section aria-hidden="true" className="loading-skeleton-intro">
+        <span className="loading-skeleton-block loading-skeleton-title" />
+        <span className="loading-skeleton-block loading-skeleton-meta" />
+        <div className="loading-skeleton-timeline">
+          <div className="loading-skeleton-timeline-heading">
+            <span className="loading-skeleton-block" />
+            <span className="loading-skeleton-block" />
+          </div>
+          <span className="loading-skeleton-block loading-skeleton-track" />
+        </div>
+      </section>
+      <div aria-hidden="true" className="loading-skeleton-layout">
+        <aside className="loading-skeleton-sidebar">
+          <span className="loading-skeleton-block loading-skeleton-sidebar-heading" />
+          {Array.from({ length: 7 }, (_, index) => (
+            <span className="loading-skeleton-block loading-skeleton-filter" key={index} />
+          ))}
+        </aside>
+        <section className="loading-skeleton-board">
+          <div className="loading-skeleton-board-heading">
+            <span className="loading-skeleton-block loading-skeleton-board-title" />
+            <span className="loading-skeleton-block loading-skeleton-count" />
+          </div>
+          <div className="loading-skeleton-tabs">
+            <span className="loading-skeleton-block" />
+            <span className="loading-skeleton-block" />
+            <span className="loading-skeleton-block" />
+          </div>
+          {Array.from({ length: 6 }, (_, index) => (
+            <div className="loading-skeleton-row" key={index}>
+              <span className="loading-skeleton-block loading-skeleton-rank" />
+              <span className="loading-skeleton-block loading-skeleton-thumbnail" />
+              <div className="loading-skeleton-copy">
+                <span className="loading-skeleton-block" />
+                <span className="loading-skeleton-block" />
+              </div>
+              <span className="loading-skeleton-block loading-skeleton-stat" />
+              <span className="loading-skeleton-block loading-skeleton-chart" />
+            </div>
+          ))}
+        </section>
+      </div>
+    </main>
+  );
+}
+
+export function SiteFooter() {
+  return (
+    <footer className="site-footer">
+      <div className="footer-inner">
+        <span className="footer-owner">Changroro</span>
+        <nav aria-label="Creator links" className="footer-links">
+          <a href="https://github.com/Changroro" rel="noreferrer" target="_blank">
+            <MarkGithubIcon size={16} />
+            github.com/Changroro
+          </a>
+          <a href="mailto:chbae624@gmail.com">
+            <MailIcon size={16} />
+            chbae624@gmail.com
+          </a>
+        </nav>
+      </div>
+    </footer>
+  );
+}
+
 export default function App() {
   const [snapshots, setSnapshots] = useState<RankingSnapshotMetadata[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1355,6 +1437,27 @@ export default function App() {
     setLocationSearch(href);
   }
 
+  function navigateHome(event: MouseEvent<HTMLAnchorElement>) {
+    if (snapshots === null) {
+      return;
+    }
+    const latestSnapshot = snapshots.at(-1);
+    if (latestSnapshot === undefined) {
+      throw new Error("Ranking timeline must contain a latest snapshot");
+    }
+    event.preventDefault();
+    navigate(
+      buildRankingHref(
+        1,
+        latestSnapshot.id,
+        { language: null, topic: null },
+        "momentum",
+      ),
+      "push",
+    );
+    setSelectedId(latestSnapshot.id);
+  }
+
   function selectSnapshot(snapshotId: string) {
     if (snapshots === null || !snapshots.some((snapshot) => snapshot.id === snapshotId)) {
       throw new RangeError(`Snapshot ${snapshotId} does not exist`);
@@ -1384,7 +1487,12 @@ export default function App() {
     <div className="app-shell">
       <header className="site-header">
         <div className="header-inner">
-          <a className="brand" href="?page=1" aria-label="AI Trend Radar home">
+          <a
+            className="brand"
+            href="?page=1"
+            aria-label="AI Trend Radar home"
+            onClick={navigateHome}
+          >
             <MarkGithubIcon size={30} />
             <span>AI Trend Radar</span>
           </a>
@@ -1412,9 +1520,7 @@ export default function App() {
           </section>
         </main>
       ) : snapshots === null || selectedId === null || selectedSnapshot === null ? (
-        <main className="page-container">
-          <p className="loading-state" role="status">Loading ranking history...</p>
-        </main>
+        <InitialLoadingState />
       ) : (
         <RankingPage
           snapshots={snapshots}
@@ -1438,6 +1544,7 @@ export default function App() {
           onRead={markRepositoryRead}
         />
       )}
+      <SiteFooter />
     </div>
   );
 }
