@@ -9,7 +9,7 @@ const CAPTURED_AT = "2026-08-28T12:00:00.000Z";
 
 function repository(index: number, options: {
   delta6: number;
-  delta24: number;
+  delta24: number | null;
   stars?: number;
 }): RankedRepository {
   const stars = options.stars ?? 1_000 + index * 10;
@@ -29,7 +29,7 @@ function repository(index: number, options: {
       stars_delta_6h: options.delta6,
       stars_delta_24h: options.delta24,
     },
-    observedStarsPerDay: options.delta24,
+    observedStarsPerDay: options.delta24 ?? options.delta6 * 4,
     firstObservation: false,
     rank: index + 1,
     momentum: {
@@ -58,10 +58,12 @@ function eventSignals(index: number, actors: {
   h6: number;
   h24: number;
   h72?: number;
+  coverage?: RepositoryEventSignals["coverage"];
 }): RepositoryEventSignals {
   return {
     full_name: `owner/repository-${index}`,
     captured_at: "2026-08-28T11:00:00.000Z",
+    coverage: actors.coverage ?? { h1: true, h6: true, h24: true, h72: true },
     windows: {
       h1: {
         watches: Math.floor(actors.h6 / 6),
@@ -108,6 +110,29 @@ function eventSignals(index: number, actors: {
 }
 
 describe("rankTrendIntelligence", () => {
+  it("scores an explicit six-hour warm-up window before 24-hour history exists", () => {
+    const repositories = Array.from({ length: 10 }, (_, index) => repository(index, {
+      delta6: 5 + index,
+      delta24: null,
+    }));
+    const signals = Array.from({ length: 10 }, (_, index) => eventSignals(index, {
+      h6: 10 + index,
+      h24: 30 + index,
+      coverage: { h1: true, h6: false, h24: false, h72: false },
+    }));
+
+    const ranked = rankTrendIntelligence(repositories, signals, CAPTURED_AT);
+
+    expect(ranked[0].trend_intelligence.star_evidence_window_hours).toBe(6);
+    expect(ranked[0].trend_intelligence.event_evidence_window_hours).toBe(1);
+    expect(ranked[0].trend_intelligence.current_heat.score).not.toBeNull();
+    expect(ranked[0].trend_intelligence.breakout.score).not.toBeNull();
+    expect(ranked[0].trend_intelligence.breakout.components.star_acceleration).toBeNull();
+    expect(ranked[0].trend_intelligence.breakout.components.actor_acceleration).toBeNull();
+    expect(ranked[0].trend_intelligence.missing_evidence).toContain("star_window_24h");
+    expect(ranked[0].trend_intelligence.missing_evidence).toContain("event_window_24h");
+  });
+
   it("surfaces a peer-cohort breakout without changing baseline rank", () => {
     const repositories = Array.from({ length: 10 }, (_, index) => repository(index, {
       delta6: index === 9 ? 80 : 2 + index,

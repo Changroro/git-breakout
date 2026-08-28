@@ -107,9 +107,14 @@ describe("parseCollectionContext", () => {
 
 describe("parseEventSignalContext", () => {
   it("accepts an explicitly empty event history", () => {
-    expect(parseEventSignalContext({ captured_at: null, repositories: [] })).toEqual([]);
+    expect(parseEventSignalContext({
+      captured_at: null,
+      coverage: { h1: false, h6: false, h24: false, h72: false },
+      repositories: [],
+    })).toEqual([]);
     expect(() => parseEventSignalContext({
       captured_at: null,
+      coverage: { h1: false, h6: false, h24: false, h72: false },
       repositories: [{ full_name: "owner/repository" }],
     })).toThrow("cannot contain repositories");
   });
@@ -128,6 +133,7 @@ describe("parseEventSignalContext", () => {
 
     expect(parseEventSignalContext({
       captured_at: "2026-08-28T10:00:00.000Z",
+      coverage: { h1: true, h6: true, h24: true, h72: false },
       repositories: [{
         full_name: "owner/repository",
         windows: { h1: window, h6: window, h24: window, h72: window },
@@ -135,6 +141,7 @@ describe("parseEventSignalContext", () => {
     })).toEqual([{
       full_name: "owner/repository",
       captured_at: "2026-08-28T10:00:00.000Z",
+      coverage: { h1: true, h6: true, h24: true, h72: false },
       windows: { h1: window, h6: window, h24: window, h72: window },
     }]);
   });
@@ -156,10 +163,12 @@ describe("parseEventSignalContext", () => {
     };
     expect(() => parseEventSignalContext({
       captured_at: "2026-08-28T10:00:00.000Z",
+      coverage: { h1: true, h6: true, h24: true, h72: true },
       repositories: [repository, repository],
     })).toThrow("duplicate repository");
     expect(() => parseEventSignalContext({
       captured_at: "2026-08-28T10:00:00.000Z",
+      coverage: { h1: true, h6: true, h24: true, h72: true },
       repositories: [{
         ...repository,
         windows: { ...repository.windows, h1: { ...window, watches: -1 } },

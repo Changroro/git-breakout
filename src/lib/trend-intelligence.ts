@@ -27,6 +27,12 @@ export type TrendWindowSignals = {
 export type RepositoryEventSignals = {
   full_name: string;
   captured_at: string;
+  coverage: {
+    h1: boolean;
+    h6: boolean;
+    h24: boolean;
+    h72: boolean;
+  };
   windows: {
     h1: TrendWindowSignals;
     h6: TrendWindowSignals;
@@ -54,6 +60,8 @@ export type TrendIntelligence = {
   score_version: "trend-intelligence-v2-shadow";
   phase: TrendPhase;
   confidence: Confidence;
+  star_evidence_window_hours: 1 | 6 | 24 | null;
+  event_evidence_window_hours: 1 | 6 | 24 | null;
   current_heat: TrendScore;
   breakout: TrendScore;
   cohort: {
@@ -88,6 +96,8 @@ type FeatureRow = {
   cohortKey: string;
   eventSignals: RepositoryEventSignals | null;
   missingEvidence: string[];
+  starEvidenceWindowHours: 1 | 6 | 24 | null;
+  eventEvidenceWindowHours: 1 | 6 | 24 | null;
   starVelocity: number | null;
   relativeGrowth: number | null;
   starAcceleration: number | null;
@@ -169,18 +179,48 @@ function eventDiversity(window: TrendWindowSignals): number {
   return categories.filter((count) => count > 0).length / categories.length;
 }
 
+function starEvidence(repository: RankedRepository): {
+  delta: number;
+  hours: 1 | 6 | 24;
+} | null {
+  if (repository.growth.stars_delta_24h !== null) {
+    return { delta: repository.growth.stars_delta_24h, hours: 24 };
+  }
+  if (repository.growth.stars_delta_6h !== null) {
+    return { delta: repository.growth.stars_delta_6h, hours: 6 };
+  }
+  if (repository.growth.stars_delta_1h !== null) {
+    return { delta: repository.growth.stars_delta_1h, hours: 1 };
+  }
+  return null;
+}
+
+function eventEvidenceWindow(signals: RepositoryEventSignals): 1 | 6 | 24 | null {
+  if (signals.coverage.h24) return 24;
+  if (signals.coverage.h6) return 6;
+  if (signals.coverage.h1) return 1;
+  return null;
+}
+
 function featureRow(
   repository: RankedRepository,
   eventSignals: RepositoryEventSignals | null,
   capturedAt: number,
 ): FeatureRow {
   const missingEvidence: string[] = [];
+  const selectedStarEvidence = starEvidence(repository);
+  const delta1 = repository.growth.stars_delta_1h;
   const delta6 = repository.growth.stars_delta_6h;
   const delta24 = repository.growth.stars_delta_24h;
   const stars = repository.metrics.stars;
-  if (delta6 === null || delta24 === null) missingEvidence.push("star_windows_6h_24h");
+  if (selectedStarEvidence === null) {
+    missingEvidence.push("star_growth_window");
+  } else if (selectedStarEvidence.hours < 24) {
+    missingEvidence.push("star_window_24h");
+  }
 
   let freshSignals = eventSignals;
+  let selectedEventWindow: 1 | 6 | 24 | null = null;
   if (eventSignals === null) {
     missingEvidence.push("github_events");
   } else {
@@ -191,38 +231,76 @@ function featureRow(
     Object.entries(eventSignals.windows).forEach(([windowName, window]) => {
       validateWindow(window, `event_signals.${repository.full_name}.${windowName}`);
     });
+    Object.entries(eventSignals.coverage).forEach(([windowName, covered]) => {
+      if (typeof covered !== "boolean") {
+        throw new TypeError(`event_signals.${repository.full_name}.coverage.${windowName} must be boolean`);
+      }
+    });
     if (capturedAt - eventCapturedAt > MAX_EVENT_SIGNAL_AGE_HOURS * HOUR_MS) {
       missingEvidence.push("fresh_github_events");
       freshSignals = null;
+    } else {
+      selectedEventWindow = eventEvidenceWindow(eventSignals);
+      if (selectedEventWindow === null) {
+        missingEvidence.push("event_growth_window");
+        freshSignals = null;
+      } else if (selectedEventWindow < 24) {
+        missingEvidence.push("event_window_24h");
+      }
     }
   }
 
-  const priorStars = stars === null || delta24 === null ? null : Math.max(stars - delta24, 1);
-  const starAcceleration = delta6 === null || delta24 === null
+  const priorStars = stars === null || selectedStarEvidence === null
     ? null
-    : delta6 / 6 - delta24 / 24;
+    : Math.max(stars - selectedStarEvidence.delta, 1);
+  const starAcceleration = delta6 !== null && delta24 !== null
+    ? delta6 / 6 - delta24 / 24
+    : delta1 !== null && delta6 !== null
+      ? delta1 - delta6 / 6
+      : null;
+  const selectedSignals = freshSignals === null || selectedEventWindow === null
+    ? null
+    : freshSignals.windows[`h${selectedEventWindow}`];
   const actorAcceleration = freshSignals === null
     ? null
-    : freshSignals.windows.h6.unique_actors / 6 - freshSignals.windows.h24.unique_actors / 24;
+    : selectedEventWindow === 24
+      ? freshSignals.windows.h6.unique_actors / 6 - freshSignals.windows.h24.unique_actors / 24
+      : selectedEventWindow === 6
+        ? freshSignals.windows.h1.unique_actors - freshSignals.windows.h6.unique_actors / 6
+        : null;
   const persistence = freshSignals === null
     ? null
-    : Math.min(
-      1,
-      freshSignals.windows.h6.unique_actors * 4 /
-        Math.max(freshSignals.windows.h24.unique_actors, 1),
-    );
+    : selectedEventWindow === 24
+      ? Math.min(
+        1,
+        freshSignals.windows.h6.unique_actors * 4 /
+          Math.max(freshSignals.windows.h24.unique_actors, 1),
+      )
+      : selectedEventWindow === 6
+        ? Math.min(
+          1,
+          freshSignals.windows.h1.unique_actors * 6 /
+            Math.max(freshSignals.windows.h6.unique_actors, 1),
+        )
+        : null;
 
   return {
     repository,
     cohortKey: cohortKey(repository, capturedAt),
     eventSignals: freshSignals,
     missingEvidence,
-    starVelocity: delta24,
-    relativeGrowth: delta24 === null || priorStars === null ? null : delta24 / priorStars,
+    starEvidenceWindowHours: selectedStarEvidence?.hours ?? null,
+    eventEvidenceWindowHours: selectedEventWindow,
+    starVelocity: selectedStarEvidence === null
+      ? null
+      : selectedStarEvidence.delta * 24 / selectedStarEvidence.hours,
+    relativeGrowth: selectedStarEvidence === null || priorStars === null
+      ? null
+      : selectedStarEvidence.delta / priorStars * 24 / selectedStarEvidence.hours,
     starAcceleration,
     actorAcceleration,
-    organicBreadth: freshSignals?.windows.h24.unique_actors ?? null,
-    eventDiversity: freshSignals === null ? null : eventDiversity(freshSignals.windows.h24),
+    organicBreadth: selectedSignals?.unique_actors ?? null,
+    eventDiversity: selectedSignals === null ? null : eventDiversity(selectedSignals),
     persistence,
   };
 }
@@ -258,10 +336,17 @@ function phaseFor(
 
 function confidenceFor(row: FeatureRow, cohortSize: number): Confidence {
   if (row.eventSignals === null || cohortSize < MIN_TREND_COHORT_SIZE) return "low";
+  if ((row.eventEvidenceWindowHours ?? 0) < 6) return "low";
   const hasAllStarWindows = row.repository.growth.stars_delta_1h !== null
     && row.repository.growth.stars_delta_6h !== null
     && row.repository.growth.stars_delta_24h !== null;
-  if (cohortSize >= 20 && hasAllStarWindows && row.eventSignals.windows.h72.unique_actors > 0) {
+  if (
+    cohortSize >= 20
+    && row.starEvidenceWindowHours === 24
+    && hasAllStarWindows
+    && row.eventEvidenceWindowHours === 24
+    && row.eventSignals.windows.h72.unique_actors > 0
+  ) {
     return "high";
   }
   return "medium";
@@ -310,10 +395,10 @@ export function rankTrendIntelligence(
     const cohort = cohorts.get(row.cohortKey) ?? [];
     const cohortScoreable = cohort.filter((candidate) =>
       candidate.relativeGrowth !== null
-      && candidate.starAcceleration !== null
-      && candidate.actorAcceleration !== null
       && candidate.organicBreadth !== null
     );
+    const cohortAccelerations = known(cohortScoreable.map((candidate) => candidate.starAcceleration));
+    const cohortActorAccelerations = known(cohortScoreable.map((candidate) => candidate.actorAcceleration));
     const confidence = confidenceFor(row, cohortScoreable.length);
     const missingEvidence = [...row.missingEvidence];
     if (cohortScoreable.length < MIN_TREND_COHORT_SIZE) {
@@ -323,7 +408,6 @@ export function rankTrendIntelligence(
     const canScoreCurrent = row.starVelocity !== null
       && row.organicBreadth !== null
       && row.eventDiversity !== null
-      && row.persistence !== null
       && globallyScoreable.length >= 2;
     const currentComponents: ScoreComponents = {
       star_velocity: canScoreCurrent
@@ -340,8 +424,6 @@ export function rankTrendIntelligence(
     };
     const canScoreBreakout = cohortScoreable.length >= MIN_TREND_COHORT_SIZE
       && row.relativeGrowth !== null
-      && row.starAcceleration !== null
-      && row.actorAcceleration !== null
       && row.organicBreadth !== null;
     const breakoutComponents: ScoreComponents = {
       star_velocity: null,
@@ -349,10 +431,14 @@ export function rankTrendIntelligence(
         ? percentile(row.relativeGrowth as number, known(cohortScoreable.map((item) => item.relativeGrowth)))
         : null,
       star_acceleration: canScoreBreakout
-        ? percentile(row.starAcceleration as number, known(cohortScoreable.map((item) => item.starAcceleration)))
+        && row.starAcceleration !== null
+        && cohortAccelerations.length >= 2
+        ? percentile(row.starAcceleration, cohortAccelerations)
         : null,
       actor_acceleration: canScoreBreakout
-        ? percentile(row.actorAcceleration as number, known(cohortScoreable.map((item) => item.actorAcceleration)))
+        && row.actorAcceleration !== null
+        && cohortActorAccelerations.length >= 2
+        ? percentile(row.actorAcceleration, cohortActorAccelerations)
         : null,
       organic_breadth: canScoreBreakout
         ? percentile(row.organicBreadth as number, known(cohortScoreable.map((item) => item.organicBreadth)))
@@ -380,6 +466,8 @@ export function rankTrendIntelligence(
         score_version: "trend-intelligence-v2-shadow",
         phase,
         confidence,
+        star_evidence_window_hours: row.starEvidenceWindowHours,
+        event_evidence_window_hours: row.eventEvidenceWindowHours,
         current_heat: { score: currentScore, components: currentComponents },
         breakout: { score: breakoutScore, components: breakoutComponents },
         cohort: { key: row.cohortKey, size: cohortScoreable.length },

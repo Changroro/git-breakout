@@ -198,14 +198,35 @@ as $$
 declare
   latest_captured_at timestamptz;
   configured_candidate_limit integer;
+  window_coverage jsonb;
   response jsonb;
 begin
   select max(bucket_at) + interval '1 hour'
   into latest_captured_at
   from radar.repository_event_buckets;
   if latest_captured_at is null then
-    return jsonb_build_object('captured_at', null, 'repositories', '[]'::jsonb);
+    return jsonb_build_object(
+      'captured_at', null,
+      'coverage', jsonb_build_object('h1', false, 'h6', false, 'h24', false, 'h72', false),
+      'repositories', '[]'::jsonb
+    );
   end if;
+
+  select jsonb_build_object(
+    'h1', count(distinct bucket_at) filter (
+      where bucket_at >= latest_captured_at - interval '1 hour'
+    ) = 1,
+    'h6', count(distinct bucket_at) filter (
+      where bucket_at >= latest_captured_at - interval '6 hours'
+    ) = 6,
+    'h24', count(distinct bucket_at) filter (
+      where bucket_at >= latest_captured_at - interval '24 hours'
+    ) = 24,
+    'h72', count(distinct bucket_at) = 72
+  ) into window_coverage
+  from radar.repository_event_buckets
+  where bucket_at >= latest_captured_at - interval '72 hours'
+    and bucket_at < latest_captured_at;
 
   select event_candidate_limit into strict configured_candidate_limit
   from radar.collector_settings
@@ -242,6 +263,7 @@ begin
   )
   select jsonb_build_object(
     'captured_at', latest_captured_at,
+    'coverage', window_coverage,
     'repositories', coalesce(jsonb_agg(
       jsonb_build_object(
         'full_name', candidates.full_name,

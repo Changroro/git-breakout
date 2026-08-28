@@ -40,14 +40,14 @@ v2는 [GH Archive](https://www.gharchive.org/)의 시간별 공개 GitHub 이벤
 
 ### Current Heat와 Breakout 분리
 
-`Current Heat`는 지금 관심의 절대 크기를 측정한다.
+`Current Heat`는 지금 관심의 절대 크기를 측정한다. 24시간 이력이 아직 없으면 완전히 수집된 6시간 또는 1시간 창을 시간당 비율로 정규화해 사용하고, 사용한 창과 낮아진 신뢰도를 함께 기록한다.
 
 - 24시간 Star 증가량의 전체 백분위
 - 24시간 고유 actor 수의 전체 백분위
 - Watch·Fork·Discussion·Development 네 활동군의 다양성
 - 6시간 actor 흐름이 24시간 흐름에서 유지되는 비율
 
-`Breakout`은 비슷한 저장소 사이에서 예상 밖으로 빨리 성장하는지를 측정한다.
+`Breakout`은 비슷한 저장소 사이에서 예상 밖으로 빨리 성장하는지를 측정한다. 상대 성장률도 선택된 Star 창 길이에 맞춰 24시간 비율로 정규화한다.
 
 - 언어
 - 저장소 나이 구간
@@ -64,7 +64,7 @@ v2는 [GH Archive](https://www.gharchive.org/)의 시간별 공개 GitHub 이벤
 
 ### 증거 우선 상태
 
-점수와 함께 `spark`, `breakout`, `hot`, `steady`, `cooling`, `insufficient_data` 단계를 저장한다. cohort가 8개 미만이거나 이벤트가 4시간보다 오래됐거나 Star 창이 비어 있으면 필요한 점수를 만들지 않는다. 누락된 근거와 신뢰도도 스냅샷에 함께 저장한다.
+점수와 함께 `spark`, `breakout`, `hot`, `steady`, `cooling`, `insufficient_data` 단계를 저장한다. cohort가 8개 미만이거나 이벤트가 4시간보다 오래됐거나 Star 창이 비어 있으면 필요한 점수를 만들지 않는다. 24시간보다 짧은 Star·이벤트 창은 길이를 명시하고 신뢰도를 낮춘다. 누락된 근거와 신뢰도도 스냅샷에 함께 저장한다.
 
 ### 이벤트 기반 후보 발굴
 
