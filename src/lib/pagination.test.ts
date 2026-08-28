@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { getVisiblePages, parsePage } from "./pagination";
+import { describe, expect, it, vi } from "vitest";
+import { getVisiblePages, navigateRankingHref, parsePage } from "./pagination";
 
 describe("parsePage", () => {
   it("accepts a page inside the available range", () => {
@@ -26,5 +26,25 @@ describe("getVisiblePages", () => {
 
   it("keeps the final window within the available pages", () => {
     expect(getVisiblePages(18, 18)).toEqual([9, 10, 11, 12, 13, 14, 15, 16, 17, 18]);
+  });
+});
+
+describe("navigateRankingHref", () => {
+  it("updates browser history without assigning a new document location", () => {
+    const pushState = vi.fn();
+    const replaceState = vi.fn();
+
+    navigateRankingHref({ pushState, replaceState }, "?page=2&snapshot=test", "push");
+
+    expect(pushState).toHaveBeenCalledWith(null, "", "?page=2&snapshot=test");
+    expect(replaceState).not.toHaveBeenCalled();
+  });
+
+  it("rejects navigation outside the current ranking path", () => {
+    const history = { pushState: vi.fn(), replaceState: vi.fn() };
+
+    expect(() => navigateRankingHref(history, "/other", "push")).toThrow(
+      "Ranking navigation href must be a query string",
+    );
   });
 });

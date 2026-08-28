@@ -32,3 +32,22 @@ export function getVisiblePages(currentPage: number, totalPages: number): number
   );
   return Array.from({ length: maximumVisiblePages }, (_, index) => start + index);
 }
+
+type RankingHistory = Pick<History, "pushState" | "replaceState">;
+
+export type RankingNavigationMode = "push" | "replace";
+
+export function navigateRankingHref(
+  history: RankingHistory,
+  href: string,
+  mode: RankingNavigationMode,
+): void {
+  if (!href.startsWith("?")) {
+    throw new TypeError("Ranking navigation href must be a query string");
+  }
+  if (mode === "push") {
+    history.pushState(null, "", href);
+    return;
+  }
+  history.replaceState(null, "", href);
+}

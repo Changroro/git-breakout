@@ -23,7 +23,12 @@ import {
   type RankingSnapshot,
   type RankingSnapshotMetadata,
 } from "./lib/history";
-import { getVisiblePages, parsePage } from "./lib/pagination";
+import {
+  getVisiblePages,
+  navigateRankingHref,
+  parsePage,
+  type RankingNavigationMode,
+} from "./lib/pagination";
 import {
   buildRankingHref,
   buildRepositoryFilterOptions,
@@ -618,15 +623,11 @@ function RankingRow({
 function Pagination({
   currentPage,
   totalPages,
-  snapshotId,
-  filters,
-  rankingView,
+  onPageChange,
 }: {
   currentPage: number;
   totalPages: number;
-  snapshotId: string;
-  filters: RepositoryFilters;
-  rankingView: RankingView;
+  onPageChange: (page: number) => void;
 }) {
   const visiblePages = getVisiblePages(currentPage, totalPages);
 
@@ -637,20 +638,21 @@ function Pagination({
           <ChevronLeftIcon size={16} />
         </span>
       ) : (
-        <a className="page-link page-arrow" href={buildRankingHref(currentPage - 1, snapshotId, filters, rankingView)} aria-label="Previous page">
+        <button className="page-link page-arrow" onClick={() => onPageChange(currentPage - 1)} type="button" aria-label="Previous page">
           <ChevronLeftIcon size={16} />
-        </a>
+        </button>
       )}
       <div className="page-numbers">
         {visiblePages.map((page) => (
-          <a
+          <button
             className={`page-link page-number ${page === currentPage ? "page-current" : ""} ${Math.abs(page - currentPage) <= 1 ? "page-near" : ""}`}
-            href={buildRankingHref(page, snapshotId, filters, rankingView)}
             aria-current={page === currentPage ? "page" : undefined}
+            onClick={() => onPageChange(page)}
+            type="button"
             key={page}
           >
             {page}
-          </a>
+          </button>
         ))}
       </div>
       {currentPage === totalPages ? (
@@ -658,9 +660,9 @@ function Pagination({
           <ChevronRightIcon size={16} />
         </span>
       ) : (
-        <a className="page-link page-arrow" href={buildRankingHref(currentPage + 1, snapshotId, filters, rankingView)} aria-label="Next page">
+        <button className="page-link page-arrow" onClick={() => onPageChange(currentPage + 1)} type="button" aria-label="Next page">
           <ChevronRightIcon size={16} />
-        </a>
+        </button>
       )}
     </nav>
   );
@@ -1017,6 +1019,8 @@ function RankingPage({
   readRepositories,
   onSelect,
   onRead,
+  locationSearch,
+  onNavigate,
 }: {
   snapshots: readonly RankingSnapshotMetadata[];
   selectedId: string;
@@ -1026,13 +1030,11 @@ function RankingPage({
   readRepositories: ReadonlySet<string>;
   onSelect: (snapshotId: string) => void;
   onRead: (fullName: string) => void;
+  locationSearch: string;
+  onNavigate: (href: string, mode: RankingNavigationMode) => void;
 }) {
-  const [filters, setFilters] = useState<RepositoryFilters>(() => (
-    parseRepositoryFilters(window.location.search)
-  ));
-  const [rankingView, setRankingView] = useState<RankingView>(() => (
-    parseRankingView(window.location.search)
-  ));
+  const filters = parseRepositoryFilters(locationSearch);
+  const rankingView = parseRankingView(locationSearch);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
   const filterOptions = useMemo(
@@ -1048,7 +1050,7 @@ function RankingPage({
     [filteredRepositories, rankingView],
   );
   const totalPages = Math.ceil(viewRepositories.length / PAGE_SIZE);
-  const requestedPage = new URLSearchParams(window.location.search).get("page");
+  const requestedPage = new URLSearchParams(locationSearch).get("page");
   const currentPage = totalPages === 0 ? 1 : parsePage(requestedPage, totalPages);
   const start = (currentPage - 1) * PAGE_SIZE;
   const repositories = viewRepositories.slice(start, start + PAGE_SIZE);
@@ -1060,24 +1062,30 @@ function RankingPage({
   ));
 
   function changeFilters(nextFilters: RepositoryFilters) {
-    window.history.replaceState(
-      null,
-      "",
+    onNavigate(
       buildRankingHref(1, selectedSnapshot.id, nextFilters, rankingView),
+      "replace",
     );
-    setFilters(nextFilters);
   }
 
   function changeRankingView(nextView: RankingView) {
     if (nextView !== "momentum" && !intelligenceAvailable) {
       throw new Error(`Trend intelligence is unavailable for snapshot ${selectedSnapshot.id}`);
     }
-    window.history.replaceState(
-      null,
-      "",
+    onNavigate(
       buildRankingHref(1, selectedSnapshot.id, filters, nextView),
+      "replace",
     );
-    setRankingView(nextView);
+  }
+
+  function changePage(nextPage: number) {
+    if (!Number.isInteger(nextPage) || nextPage < 1 || nextPage > totalPages) {
+      throw new RangeError(`Page ${nextPage} must be within the ranking page range`);
+    }
+    onNavigate(
+      buildRankingHref(nextPage, selectedSnapshot.id, filters, rankingView),
+      "push",
+    );
   }
 
   return (
@@ -1222,9 +1230,7 @@ function RankingPage({
             <Pagination
               currentPage={currentPage}
               totalPages={totalPages}
-              snapshotId={selectedSnapshot.id}
-              filters={filters}
-              rankingView={rankingView}
+              onPageChange={changePage}
             />
           </div>
         )}
@@ -1253,6 +1259,7 @@ export default function App() {
   const [readRepositories, setReadRepositories] = useState<ReadonlySet<string>>(() => (
     parseReadRepositories(localStorage.getItem(READ_REPOSITORIES_STORAGE_KEY))
   ));
+  const [locationSearch, setLocationSearch] = useState(window.location.search);
   const snapshotCache = useRef(new Map<string, RankingSnapshot>());
 
   useEffect(() => {
@@ -1282,6 +1289,20 @@ export default function App() {
     void loadTimeline();
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    function handlePopState() {
+      const nextSearch = window.location.search;
+      setLocationSearch(nextSearch);
+      if (snapshots !== null) {
+        const requestedId = new URLSearchParams(nextSearch).get("snapshot");
+        setSelectedId(resolveSnapshotId(requestedId, snapshots));
+      }
+    }
+
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, [snapshots]);
 
   useEffect(() => {
     if (selectedId === null) {
@@ -1329,19 +1350,23 @@ export default function App() {
     return () => controller.abort();
   }, [selectedId]);
 
+  function navigate(href: string, mode: RankingNavigationMode) {
+    navigateRankingHref(window.history, href, mode);
+    setLocationSearch(href);
+  }
+
   function selectSnapshot(snapshotId: string) {
     if (snapshots === null || !snapshots.some((snapshot) => snapshot.id === snapshotId)) {
       throw new RangeError(`Snapshot ${snapshotId} does not exist`);
     }
-    window.history.replaceState(
-      null,
-      "",
+    navigate(
       buildRankingHref(
         1,
         snapshotId,
-        parseRepositoryFilters(window.location.search),
-        parseRankingView(window.location.search),
+        parseRepositoryFilters(locationSearch),
+        parseRankingView(locationSearch),
       ),
+      "replace",
     );
     setSelectedId(snapshotId);
   }
@@ -1400,6 +1425,8 @@ export default function App() {
           readRepositories={readRepositories}
           onSelect={selectSnapshot}
           onRead={markRepositoryRead}
+          locationSearch={locationSearch}
+          onNavigate={navigate}
         />
       )}
       {selectedSnapshot === null ? null : (
