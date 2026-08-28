@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import * as Slider from "@radix-ui/react-slider";
 import {
+  CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   FilterIcon,
@@ -37,11 +38,19 @@ import {
   parseStarSeriesResponse,
   type RepositoryStarSeries,
 } from "./lib/star-series";
+import {
+  addReadRepository,
+  parseReadRepositories,
+  searchRepositories,
+  serializeReadRepositories,
+} from "./lib/repository-search";
 
 const PAGE_SIZE = 10;
 const SNAPSHOT_CACHE_LIMIT = 5;
 const DEFAULT_TOPIC_LIMIT = 12;
 const SEARCH_TOPIC_LIMIT = 40;
+const SEARCH_RESULT_LIMIT = 10;
+const READ_REPOSITORIES_STORAGE_KEY = "github-trend-radar:read-repositories";
 const numberFormatter = new Intl.NumberFormat("ko-KR", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -206,6 +215,196 @@ function RepositoryCardThumbnail({ repository }: { repository: RankedRepository 
   />;
 }
 
+function RepositorySearchDialog({
+  open,
+  repositories,
+  readRepositories,
+  onClose,
+  onRead,
+}: {
+  open: boolean;
+  repositories: readonly RankedRepository[];
+  readRepositories: ReadonlySet<string>;
+  onClose: () => void;
+  onRead: (fullName: string) => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const resultRefs = useRef<Array<HTMLAnchorElement | null>>([]);
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const results = useMemo(
+    () => searchRepositories(repositories, query),
+    [query, repositories],
+  );
+  const visibleResults = results.slice(0, SEARCH_RESULT_LIMIT);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) {
+      throw new Error("Repository search dialog is unavailable");
+    }
+    if (open && !dialog.open) {
+      setQuery("");
+      setActiveIndex(0);
+      dialog.showModal();
+      if (inputRef.current === null) {
+        throw new Error("Repository search input is unavailable");
+      }
+      inputRef.current.focus();
+    } else if (!open && dialog.open) {
+      dialog.close();
+    }
+  }, [open]);
+
+  function selectResult(index: number) {
+    const result = visibleResults[index];
+    if (result === undefined) {
+      throw new RangeError(`Search result ${index} does not exist`);
+    }
+    const resultLink = resultRefs.current[index];
+    if (resultLink === null || resultLink === undefined) {
+      throw new Error(`Search result link ${index} is unavailable`);
+    }
+    resultLink.click();
+  }
+
+  function activateResult(index: number) {
+    if (visibleResults[index] === undefined) {
+      throw new RangeError(`Search result ${index} does not exist`);
+    }
+    const resultLink = resultRefs.current[index];
+    if (resultLink === null || resultLink === undefined) {
+      throw new Error(`Search result link ${index} is unavailable`);
+    }
+    setActiveIndex(index);
+    resultLink.scrollIntoView({ block: "nearest" });
+  }
+
+  return (
+    <dialog
+      aria-labelledby="repository-search-title"
+      className="repository-search-dialog"
+      ref={dialogRef}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onClose={onClose}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className="repository-search-panel">
+        <h2 className="visually-hidden" id="repository-search-title">Search repositories</h2>
+        <div className="repository-search-field">
+          <SearchIcon size={22} />
+          <input
+            aria-controls="repository-search-results"
+            aria-label="Search repositories"
+            autoComplete="off"
+            placeholder={`Search ${numberFormatter.format(repositories.length)} repositories...`}
+            ref={inputRef}
+            type="search"
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setActiveIndex(0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                onClose();
+              } else if (event.key === "ArrowDown" && visibleResults.length > 0) {
+                event.preventDefault();
+                activateResult(Math.min(activeIndex + 1, visibleResults.length - 1));
+              } else if (event.key === "ArrowUp" && visibleResults.length > 0) {
+                event.preventDefault();
+                activateResult(Math.max(activeIndex - 1, 0));
+              } else if (event.key === "Enter" && visibleResults.length > 0) {
+                event.preventDefault();
+                selectResult(activeIndex);
+              }
+            }}
+          />
+          <button aria-label="Close search" onClick={onClose} type="button">
+            <XIcon size={18} />
+          </button>
+        </div>
+
+        <div className="repository-search-body">
+          {query.trim() === "" ? (
+            <div className="repository-search-empty">
+              <SearchIcon size={24} />
+              <p>Search by repository name, description, language, or topic.</p>
+            </div>
+          ) : visibleResults.length === 0 ? (
+            <div className="repository-search-empty">
+              <p>No repositories found for “{query.trim()}”.</p>
+            </div>
+          ) : (
+            <>
+              <p className="repository-search-count">
+                {results.length > SEARCH_RESULT_LIMIT
+                  ? `Showing ${SEARCH_RESULT_LIMIT} of ${numberFormatter.format(results.length)} results`
+                  : `${numberFormatter.format(results.length)} results`}
+              </p>
+              <ol id="repository-search-results" className="repository-search-results">
+                {visibleResults.map((repository, index) => {
+                  const isRead = readRepositories.has(repository.full_name.toLocaleLowerCase("en-US"));
+                  const stars = requireDisplayValue(
+                    repository.metrics.stars,
+                    "metrics.stars",
+                    repository.full_name,
+                  );
+                  return (
+                    <li key={repository.full_name}>
+                      <a
+                        aria-current={index === activeIndex ? "true" : undefined}
+                        className={`repository-search-result ${index === activeIndex ? "repository-search-result-active" : ""} ${isRead ? "repository-search-result-read" : ""}`}
+                        href={repository.url}
+                        ref={(element) => { resultRefs.current[index] = element; }}
+                        rel="noreferrer"
+                        target="_blank"
+                        onClick={() => {
+                          onRead(repository.full_name);
+                          onClose();
+                        }}
+                        onMouseEnter={() => setActiveIndex(index)}
+                      >
+                        <span className="repository-search-rank">#{repository.rank}</span>
+                        <span className="repository-search-copy">
+                          <strong>{repository.full_name}</strong>
+                          <span>{repository.description ?? "No description"}</span>
+                          <small>
+                            {repository.language ?? "Unknown language"}
+                            <span><StarIcon size={12} />{numberFormatter.format(stars)}</span>
+                          </small>
+                        </span>
+                        {isRead ? (
+                          <span className="repository-search-read"><CheckIcon size={13} />Read</span>
+                        ) : null}
+                      </a>
+                    </li>
+                  );
+                })}
+              </ol>
+            </>
+          )}
+        </div>
+
+        <div className="repository-search-footer" aria-hidden="true">
+          <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
+          <span><kbd>Enter</kbd> Open</span>
+          <span><kbd>Esc</kbd> Close</span>
+        </div>
+      </div>
+    </dialog>
+  );
+}
+
 function formatStarGain(series: RepositoryStarSeries): string {
   if (series.points.length < 2) {
     return "Tracking started";
@@ -283,17 +482,21 @@ function RankingRow({
   repository,
   rowIndex,
   starSeries,
+  isRead,
+  onRead,
 }: {
   repository: RankedRepository;
   rowIndex: number;
   starSeries: StarSeriesState;
+  isRead: boolean;
+  onRead: (fullName: string) => void;
 }) {
   const language = repository.language ?? "-";
   const stars = requireDisplayValue(repository.metrics.stars, "metrics.stars", repository.full_name);
   const series = resolveRepositorySeries(repository.full_name, starSeries);
 
   return (
-    <li className="ranking-row">
+    <li className={`ranking-row ${isRead ? "ranking-row-read" : ""}`}>
       <div
         className="ranking-row-content"
         style={{ "--row-index": rowIndex } as CSSProperties}
@@ -303,10 +506,19 @@ function RankingRow({
         </span>
         <RepositoryCardThumbnail repository={repository} />
         <div className="repository-copy">
-          <a href={repository.url} target="_blank" rel="noreferrer" className="repository-name">
-            <RepoIcon size={16} />
-            <span>{repository.full_name}</span>
-          </a>
+          <div className="repository-title-line">
+            <a
+              href={repository.url}
+              target="_blank"
+              rel="noreferrer"
+              className="repository-name"
+              onClick={() => onRead(repository.full_name)}
+            >
+              <RepoIcon size={16} />
+              <span>{repository.full_name}</span>
+            </a>
+            {isRead ? <span className="repository-read-label"><CheckIcon size={12} />Read</span> : null}
+          </div>
           <p>{repository.description}</p>
           <div className="mobile-meta">
             <span>{language}</span>
@@ -725,14 +937,18 @@ function RankingPage({
   selectedSnapshot,
   isSnapshotLoading,
   snapshotError,
+  readRepositories,
   onSelect,
+  onRead,
 }: {
   snapshots: readonly RankingSnapshotMetadata[];
   selectedId: string;
   selectedSnapshot: RankingSnapshot;
   isSnapshotLoading: boolean;
   snapshotError: string | null;
+  readRepositories: ReadonlySet<string>;
   onSelect: (snapshotId: string) => void;
+  onRead: (fullName: string) => void;
 }) {
   const [filters, setFilters] = useState<RepositoryFilters>(() => (
     parseRepositoryFilters(window.location.search)
@@ -857,6 +1073,8 @@ function RankingPage({
                 repository={repository}
                 rowIndex={rowIndex}
                 starSeries={starSeries}
+                isRead={readRepositories.has(repository.full_name.toLocaleLowerCase("en-US"))}
+                onRead={onRead}
                 key={repository.full_name}
               />
             ))}
@@ -894,6 +1112,10 @@ export default function App() {
   const [selectedSnapshot, setSelectedSnapshot] = useState<RankingSnapshot | null>(null);
   const [isSnapshotLoading, setIsSnapshotLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [readRepositories, setReadRepositories] = useState<ReadonlySet<string>>(() => (
+    parseReadRepositories(localStorage.getItem(READ_REPOSITORIES_STORAGE_KEY))
+  ));
   const snapshotCache = useRef(new Map<string, RankingSnapshot>());
 
   useEffect(() => {
@@ -982,6 +1204,15 @@ export default function App() {
     setSelectedId(snapshotId);
   }
 
+  function markRepositoryRead(fullName: string) {
+    const nextReadRepositories = addReadRepository(readRepositories, fullName);
+    localStorage.setItem(
+      READ_REPOSITORIES_STORAGE_KEY,
+      serializeReadRepositories(nextReadRepositories),
+    );
+    setReadRepositories(nextReadRepositories);
+  }
+
   return (
     <div className="app-shell">
       <header className="site-header">
@@ -990,7 +1221,19 @@ export default function App() {
             <MarkGithubIcon size={30} />
             <span>AI Trend Radar</span>
           </a>
-          <ThemeButton />
+          <div className="header-actions">
+            <button
+              aria-label="Search repositories"
+              className="header-search-button"
+              disabled={selectedSnapshot === null}
+              onClick={() => setIsSearchOpen(true)}
+              type="button"
+            >
+              <SearchIcon size={18} />
+              <span>Search</span>
+            </button>
+            <ThemeButton />
+          </div>
         </div>
       </header>
 
@@ -1012,7 +1255,18 @@ export default function App() {
           selectedSnapshot={selectedSnapshot}
           isSnapshotLoading={isSnapshotLoading}
           snapshotError={error}
+          readRepositories={readRepositories}
           onSelect={selectSnapshot}
+          onRead={markRepositoryRead}
+        />
+      )}
+      {selectedSnapshot === null ? null : (
+        <RepositorySearchDialog
+          open={isSearchOpen}
+          repositories={selectedSnapshot.repositories}
+          readRepositories={readRepositories}
+          onClose={() => setIsSearchOpen(false)}
+          onRead={markRepositoryRead}
         />
       )}
     </div>
