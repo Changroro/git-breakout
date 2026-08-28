@@ -95,7 +95,7 @@ score = log1p(observedStarsPerDay) × 55
 
 ### Trend Intelligence v2 shadow model
 
-The collector persists optional `Breakout` and `Current heat` views without replacing the default ranking. `Breakout` uses percentiles within matching language, repository-age, and star-size cohorts. `Current heat` uses current star velocity and unique-actor breadth across the candidate pool. It refuses to produce a score when a cohort has fewer than eight repositories or event evidence is more than four hours old.
+The collector persists optional `Breakout` and `Current heat` views without replacing the default ranking. `Breakout` uses percentiles within matching language, repository-age, and star-size cohorts. `Current heat` uses current star velocity and unique-actor breadth across the candidate pool. Star and event evidence use the longest fully covered 24-hour, 6-hour, or 1-hour window and persist that window length with the score. Shorter windows reduce confidence, while cohorts below eight repositories or event evidence older than four hours remain unscored.
 
 Public events also expand discovery. Repositories with high unique-actor breadth, activity diversity, and event volume over the last 24 hours join the existing candidate pool before GitHub API validation. Aggregated events expire after 168 hours while ranking snapshots remain intact.
 

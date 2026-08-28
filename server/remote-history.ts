@@ -72,6 +72,13 @@ function requireNonNegativeInteger(value: unknown, field: string): number {
   return value as number;
 }
 
+function requireBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`${field} must be boolean`);
+  }
+  return value;
+}
+
 function parseEventWindow(value: unknown, field: string): TrendWindowSignals {
   const window = requireRecord(value, field);
   return {
@@ -91,9 +98,19 @@ export function parseEventSignalContext(value: unknown): RepositoryEventSignals[
   if (!Array.isArray(context.repositories)) {
     throw new TypeError("Event signal context.repositories must be an array");
   }
+  const coverageValue = requireRecord(context.coverage, "Event signal context.coverage");
+  const coverage = {
+    h1: requireBoolean(coverageValue.h1, "Event signal context.coverage.h1"),
+    h6: requireBoolean(coverageValue.h6, "Event signal context.coverage.h6"),
+    h24: requireBoolean(coverageValue.h24, "Event signal context.coverage.h24"),
+    h72: requireBoolean(coverageValue.h72, "Event signal context.coverage.h72"),
+  };
   if (context.captured_at === null) {
     if (context.repositories.length > 0) {
       throw new TypeError("Event signal context cannot contain repositories without captured_at");
+    }
+    if (Object.values(coverage).some(Boolean)) {
+      throw new TypeError("Empty event signal context cannot report covered windows");
     }
     return [];
   }
@@ -117,6 +134,7 @@ export function parseEventSignalContext(value: unknown): RepositoryEventSignals[
     return {
       full_name: fullName,
       captured_at: capturedAt,
+      coverage: { ...coverage },
       windows: {
         h1: parseEventWindow(windows.h1, `Event signal context.repositories[${index}].windows.h1`),
         h6: parseEventWindow(windows.h6, `Event signal context.repositories[${index}].windows.h6`),

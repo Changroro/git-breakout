@@ -95,7 +95,7 @@ score = log1p(observedStarsPerDay) × 55
 
 ### Trend Intelligence v2 섀도 모델
 
-기본 정렬을 교체하지 않은 채 `Breakout`과 `Current heat` 보기를 함께 저장한다. `Breakout`은 같은 언어·나이·Star 규모 cohort 안의 백분위를, `Current heat`는 전체 후보군의 현재 Star 속도와 고유 actor 폭을 사용한다. cohort가 8개 미만이거나 이벤트가 4시간보다 오래된 경우 점수를 추정하지 않는다.
+기본 정렬을 교체하지 않은 채 `Breakout`과 `Current heat` 보기를 함께 저장한다. `Breakout`은 같은 언어·나이·Star 규모 cohort 안의 백분위를, `Current heat`는 전체 후보군의 현재 Star 속도와 고유 actor 폭을 사용한다. Star와 이벤트는 완전히 수집된 24시간·6시간·1시간 창 중 가장 긴 창을 사용하고 그 길이를 스냅샷에 기록한다. 짧은 창은 신뢰도를 낮추며, cohort가 8개 미만이거나 이벤트가 4시간보다 오래된 경우 점수를 만들지 않는다.
 
 공개 이벤트는 후보 발굴에도 사용한다. 최근 24시간 고유 actor 수, 활동 종류, 이벤트 수가 높은 저장소를 기존 후보군에 더한 뒤 GitHub API로 현재 상태를 검증한다. 이벤트 집계는 168시간만 보관하며 랭킹 스냅샷은 그대로 남는다.
 
