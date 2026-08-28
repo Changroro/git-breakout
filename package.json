@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build && tsc -p tsconfig.server-build.json",
     "collect": "tsx server/collect.ts",
     "collect:remote": "tsx server/collect-remote.ts",
+    "collect:events:remote": "tsx server/collect-events-remote.ts",
     "collector:worker": "tsx server/collector-worker.ts",
     "preview": "vite preview",
     "serve": "node server-dist/server/serve.js",

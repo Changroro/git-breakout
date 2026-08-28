@@ -28,11 +28,17 @@ import {
   buildRankingHref,
   buildRepositoryFilterOptions,
   filterRepositories,
+  parseRankingView,
   parseRepositoryFilters,
+  type RankingView,
   type RepositoryFilterOption,
   type RepositoryFilters,
 } from "./lib/repository-filters";
 import type { RankedRepository } from "./lib/ranking";
+import {
+  trendIntelligenceFor,
+  type TrendPhase,
+} from "./lib/trend-intelligence";
 import {
   buildSparklinePoints,
   parseStarSeriesResponse,
@@ -138,7 +144,60 @@ function sourceLabel(source: string): string {
   if (source === "github_combined") {
     return "Official Trending + GitHub-wide discovery";
   }
+  if (source === "github_events_v2_shadow") {
+    return "GitHub-wide events + transparent shadow scoring";
+  }
   throw new TypeError(`Unknown ranking source ${source}`);
+}
+
+const phaseLabels: Record<Exclude<TrendPhase, "insufficient_data">, string> = {
+  spark: "Spark",
+  breakout: "Breakout",
+  hot: "Hot",
+  steady: "Steady",
+  cooling: "Cooling",
+};
+
+function repositoryViewScore(repository: RankedRepository, view: RankingView): number | null {
+  if (view === "momentum") return repository.momentum.score;
+  const intelligence = trendIntelligenceFor(repository);
+  if (intelligence === null) return null;
+  return view === "breakout"
+    ? intelligence.breakout.score
+    : intelligence.current_heat.score;
+}
+
+function repositoriesForView(
+  repositories: readonly RankedRepository[],
+  view: RankingView,
+): RankedRepository[] {
+  if (view === "momentum") return [...repositories];
+  return repositories
+    .filter((repository) => repositoryViewScore(repository, view) !== null)
+    .sort((left, right) => {
+      const leftScore = repositoryViewScore(left, view);
+      const rightScore = repositoryViewScore(right, view);
+      if (leftScore === null || rightScore === null) {
+        throw new Error(`${view} ranking contains an unavailable score`);
+      }
+      return rightScore - leftScore || left.full_name.localeCompare(right.full_name);
+    });
+}
+
+function rankingViewCopy(view: RankingView): { title: string; description: string } {
+  if (view === "breakout") {
+    return {
+      title: "Breakout signals",
+      description: "Peer-relative acceleration and independent event breadth",
+    };
+  }
+  if (view === "current") {
+    return {
+      title: "Current heat",
+      description: "Sustained stars, independent actors, and multi-signal activity",
+    };
+  }
+  return { title: "Repository momentum", description: "" };
 }
 
 function useRepositoryStarSeries(
@@ -480,12 +539,16 @@ function RepositoryStarGrowth({
 
 function RankingRow({
   repository,
+  displayRank,
+  rankingView,
   rowIndex,
   starSeries,
   isRead,
   onRead,
 }: {
   repository: RankedRepository;
+  displayRank: number;
+  rankingView: RankingView;
   rowIndex: number;
   starSeries: StarSeriesState;
   isRead: boolean;
@@ -494,6 +557,9 @@ function RankingRow({
   const language = repository.language ?? "-";
   const stars = requireDisplayValue(repository.metrics.stars, "metrics.stars", repository.full_name);
   const series = resolveRepositorySeries(repository.full_name, starSeries);
+  const intelligence = trendIntelligenceFor(repository);
+  const viewScore = repositoryViewScore(repository, rankingView);
+  const phase = intelligence?.phase === "insufficient_data" ? null : intelligence?.phase ?? null;
 
   return (
     <li className={`ranking-row ${isRead ? "ranking-row-read" : ""}`}>
@@ -501,8 +567,8 @@ function RankingRow({
         className="ranking-row-content"
         style={{ "--row-index": rowIndex } as CSSProperties}
       >
-        <span className="rank-number" aria-label={`Rank ${repository.rank}`}>
-          {repository.rank}
+        <span className="rank-number" aria-label={`Rank ${displayRank}`}>
+          {displayRank}
         </span>
         <RepositoryCardThumbnail repository={repository} />
         <div className="repository-copy">
@@ -518,6 +584,15 @@ function RankingRow({
               <span>{repository.full_name}</span>
             </a>
             {isRead ? <span className="repository-read-label"><CheckIcon size={12} />Read</span> : null}
+            {phase === null ? null : (
+              <span
+                className={`trend-phase trend-phase-${phase}`}
+                title={intelligence?.reasons.join(", ") || phaseLabels[phase]}
+              >
+                {phaseLabels[phase]}
+                {rankingView === "momentum" || viewScore === null ? null : ` ${Math.round(viewScore)}`}
+              </span>
+            )}
           </div>
           <p>{repository.description}</p>
           <div className="mobile-meta">
@@ -545,11 +620,13 @@ function Pagination({
   totalPages,
   snapshotId,
   filters,
+  rankingView,
 }: {
   currentPage: number;
   totalPages: number;
   snapshotId: string;
   filters: RepositoryFilters;
+  rankingView: RankingView;
 }) {
   const visiblePages = getVisiblePages(currentPage, totalPages);
 
@@ -560,7 +637,7 @@ function Pagination({
           <ChevronLeftIcon size={16} />
         </span>
       ) : (
-        <a className="page-link page-arrow" href={buildRankingHref(currentPage - 1, snapshotId, filters)} aria-label="Previous page">
+        <a className="page-link page-arrow" href={buildRankingHref(currentPage - 1, snapshotId, filters, rankingView)} aria-label="Previous page">
           <ChevronLeftIcon size={16} />
         </a>
       )}
@@ -568,7 +645,7 @@ function Pagination({
         {visiblePages.map((page) => (
           <a
             className={`page-link page-number ${page === currentPage ? "page-current" : ""} ${Math.abs(page - currentPage) <= 1 ? "page-near" : ""}`}
-            href={buildRankingHref(page, snapshotId, filters)}
+            href={buildRankingHref(page, snapshotId, filters, rankingView)}
             aria-current={page === currentPage ? "page" : undefined}
             key={page}
           >
@@ -581,7 +658,7 @@ function Pagination({
           <ChevronRightIcon size={16} />
         </span>
       ) : (
-        <a className="page-link page-arrow" href={buildRankingHref(currentPage + 1, snapshotId, filters)} aria-label="Next page">
+        <a className="page-link page-arrow" href={buildRankingHref(currentPage + 1, snapshotId, filters, rankingView)} aria-label="Next page">
           <ChevronRightIcon size={16} />
         </a>
       )}
@@ -953,6 +1030,9 @@ function RankingPage({
   const [filters, setFilters] = useState<RepositoryFilters>(() => (
     parseRepositoryFilters(window.location.search)
   ));
+  const [rankingView, setRankingView] = useState<RankingView>(() => (
+    parseRankingView(window.location.search)
+  ));
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
   const filterOptions = useMemo(
@@ -963,21 +1043,41 @@ function RankingPage({
     () => filterRepositories(selectedSnapshot.repositories, filters),
     [filters, selectedSnapshot.repositories],
   );
-  const totalPages = Math.ceil(filteredRepositories.length / PAGE_SIZE);
+  const viewRepositories = useMemo(
+    () => repositoriesForView(filteredRepositories, rankingView),
+    [filteredRepositories, rankingView],
+  );
+  const totalPages = Math.ceil(viewRepositories.length / PAGE_SIZE);
   const requestedPage = new URLSearchParams(window.location.search).get("page");
   const currentPage = totalPages === 0 ? 1 : parsePage(requestedPage, totalPages);
   const start = (currentPage - 1) * PAGE_SIZE;
-  const repositories = filteredRepositories.slice(start, start + PAGE_SIZE);
+  const repositories = viewRepositories.slice(start, start + PAGE_SIZE);
   const starSeries = useRepositoryStarSeries(selectedSnapshot.id, repositories);
   const filterCount = activeFilterCount(filters);
+  const viewCopy = rankingViewCopy(rankingView);
+  const intelligenceAvailable = selectedSnapshot.repositories.some((repository) => (
+    trendIntelligenceFor(repository) !== null
+  ));
 
   function changeFilters(nextFilters: RepositoryFilters) {
     window.history.replaceState(
       null,
       "",
-      buildRankingHref(1, selectedSnapshot.id, nextFilters),
+      buildRankingHref(1, selectedSnapshot.id, nextFilters, rankingView),
     );
     setFilters(nextFilters);
+  }
+
+  function changeRankingView(nextView: RankingView) {
+    if (nextView !== "momentum" && !intelligenceAvailable) {
+      throw new Error(`Trend intelligence is unavailable for snapshot ${selectedSnapshot.id}`);
+    }
+    window.history.replaceState(
+      null,
+      "",
+      buildRankingHref(1, selectedSnapshot.id, filters, nextView),
+    );
+    setRankingView(nextView);
   }
 
   return (
@@ -1023,8 +1123,8 @@ function RankingPage({
           <div className="board-title">
             <RepoIcon size={18} />
             <div>
-              <h2>Repository momentum</h2>
-              <p>{sourceLabel(selectedSnapshot.source)}</p>
+              <h2>{viewCopy.title}</h2>
+              <p>{viewCopy.description || sourceLabel(selectedSnapshot.source)}</p>
             </div>
           </div>
           <div className="board-status">
@@ -1034,11 +1134,39 @@ function RankingPage({
               </span>
             ) : null}
             <span className="result-count">
-              {filterCount === 0
-                ? `${selectedSnapshot.repositories.length} repositories`
-                : `${filteredRepositories.length} of ${selectedSnapshot.repositories.length} repositories`}
+              {rankingView === "momentum"
+                ? filterCount === 0
+                  ? `${selectedSnapshot.repositories.length} repositories`
+                  : `${filteredRepositories.length} of ${selectedSnapshot.repositories.length} repositories`
+                : `${viewRepositories.length} scored of ${filteredRepositories.length} matching`}
             </span>
           </div>
+        </div>
+
+        <div className="ranking-view-tabs" role="tablist" aria-label="Ranking model">
+          <button
+            aria-selected={rankingView === "momentum"}
+            className={rankingView === "momentum" ? "ranking-view-active" : ""}
+            onClick={() => changeRankingView("momentum")}
+            role="tab"
+            type="button"
+          >Momentum</button>
+          <button
+            aria-selected={rankingView === "breakout"}
+            className={rankingView === "breakout" ? "ranking-view-active" : ""}
+            disabled={!intelligenceAvailable}
+            onClick={() => changeRankingView("breakout")}
+            role="tab"
+            type="button"
+          >Breakout</button>
+          <button
+            aria-selected={rankingView === "current"}
+            className={rankingView === "current" ? "ranking-view-active" : ""}
+            disabled={!intelligenceAvailable}
+            onClick={() => changeRankingView("current")}
+            role="tab"
+            type="button"
+          >Current heat</button>
         </div>
 
         {snapshotError === null ? null : (
@@ -1056,21 +1184,29 @@ function RankingPage({
 
         {repositories.length === 0 ? (
           <div className="filter-empty-state">
-            <h3>No repositories match these filters</h3>
-            <p>Try another language or topic.</p>
-            <button type="button" onClick={() => changeFilters({ language: null, topic: null })}>
-              Clear filters
-            </button>
+            <h3>{rankingView === "momentum"
+              ? "No repositories match these filters"
+              : "Trend evidence is not ready for this view"}</h3>
+            <p>{rankingView === "momentum"
+              ? "Try another language or topic."
+              : "Repositories remain unranked until fresh GitHub events and peer history are available."}</p>
+            {filterCount === 0 ? null : (
+              <button type="button" onClick={() => changeFilters({ language: null, topic: null })}>
+                Clear filters
+              </button>
+            )}
           </div>
         ) : (
           <ol
             className="ranking-list"
             start={start + 1}
-            key={`${selectedSnapshot.id}-${currentPage}-${filters.language ?? "all"}-${filters.topic ?? "all"}`}
+            key={`${selectedSnapshot.id}-${rankingView}-${currentPage}-${filters.language ?? "all"}-${filters.topic ?? "all"}`}
           >
             {repositories.map((repository, rowIndex) => (
               <RankingRow
                 repository={repository}
+                displayRank={start + rowIndex + 1}
+                rankingView={rankingView}
                 rowIndex={rowIndex}
                 starSeries={starSeries}
                 isRead={readRepositories.has(repository.full_name.toLocaleLowerCase("en-US"))}
@@ -1088,6 +1224,7 @@ function RankingPage({
               totalPages={totalPages}
               snapshotId={selectedSnapshot.id}
               filters={filters}
+              rankingView={rankingView}
             />
           </div>
         )}
@@ -1199,7 +1336,12 @@ export default function App() {
     window.history.replaceState(
       null,
       "",
-      buildRankingHref(1, snapshotId, parseRepositoryFilters(window.location.search)),
+      buildRankingHref(
+        1,
+        snapshotId,
+        parseRepositoryFilters(window.location.search),
+        parseRankingView(window.location.search),
+      ),
     );
     setSelectedId(snapshotId);
   }

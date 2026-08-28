@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   parseCollectionContext,
+  parseEventSignalContext,
   parseSnapshotTimeline,
   RemoteHistoryApi,
 } from "./remote-history.ts";
@@ -99,6 +100,69 @@ describe("parseCollectionContext", () => {
         latest_stars: 42,
         growth_comparison_stars: null,
         observations: [{ captured_at: "2026-08-26T08:00:00.000Z", stars: -1 }],
+      }],
+    })).toThrow("non-negative integer");
+  });
+});
+
+describe("parseEventSignalContext", () => {
+  it("accepts an explicitly empty event history", () => {
+    expect(parseEventSignalContext({ captured_at: null, repositories: [] })).toEqual([]);
+    expect(() => parseEventSignalContext({
+      captured_at: null,
+      repositories: [{ full_name: "owner/repository" }],
+    })).toThrow("cannot contain repositories");
+  });
+
+  it("parses four event windows for each candidate", () => {
+    const window = {
+      watches: 10,
+      forks: 2,
+      pull_requests: 1,
+      issues: 1,
+      issue_comments: 3,
+      pushes: 4,
+      releases: 1,
+      unique_actors: 12,
+    };
+
+    expect(parseEventSignalContext({
+      captured_at: "2026-08-28T10:00:00.000Z",
+      repositories: [{
+        full_name: "owner/repository",
+        windows: { h1: window, h6: window, h24: window, h72: window },
+      }],
+    })).toEqual([{
+      full_name: "owner/repository",
+      captured_at: "2026-08-28T10:00:00.000Z",
+      windows: { h1: window, h6: window, h24: window, h72: window },
+    }]);
+  });
+
+  it("rejects duplicate candidates and malformed counts", () => {
+    const window = {
+      watches: 0,
+      forks: 0,
+      pull_requests: 0,
+      issues: 0,
+      issue_comments: 0,
+      pushes: 0,
+      releases: 0,
+      unique_actors: 0,
+    };
+    const repository = {
+      full_name: "owner/repository",
+      windows: { h1: window, h6: window, h24: window, h72: window },
+    };
+    expect(() => parseEventSignalContext({
+      captured_at: "2026-08-28T10:00:00.000Z",
+      repositories: [repository, repository],
+    })).toThrow("duplicate repository");
+    expect(() => parseEventSignalContext({
+      captured_at: "2026-08-28T10:00:00.000Z",
+      repositories: [{
+        ...repository,
+        windows: { ...repository.windows, h1: { ...window, watches: -1 } },
       }],
     })).toThrow("non-negative integer");
   });

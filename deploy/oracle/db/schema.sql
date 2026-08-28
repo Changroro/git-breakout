@@ -17,6 +17,8 @@ create table radar.collector_settings (
   retention_growth_days integer not null check (retention_growth_days > 0),
   retention_push_days integer not null check (retention_push_days > 0),
   retention_repository_limit integer not null check (retention_repository_limit > 0),
+  event_retention_hours integer not null check (event_retention_hours >= 72),
+  event_candidate_limit integer not null check (event_candidate_limit > 0),
   updated_at timestamptz not null
 );
 
@@ -27,9 +29,11 @@ insert into radar.collector_settings (
   retention_growth_days,
   retention_push_days,
   retention_repository_limit,
+  event_retention_hours,
+  event_candidate_limit,
   updated_at
 )
-values (120, 30, 14, 7, 30, 1000, now());
+values (120, 30, 14, 7, 30, 1000, 168, 1000, now());
 
 create table radar.collector_runs (
   id uuid primary key,
@@ -70,12 +74,30 @@ create table radar.snapshot_repositories (
   unique (snapshot_id, rank)
 );
 
+create table radar.repository_event_buckets (
+  bucket_at timestamptz not null,
+  full_name text not null check (full_name ~ '^[^/[:space:]]+/[^/[:space:]]+$'),
+  full_name_key text generated always as (lower(full_name)) stored,
+  watches integer not null check (watches >= 0),
+  forks integer not null check (forks >= 0),
+  pull_requests integer not null check (pull_requests >= 0),
+  issues integer not null check (issues >= 0),
+  issue_comments integer not null check (issue_comments >= 0),
+  pushes integer not null check (pushes >= 0),
+  releases integer not null check (releases >= 0),
+  actor_ids bigint[] not null check (cardinality(actor_ids) > 0),
+  primary key (bucket_at, full_name_key),
+  check (watches + forks + pull_requests + issues + issue_comments + pushes + releases > 0)
+);
+
 create index collector_runs_status_started_idx
   on radar.collector_runs (status, started_at desc);
 create index snapshot_repositories_snapshot_idx
   on radar.snapshot_repositories (snapshot_id, rank);
 create index snapshot_repositories_history_idx
   on radar.snapshot_repositories (full_name_key, captured_at desc);
+create index repository_event_buckets_repository_idx
+  on radar.repository_event_buckets (full_name_key, bucket_at desc);
 
 alter table radar.collector_settings enable row level security;
 alter table radar.collector_settings force row level security;
@@ -87,6 +109,8 @@ alter table radar.snapshots enable row level security;
 alter table radar.snapshots force row level security;
 alter table radar.snapshot_repositories enable row level security;
 alter table radar.snapshot_repositories force row level security;
+alter table radar.repository_event_buckets enable row level security;
+alter table radar.repository_event_buckets force row level security;
 
 create policy collector_settings_read on radar.collector_settings
   for select to collector using (true);
@@ -102,6 +126,8 @@ create policy snapshot_repositories_collector_access on radar.snapshot_repositor
   for all to collector using (true) with check (true);
 create policy snapshot_repositories_public_read on radar.snapshot_repositories
   for select to web_anon using (true);
+create policy repository_event_buckets_collector_access on radar.repository_event_buckets
+  for all to collector using (true) with check (true);
 
 grant usage on schema radar, api to collector;
 grant usage on schema radar, api to web_anon;
@@ -110,6 +136,7 @@ grant select, insert, update on radar.collector_runs to collector;
 grant select, insert, delete on radar.collector_lease to collector;
 grant select, insert on radar.snapshots to collector;
 grant select, insert on radar.snapshot_repositories to collector;
+grant select, insert, update, delete on radar.repository_event_buckets to collector;
 grant select on radar.snapshots, radar.snapshot_repositories to web_anon;
 
 create function api.start_collection(p_run_id uuid, p_started_at timestamptz)
@@ -458,6 +485,197 @@ begin
 end;
 $$;
 
+create function radar.repository_event_window(
+  p_full_name_key text,
+  p_captured_at timestamptz,
+  p_hours integer
+)
+returns jsonb
+language sql
+stable
+set search_path = pg_catalog, radar
+as $$
+  with matching as (
+    select *
+    from radar.repository_event_buckets
+    where full_name_key = p_full_name_key
+      and bucket_at >= p_captured_at - make_interval(hours => p_hours)
+      and bucket_at < p_captured_at
+  ), totals as (
+    select
+      coalesce(sum(watches), 0)::integer as watches,
+      coalesce(sum(forks), 0)::integer as forks,
+      coalesce(sum(pull_requests), 0)::integer as pull_requests,
+      coalesce(sum(issues), 0)::integer as issues,
+      coalesce(sum(issue_comments), 0)::integer as issue_comments,
+      coalesce(sum(pushes), 0)::integer as pushes,
+      coalesce(sum(releases), 0)::integer as releases
+    from matching
+  ), actors as (
+    select count(distinct actor_id)::integer as unique_actors
+    from matching
+    cross join lateral unnest(actor_ids) as actor_id
+  )
+  select jsonb_build_object(
+    'watches', totals.watches,
+    'forks', totals.forks,
+    'pull_requests', totals.pull_requests,
+    'issues', totals.issues,
+    'issue_comments', totals.issue_comments,
+    'pushes', totals.pushes,
+    'releases', totals.releases,
+    'unique_actors', actors.unique_actors
+  )
+  from totals cross join actors;
+$$;
+
+create function api.ingest_event_bucket(
+  p_bucket_at timestamptz,
+  p_repositories jsonb
+)
+returns void
+language plpgsql
+volatile
+set search_path = pg_catalog, radar
+as $$
+declare
+  configured_retention_hours integer;
+begin
+  if date_trunc('hour', p_bucket_at) <> p_bucket_at then
+    raise exception 'Event bucket must be aligned to an exact hour';
+  end if;
+  if jsonb_typeof(p_repositories) <> 'array' or jsonb_array_length(p_repositories) = 0 then
+    raise exception 'Event bucket repositories must be a non-empty JSON array';
+  end if;
+  if exists (
+    select 1
+    from jsonb_array_elements(p_repositories) repository
+    where repository->>'full_name' !~ '^[^/[:space:]]+/[^/[:space:]]+$'
+      or jsonb_typeof(repository->'actor_ids') <> 'array'
+      or jsonb_array_length(repository->'actor_ids') = 0
+  ) then
+    raise exception 'Event bucket contains an invalid repository';
+  end if;
+
+  insert into radar.repository_event_buckets (
+    bucket_at,
+    full_name,
+    watches,
+    forks,
+    pull_requests,
+    issues,
+    issue_comments,
+    pushes,
+    releases,
+    actor_ids
+  )
+  select
+    p_bucket_at,
+    repository->>'full_name',
+    (repository->>'watches')::integer,
+    (repository->>'forks')::integer,
+    (repository->>'pull_requests')::integer,
+    (repository->>'issues')::integer,
+    (repository->>'issue_comments')::integer,
+    (repository->>'pushes')::integer,
+    (repository->>'releases')::integer,
+    array(
+      select distinct actor_id::bigint
+      from jsonb_array_elements_text(repository->'actor_ids') actor_id
+      order by actor_id::bigint
+    )
+  from jsonb_array_elements(p_repositories) repository
+  on conflict (bucket_at, full_name_key) do update set
+    full_name = excluded.full_name,
+    watches = excluded.watches,
+    forks = excluded.forks,
+    pull_requests = excluded.pull_requests,
+    issues = excluded.issues,
+    issue_comments = excluded.issue_comments,
+    pushes = excluded.pushes,
+    releases = excluded.releases,
+    actor_ids = excluded.actor_ids;
+
+  select event_retention_hours into strict configured_retention_hours
+  from radar.collector_settings
+  where id;
+
+  delete from radar.repository_event_buckets
+  where bucket_at < p_bucket_at - make_interval(hours => configured_retention_hours);
+end;
+$$;
+
+create function api.event_signal_context()
+returns jsonb
+language plpgsql
+stable
+set search_path = pg_catalog, radar
+as $$
+declare
+  latest_captured_at timestamptz;
+  configured_candidate_limit integer;
+  response jsonb;
+begin
+  select max(bucket_at) + interval '1 hour'
+  into latest_captured_at
+  from radar.repository_event_buckets;
+  if latest_captured_at is null then
+    return jsonb_build_object('captured_at', null, 'repositories', '[]'::jsonb);
+  end if;
+
+  select event_candidate_limit into strict configured_candidate_limit
+  from radar.collector_settings
+  where id;
+
+  with recent as (
+    select *
+    from radar.repository_event_buckets
+    where bucket_at >= latest_captured_at - interval '72 hours'
+      and bucket_at < latest_captured_at
+  ), candidate_counts as (
+    select
+      full_name_key,
+      (array_agg(full_name order by bucket_at desc))[1] as full_name,
+      sum(watches + forks + pull_requests + issues + issue_comments + pushes + releases) as event_count
+    from recent
+    where bucket_at >= latest_captured_at - interval '24 hours'
+    group by full_name_key
+  ), candidate_actors as (
+    select full_name_key, count(distinct actor_id) as actor_count
+    from recent
+    cross join lateral unnest(actor_ids) actor_id
+    where bucket_at >= latest_captured_at - interval '24 hours'
+    group by full_name_key
+  ), candidates as (
+    select candidate_counts.full_name_key, candidate_counts.full_name
+    from candidate_counts
+    join candidate_actors using (full_name_key)
+    order by
+      candidate_actors.actor_count desc,
+      candidate_counts.event_count desc,
+      candidate_counts.full_name_key
+    limit configured_candidate_limit
+  )
+  select jsonb_build_object(
+    'captured_at', latest_captured_at,
+    'repositories', coalesce(jsonb_agg(
+      jsonb_build_object(
+        'full_name', candidates.full_name,
+        'windows', jsonb_build_object(
+          'h1', radar.repository_event_window(candidates.full_name_key, latest_captured_at, 1),
+          'h6', radar.repository_event_window(candidates.full_name_key, latest_captured_at, 6),
+          'h24', radar.repository_event_window(candidates.full_name_key, latest_captured_at, 24),
+          'h72', radar.repository_event_window(candidates.full_name_key, latest_captured_at, 72)
+        )
+      ) order by candidates.full_name_key
+    ), '[]'::jsonb)
+  ) into response
+  from candidates;
+
+  return response;
+end;
+$$;
+
 create function api.health()
 returns jsonb
 language sql
@@ -467,6 +685,8 @@ as $$
 $$;
 
 revoke execute on all functions in schema api from public;
+revoke execute on function radar.repository_event_window(text, timestamptz, integer) from public;
+grant execute on function radar.repository_event_window(text, timestamptz, integer) to collector;
 grant execute on function api.start_collection(uuid, timestamptz) to collector;
 grant execute on function api.fail_collection(uuid, timestamptz, text) to collector;
 grant execute on function api.collection_context() to collector;
@@ -474,4 +694,6 @@ grant execute on function api.complete_collection(uuid, timestamptz, text, jsonb
 grant execute on function api.snapshot_timeline() to web_anon, collector;
 grant execute on function api.snapshot_repositories(uuid) to web_anon, collector;
 grant execute on function api.repository_star_series(uuid, text[]) to web_anon, collector;
+grant execute on function api.ingest_event_bucket(timestamptz, jsonb) to collector;
+grant execute on function api.event_signal_context() to collector;
 grant execute on function api.health() to web_anon, collector;

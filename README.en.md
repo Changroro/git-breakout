@@ -29,6 +29,7 @@ GitHub Trend Radar does more than re-display the current Trending page. It merge
 | --- | --- | --- |
 | GitHub Trending | Current daily, weekly, and monthly pages | Official exposure signals and current ranks |
 | GitHub Search | Repositories created in 7 days or pushed in 24 hours | Discover active repositories outside Trending |
+| GH Archive | Watch, Fork, PR, Issue, Comment, Push, and Release events from the last 72 hours | Discover event-active repositories early and measure breadth of attention |
 | Bootstrap seeds | Valid public repositories that have not been observed yet | Expand only the first collection pool |
 | Previously observed pool | Top 1,000 by prior momentum after a 14-day grace period, 7-day star growth, or a push within 30 days | Track relevant candidates after they leave Trending and Search |
 | GitHub GraphQL | Stars, forks, watchers, issues, language, topics, and push time | Refresh current metadata |
@@ -52,6 +53,9 @@ Every point on the timeline is a persisted ranking snapshot. Selecting a point r
 - **Two-hour observations**: derives 1-hour, 6-hour, and 24-hour star deltas from persisted measurements.
 - **Momentum score**: combines observed growth, age-adjusted star velocity, size, forks, open issues, and recent pushes.
 - **Confidence levels**: a first observation is not treated as real growth and is stored with `low` confidence.
+- **Shadow Breakout ranking**: compares peer-relative growth, star and actor acceleration, and attention breadth within language, age, and star-size cohorts.
+- **Shadow Current Heat ranking**: separates current attention using absolute star velocity, unique actors, activity diversity, and persistence.
+- **Evidence states**: stale events or undersized cohorts produce `insufficient_data` with explicit missing evidence instead of an estimated score.
 
 ### History and interface
 
@@ -66,6 +70,7 @@ Every point on the timeline is a persisted ranking snapshot. Selecting a point r
 - **Local development**: stores collection runs, leases, snapshots, and observations in SQLite.
 - **Remote operation**: uses an isolated PostgreSQL 17 and PostgREST 14 stack.
 - **Scheduled collection**: includes a GitHub Actions workflow designed to collect every two hours.
+- **Independent event collection**: GH Archive aggregation runs separately so event-source failures do not block baseline momentum snapshots.
 - **Duplicate prevention**: database leases and Actions concurrency prevent overlapping collectors.
 
 ## Ranking model
@@ -87,6 +92,14 @@ score = log1p(observedStarsPerDay) × 55
 - Real observed velocity starts after an earlier measurement exists at least two hours away.
 - Trending ranks affect discovery and reason labels but do not directly add score in this version.
 - Ties are resolved by `owner/repository` name for deterministic output.
+
+### Trend Intelligence v2 shadow model
+
+The collector persists optional `Breakout` and `Current heat` views without replacing the default ranking. `Breakout` uses percentiles within matching language, repository-age, and star-size cohorts. `Current heat` uses current star velocity and unique-actor breadth across the candidate pool. It refuses to produce a score when a cohort has fewer than eight repositories or event evidence is more than four hours old.
+
+Public events also expand discovery. Repositories with high unique-actor breadth, activity diversity, and event volume over the last 24 hours join the existing candidate pool before GitHub API validation. Aggregated events expire after 168 hours while ranking snapshots remain intact.
+
+The comparison research, model contract, and promotion criteria are documented in [Trend Intelligence v2 research and design](docs/research/trend-intelligence-v2.md).
 
 ```text
 Trending + Search + retained pool
@@ -159,6 +172,12 @@ export TREND_RADAR_COLLECTOR_TOKEN=your_collector_jwt
 npm run collect:remote
 ```
 
+Ingest a completed UTC hour from GH Archive separately:
+
+```bash
+npm run collect:events:remote -- --hour=2026-08-28T00:00:00.000Z --limit=5000
+```
+
 Before starting the Oracle Compose stack, fill every required `.env.example` value and copy the Cloudflare Tunnel example with your own Tunnel ID and hostname.
 
 Compose runs PostgreSQL, PostgREST, the Node web server, and Cloudflare Tunnel. The web server serves the static UI, loads timeline metadata and only the selected snapshot from PostgREST, and forwards `/rpc/*` collection requests to the internal PostgREST service.
@@ -186,6 +205,7 @@ Configure these GitHub Actions values:
 | --- | --- |
 | Frontend | React 19, TypeScript, Vite, Radix Slider, Primer Octicons |
 | Collector | Node.js, GitHub REST/Search/GraphQL, Cheerio |
+| Public events | Hourly GH Archive event aggregation |
 | Local storage | SQLite, better-sqlite3 |
 | Remote storage | PostgreSQL 17, PostgREST 14 |
 | Network | Cloudflare Tunnel |
@@ -196,6 +216,7 @@ Configure these GitHub Actions values:
 
 - This is a personal project with the public web app, API, and scheduled collector operating.
 - Star charts use only snapshots collected directly by this project, with no external data service.
+- Trend Intelligence v2 remains in shadow mode; the verified `baseline-v1` stays the default ranking.
 - This project is not affiliated with GitHub and remains subject to GitHub's trademarks and service terms.
 - The source repository is private and does not grant redistribution rights.
 
@@ -205,6 +226,7 @@ Configure these GitHub Actions values:
 - [x] On-demand PostgREST snapshot reads from the public web UI
 - [ ] Remote database backup and snapshot retention policy
 - [x] First-party observed star growth charts without an external data service
+- [ ] Accuracy view comparing v2 predictions with actual outcomes after 24 and 72 hours
 
 ---
 
