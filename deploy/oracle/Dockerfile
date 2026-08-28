@@ -5,6 +5,7 @@ RUN apk add --no-cache g++ make python3
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY index.html vite.config.ts tsconfig.json tsconfig.app.json tsconfig.node.json tsconfig.server-build.json ./
+COPY public ./public
 COPY src ./src
 COPY server ./server
 RUN npm run build && npm prune --omit=dev
