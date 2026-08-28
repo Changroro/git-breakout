@@ -29,6 +29,7 @@ GitHub Trend Radar는 현재 Trending 목록만 다시 보여주는 페이지가
 | --- | --- | --- |
 | GitHub Trending | daily · weekly · monthly 현재 목록 | 공식 노출 신호와 현재 순위 기록 |
 | GitHub Search | 최근 7일 생성 저장소, 최근 24시간 push 저장소 | Trending 밖의 신규·활성 저장소 발견 |
+| GH Archive | 최근 72시간 Watch·Fork·PR·Issue·Comment·Push·Release 이벤트 | 이벤트가 먼저 발생한 저장소 발견과 관심 폭 검증 |
 | Bootstrap seeds | 아직 관측하지 못한 검증된 공개 저장소 | 최초 수집의 관측 풀만 보강 |
 | 이전 관측 저장소 | 14일 유예·7일 Star 증가·30일 내 push 조건을 통과한 직전 모멘텀 상위 1,000개 | Trending/Search 범위를 벗어난 유효 후보 추적 |
 | GitHub GraphQL | 스타·fork·watcher·issue·언어·topic·push 시각 | 현재 메타데이터 갱신 |
@@ -52,6 +53,9 @@ Search 쿼리 하나당 최대 1,000개만 가져오므로 이것을 “GitHub �
 - **2시간 관측 윈도우**: 관측 데이터로 1시간·6시간·24시간 스타 증가량을 계산한다.
 - **모멘텀 점수**: 성장 속도, 저장소 나이 대비 스타 속도, 규모, fork, open issue, 최근 push를 합산한다.
 - **신뢰도 표시**: 첫 관측은 실제 성장으로 간주하지 않고 `low` 신뢰도로 기록한다.
+- **Breakout 섀도 랭킹**: 언어·나이·Star 규모가 비슷한 저장소 안에서 상대 성장, Star·actor 가속도, 관심 폭을 비교한다.
+- **Current Heat 섀도 랭킹**: 절대 Star 속도, 고유 actor, 활동 다양성, 지속성으로 현재 관심의 크기를 별도로 보여준다.
+- **증거 기반 상태**: 이벤트가 오래됐거나 cohort가 작으면 점수를 만들지 않고 `insufficient_data`와 누락 근거를 저장한다.
 
 ### 히스토리와 UI
 
@@ -66,6 +70,7 @@ Search 쿼리 하나당 최대 1,000개만 가져오므로 이것을 “GitHub �
 - **로컬 개발**: SQLite에 수집 실행, lease, 스냅샷, 저장소 관측값을 저장한다.
 - **원격 운영**: PostgreSQL 17 + PostgREST 14를 별도 스택으로 운영한다.
 - **예약 수집**: GitHub Actions 워크플로가 2시간마다 원격 수집을 실행하도록 구성돼 있다.
+- **독립 이벤트 수집**: GH Archive 집계 워크플로가 별도로 동작해 이벤트 장애가 기존 모멘텀 스냅샷을 막지 않는다.
 - **중복 방지**: DB lease와 Actions concurrency로 수집기가 겹치지 않게 한다.
 
 ## 랭킹 방식
@@ -87,6 +92,14 @@ score = log1p(observedStarsPerDay) × 55
 - 2시간 이상 간격의 이전 관측이 생긴 뒤부터 실제 성장 속도를 계산한다.
 - GitHub Trending 순위는 후보 발견과 이유 표시에 사용하며, 현재 버전에서는 점수에 직접 더하지 않는다.
 - 동점이면 `owner/repository` 이름 순으로 정렬해 결과를 결정적으로 유지한다.
+
+### Trend Intelligence v2 섀도 모델
+
+기본 정렬을 교체하지 않은 채 `Breakout`과 `Current heat` 보기를 함께 저장한다. `Breakout`은 같은 언어·나이·Star 규모 cohort 안의 백분위를, `Current heat`는 전체 후보군의 현재 Star 속도와 고유 actor 폭을 사용한다. cohort가 8개 미만이거나 이벤트가 4시간보다 오래된 경우 점수를 추정하지 않는다.
+
+공개 이벤트는 후보 발굴에도 사용한다. 최근 24시간 고유 actor 수, 활동 종류, 이벤트 수가 높은 저장소를 기존 후보군에 더한 뒤 GitHub API로 현재 상태를 검증한다. 이벤트 집계는 168시간만 보관하며 랭킹 스냅샷은 그대로 남는다.
+
+비교 조사, 산식과 승격 기준은 [Trend Intelligence v2 연구 및 설계](docs/research/trend-intelligence-v2.md)에 정리했다.
 
 ```text
 Trending + Search + retained pool
@@ -159,6 +172,12 @@ export TREND_RADAR_COLLECTOR_TOKEN=your_collector_jwt
 npm run collect:remote
 ```
 
+완료된 UTC 시간의 GH Archive 이벤트 집계는 별도 명령으로 적재한다.
+
+```bash
+npm run collect:events:remote -- --hour=2026-08-28T00:00:00.000Z --limit=5000
+```
+
 Oracle용 Compose를 실행하기 전에 `.env.example`의 필수 값을 채우고 Cloudflare Tunnel 설정 예제를 복사해 Tunnel ID와 hostname을 입력해야 한다.
 
 Compose는 PostgreSQL, PostgREST, Node 웹 서버, Cloudflare Tunnel을 실행한다. 웹 서버는 정적 UI를 제공하고, 타임라인 메타데이터와 선택한 스냅샷만 PostgREST에서 조회하며, `/rpc/*` 수집 요청을 내부 PostgREST로 전달한다.
@@ -186,6 +205,7 @@ GitHub Actions에는 다음을 등록한다.
 | --- | --- |
 | 프런트엔드 | React 19, TypeScript, Vite, Radix Slider, Primer Octicons |
 | 수집기 | Node.js, GitHub REST/Search/GraphQL, Cheerio |
+| 공개 이벤트 | GH Archive 시간별 이벤트 집계 |
 | 로컬 저장 | SQLite, better-sqlite3 |
 | 원격 저장 | PostgreSQL 17, PostgREST 14 |
 | 네트워크 | Cloudflare Tunnel |
@@ -196,6 +216,7 @@ GitHub Actions에는 다음을 등록한다.
 
 - 개인 프로젝트이며 공개 웹, API, 예약 수집기를 운영 중이다.
 - Star 그래프는 외부 서비스 없이 이 프로젝트가 직접 수집한 스냅샷만 사용한다.
+- Trend Intelligence v2는 섀도 단계이며 기본 정렬은 검증된 `baseline-v1`을 유지한다.
 - GitHub 공식 제품이 아니며 GitHub의 상표와 이용 조건을 따른다.
 - 소스 저장소는 비공개이며 재배포 라이선스를 제공하지 않는다.
 
@@ -205,6 +226,7 @@ GitHub Actions에는 다음을 등록한다.
 - [x] 공개 웹 UI에서 선택한 PostgREST 스냅샷 온디맨드 조회
 - [ ] 원격 DB 백업과 스냅샷 보존 정책
 - [x] 외부 서비스 의존 없는 자체 관측 Star 성장 그래프
+- [ ] v2 예측과 24·72시간 후 실제 결과를 비교하는 Accuracy 화면
 
 ---
 

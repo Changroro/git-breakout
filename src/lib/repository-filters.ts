@@ -3,6 +3,8 @@ export type RepositoryFilters = {
   topic: string | null;
 };
 
+export type RankingView = "momentum" | "breakout" | "current";
+
 export type RepositoryFilterOption = {
   value: string;
   label: string;
@@ -92,10 +94,18 @@ export function parseRepositoryFilters(search: string): RepositoryFilters {
   };
 }
 
+export function parseRankingView(search: string): RankingView {
+  const value = new URLSearchParams(search).get("view");
+  if (value === null || value === "momentum") return "momentum";
+  if (value === "breakout" || value === "current") return value;
+  throw new TypeError(`Unknown ranking view ${value}`);
+}
+
 export function buildRankingHref(
   page: number,
   snapshotId: string,
   filters: RepositoryFilters,
+  view: RankingView = "momentum",
 ): string {
   if (!Number.isInteger(page) || page < 1) {
     throw new RangeError("page must be a positive integer");
@@ -105,6 +115,9 @@ export function buildRankingHref(
   }
 
   const parameters = new URLSearchParams({ page: String(page), snapshot: snapshotId });
+  if (view !== "momentum") {
+    parameters.set("view", view);
+  }
   const language = normalizeFilterValue(filters.language);
   const topic = normalizeFilterValue(filters.topic);
   if (language !== null) {

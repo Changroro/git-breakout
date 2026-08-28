@@ -1,4 +1,10 @@
 import type { RankedRepository } from "../src/lib/ranking.ts";
+import type {
+  RepositoryEventSignals,
+  TrendRankedRepository,
+  TrendWindowSignals,
+} from "../src/lib/trend-intelligence.ts";
+import type { GhArchiveRepositoryBucket } from "./gh-archive.ts";
 import type { StarObservation } from "./history.ts";
 import type {
   RepositoryRetentionCandidate,
@@ -64,6 +70,61 @@ function requireNonNegativeInteger(value: unknown, field: string): number {
     throw new RangeError(`${field} must be a non-negative integer`);
   }
   return value as number;
+}
+
+function parseEventWindow(value: unknown, field: string): TrendWindowSignals {
+  const window = requireRecord(value, field);
+  return {
+    watches: requireNonNegativeInteger(window.watches, `${field}.watches`),
+    forks: requireNonNegativeInteger(window.forks, `${field}.forks`),
+    pull_requests: requireNonNegativeInteger(window.pull_requests, `${field}.pull_requests`),
+    issues: requireNonNegativeInteger(window.issues, `${field}.issues`),
+    issue_comments: requireNonNegativeInteger(window.issue_comments, `${field}.issue_comments`),
+    pushes: requireNonNegativeInteger(window.pushes, `${field}.pushes`),
+    releases: requireNonNegativeInteger(window.releases, `${field}.releases`),
+    unique_actors: requireNonNegativeInteger(window.unique_actors, `${field}.unique_actors`),
+  };
+}
+
+export function parseEventSignalContext(value: unknown): RepositoryEventSignals[] {
+  const context = requireRecord(value, "Event signal context");
+  if (!Array.isArray(context.repositories)) {
+    throw new TypeError("Event signal context.repositories must be an array");
+  }
+  if (context.captured_at === null) {
+    if (context.repositories.length > 0) {
+      throw new TypeError("Event signal context cannot contain repositories without captured_at");
+    }
+    return [];
+  }
+  const capturedAt = requireTimestamp(context.captured_at, "Event signal context.captured_at");
+  const seen = new Set<string>();
+  return context.repositories.map((repositoryValue, index) => {
+    const repository = requireRecord(repositoryValue, `Event signal context.repositories[${index}]`);
+    const fullName = requireFullName(
+      repository.full_name,
+      `Event signal context.repositories[${index}].full_name`,
+    );
+    const key = fullName.toLocaleLowerCase("en-US");
+    if (seen.has(key)) {
+      throw new Error(`Event signal context contains duplicate repository ${fullName}`);
+    }
+    seen.add(key);
+    const windows = requireRecord(
+      repository.windows,
+      `Event signal context.repositories[${index}].windows`,
+    );
+    return {
+      full_name: fullName,
+      captured_at: capturedAt,
+      windows: {
+        h1: parseEventWindow(windows.h1, `Event signal context.repositories[${index}].windows.h1`),
+        h6: parseEventWindow(windows.h6, `Event signal context.repositories[${index}].windows.h6`),
+        h24: parseEventWindow(windows.h24, `Event signal context.repositories[${index}].windows.h24`),
+        h72: parseEventWindow(windows.h72, `Event signal context.repositories[${index}].windows.h72`),
+      },
+    };
+  });
 }
 
 export function parseSnapshotTimeline(value: unknown): SnapshotTimelineEntry[] {
@@ -251,6 +312,24 @@ export class RemoteHistoryApi {
     return parseSnapshotTimeline(await this.rpc("snapshot_timeline", {}));
   }
 
+  async readEventSignals(): Promise<RepositoryEventSignals[]> {
+    return parseEventSignalContext(await this.rpc("event_signal_context", {}));
+  }
+
+  async ingestEventBucket(
+    bucketAt: string,
+    repositories: readonly GhArchiveRepositoryBucket[],
+  ): Promise<void> {
+    requireTimestamp(bucketAt, "bucketAt");
+    if (repositories.length === 0) {
+      throw new RangeError("Event bucket must contain repositories");
+    }
+    await this.rpc("ingest_event_bucket", {
+      p_bucket_at: bucketAt,
+      p_repositories: repositories,
+    });
+  }
+
   async completeCollection({
     runId,
     capturedAt,
@@ -260,7 +339,7 @@ export class RemoteHistoryApi {
     runId: string;
     capturedAt: string;
     source: string;
-    repositories: readonly RankedRepository[];
+    repositories: readonly (RankedRepository | TrendRankedRepository)[];
   }): Promise<void> {
     if (repositories.length === 0) {
       throw new RangeError("Remote collection must contain repositories");

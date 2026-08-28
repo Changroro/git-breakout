@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { rankRepositories } from "../src/lib/ranking.ts";
+import { rankTrendIntelligence } from "../src/lib/trend-intelligence.ts";
 import { createRepositoryCandidate } from "./collector.ts";
 import { BOOTSTRAP_REPOSITORY_NAMES } from "./bootstrap-repositories.ts";
 import { fetchGitHubRepositories } from "./github.ts";
@@ -27,6 +28,7 @@ try {
   await historyApi.startCollection(runId, startedAt);
   started = true;
   const context = await historyApi.readCollectionContext();
+  const eventSignals = await historyApi.readEventSignals();
   const observationsByName = new Map(
     context.repositories.map((repository) => [repository.fullName.toLowerCase(), repository.observations]),
   );
@@ -37,10 +39,11 @@ try {
       context.latestCapturedAt,
       context.retentionPolicy,
     );
+  const eventRepositoryNames = eventSignals.map((signals) => signals.full_name);
   const repositories = await fetchGitHubRepositories({
     token: githubToken,
     capturedAt: startedAt,
-    previouslyObservedNames: retainedRepositoryNames,
+    previouslyObservedNames: [...retainedRepositoryNames, ...eventRepositoryNames],
   });
   const capturedAt = new Date().toISOString();
   const candidates = repositories.map((repository) => createRepositoryCandidate(
@@ -50,14 +53,19 @@ try {
     context.intervalMinutes,
   ));
   const rankedRepositories = rankRepositories(candidates, capturedAt);
+  const intelligentRepositories = rankTrendIntelligence(
+    rankedRepositories,
+    eventSignals,
+    capturedAt,
+  );
   await historyApi.completeCollection({
     runId,
     capturedAt,
-    source: "github_combined",
-    repositories: rankedRepositories,
+    source: "github_events_v2_shadow",
+    repositories: intelligentRepositories,
   });
   process.stdout.write(
-    `Collected ${rankedRepositories.length} repositories after retaining ${retainedRepositoryNames.length} of ${context.repositories.length} observed repositories in ${runId} at ${capturedAt}\n`,
+    `Collected ${intelligentRepositories.length} repositories from ${eventRepositoryNames.length} event candidates after retaining ${retainedRepositoryNames.length} of ${context.repositories.length} observed repositories in ${runId} at ${capturedAt}\n`,
   );
 } catch (error) {
   if (started) {

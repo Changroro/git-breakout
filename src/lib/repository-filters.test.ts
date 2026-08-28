@@ -3,6 +3,7 @@ import {
   buildRepositoryFilterOptions,
   buildRankingHref,
   filterRepositories,
+  parseRankingView,
   parseRepositoryFilters,
 } from "./repository-filters";
 
@@ -51,5 +52,16 @@ describe("repository filters", () => {
       language: "typescript",
       topic: null,
     })).toBe("?page=3&snapshot=snapshot-1&language=typescript");
+    expect(buildRankingHref(2, "snapshot-1", {
+      language: null,
+      topic: null,
+    }, "breakout")).toBe("?page=2&snapshot=snapshot-1&view=breakout");
+  });
+
+  it("parses an explicit ranking view", () => {
+    expect(parseRankingView("?view=current")).toBe("current");
+    expect(parseRankingView("?view=breakout")).toBe("breakout");
+    expect(parseRankingView("?page=2")).toBe("momentum");
+    expect(() => parseRankingView("?view=unknown")).toThrow("Unknown ranking view");
   });
 });
