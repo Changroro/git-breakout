@@ -66,7 +66,7 @@ const DEFAULT_TOPIC_LIMIT = 12;
 const SEARCH_TOPIC_LIMIT = 40;
 const SEARCH_RESULT_LIMIT = 10;
 const READ_REPOSITORIES_STORAGE_KEY = "github-trend-radar:read-repositories";
-const numberFormatter = new Intl.NumberFormat("ko-KR", {
+const numberFormatter = new Intl.NumberFormat("en-US", {
   notation: "compact",
   maximumFractionDigits: 1,
 });
@@ -98,6 +98,13 @@ type RepositorySearchState =
 
 function formatCapturedAt(value: string): string {
   return `${capturedAtFormatter.format(new Date(value))} KST`;
+}
+
+export function formatCompactNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    throw new TypeError("Compact number must be finite");
+  }
+  return numberFormatter.format(value).toLowerCase();
 }
 
 function requestedPage(search: string): number {
@@ -183,20 +190,23 @@ function repositoryViewScore(repository: RankedRepository, view: RankingView): n
     : intelligence.current_heat.score;
 }
 
-function rankingViewCopy(view: RankingView): { title: string; description: string } {
+export function rankingViewCopy(view: RankingView): { title: string; description: string } {
   if (view === "breakout") {
     return {
       title: "Breakout signals",
-      description: "Peer-relative acceleration and independent event breadth",
+      description: "Rising unusually fast compared with repositories of similar language, age, and size.",
     };
   }
   if (view === "current") {
     return {
       title: "Current heat",
-      description: "Sustained stars, independent actors, and multi-signal activity",
+      description: "Receiving the strongest attention right now across stars and GitHub activity.",
     };
   }
-  return { title: "Repository momentum", description: "" };
+  return {
+    title: "Repository momentum",
+    description: "Overall strength based on observed growth, repository scale, and recent activity.",
+  };
 }
 
 function useRepositoryStarSeries(
@@ -420,7 +430,7 @@ function RepositorySearchDialog({
             aria-controls="repository-search-results"
             aria-label="Search repositories"
             autoComplete="off"
-            placeholder={`Search ${numberFormatter.format(repositoryCount)} repositories...`}
+            placeholder={`Search ${formatCompactNumber(repositoryCount)} repositories...`}
             ref={inputRef}
             type="search"
             value={query}
@@ -471,8 +481,8 @@ function RepositorySearchDialog({
             <>
               <p className="repository-search-count">
                 {totalResults > SEARCH_RESULT_LIMIT
-                  ? `Showing ${SEARCH_RESULT_LIMIT} of ${numberFormatter.format(totalResults)} results`
-                  : `${numberFormatter.format(totalResults)} results`}
+                  ? `Showing ${SEARCH_RESULT_LIMIT} of ${formatCompactNumber(totalResults)} results`
+                  : `${formatCompactNumber(totalResults)} results`}
               </p>
               <ol id="repository-search-results" className="repository-search-results">
                 {visibleResults.map((repository, index) => {
@@ -503,7 +513,7 @@ function RepositorySearchDialog({
                           <span>{repository.description ?? "No description"}</span>
                           <small>
                             {repository.language ?? "Unknown language"}
-                            <span><StarIcon size={12} />{numberFormatter.format(stars)}</span>
+                            <span><StarIcon size={12} />{formatCompactNumber(stars)}</span>
                           </small>
                         </span>
                         {isRead ? (
@@ -533,7 +543,7 @@ function formatStarGain(series: RepositoryStarSeries): string {
     return "Tracking started";
   }
   const gain = series.points[series.points.length - 1].stars - series.points[0].stars;
-  return `${gain > 0 ? "+" : ""}${numberFormatter.format(gain)} since tracked`;
+  return `${gain > 0 ? "+" : ""}${formatCompactNumber(gain)} since tracked`;
 }
 
 function resolveRepositorySeries(
@@ -661,7 +671,7 @@ function RankingRow({
           <p>{repository.description}</p>
           <div className="mobile-meta">
             <span>{language}</span>
-            <span className="mobile-stars"><StarIcon size={12} />{numberFormatter.format(stars)}</span>
+            <span className="mobile-stars"><StarIcon size={12} />{formatCompactNumber(stars)}</span>
             <span className="mobile-star-growth">
               {starSeries.status === "loading"
                 ? "Loading history"
@@ -672,7 +682,7 @@ function RankingRow({
           </div>
         </div>
         <span className="cell language">{language}</span>
-        <span className="cell stars">{numberFormatter.format(stars)}</span>
+        <span className="cell stars">{formatCompactNumber(stars)}</span>
         <RepositoryStarGrowth repositoryName={repository.full_name} state={starSeries} />
       </div>
     </li>
@@ -1180,7 +1190,7 @@ function RankingPage({
             <RepoIcon size={18} />
             <div>
               <h2>{viewCopy.title}</h2>
-              <p>{viewCopy.description || sourceLabel(selectedSnapshot.source)}</p>
+              <p>{sourceLabel(selectedSnapshot.source)}</p>
             </div>
           </div>
           <div className="board-status">
@@ -1201,6 +1211,7 @@ function RankingPage({
 
         <div className="ranking-view-tabs" role="tablist" aria-label="Ranking model">
           <button
+            aria-describedby="ranking-view-description"
             aria-selected={rankingView === "momentum"}
             className={rankingView === "momentum" ? "ranking-view-active" : ""}
             onClick={() => changeRankingView("momentum")}
@@ -1208,6 +1219,7 @@ function RankingPage({
             type="button"
           >Momentum</button>
           <button
+            aria-describedby="ranking-view-description"
             aria-selected={rankingView === "breakout"}
             className={rankingView === "breakout" ? "ranking-view-active" : ""}
             disabled={!intelligenceAvailable}
@@ -1216,6 +1228,7 @@ function RankingPage({
             type="button"
           >Breakout</button>
           <button
+            aria-describedby="ranking-view-description"
             aria-selected={rankingView === "current"}
             className={rankingView === "current" ? "ranking-view-active" : ""}
             disabled={!intelligenceAvailable}
@@ -1224,6 +1237,14 @@ function RankingPage({
             type="button"
           >Current heat</button>
         </div>
+
+        <p
+          aria-live="polite"
+          className="ranking-view-description"
+          id="ranking-view-description"
+        >
+          {viewCopy.description}
+        </p>
 
         {snapshotError === null ? null : (
           <p className="snapshot-error" role="alert">{snapshotError}</p>

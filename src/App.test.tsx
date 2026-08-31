@@ -1,6 +1,26 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { InitialLoadingState, SiteFooter } from "./App";
+import {
+  formatCompactNumber,
+  InitialLoadingState,
+  rankingViewCopy,
+  SiteFooter,
+} from "./App";
+
+describe("ranking view guidance", () => {
+  it("explains each ranking model in plain language", () => {
+    expect(rankingViewCopy("momentum").description).toContain("Overall strength");
+    expect(rankingViewCopy("breakout").description).toContain("Rising unusually fast");
+    expect(rankingViewCopy("current").description).toContain("strongest attention right now");
+  });
+
+  it("formats compact values with locale-neutral English units", () => {
+    expect(formatCompactNumber(950)).toBe("950");
+    expect(formatCompactNumber(35_000)).toBe("35k");
+    expect(formatCompactNumber(1_200_000)).toBe("1.2m");
+    expect(() => formatCompactNumber(Number.NaN)).toThrow("must be finite");
+  });
+});
 
 describe("InitialLoadingState", () => {
   it("renders the ranking shell without exposing an internal loading message", () => {
