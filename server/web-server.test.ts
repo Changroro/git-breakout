@@ -51,6 +51,12 @@ describe("createWebServer", () => {
     expect(await page.text()).toContain("Trend Radar");
     expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(page.headers.get("strict-transport-security")).toContain("max-age=31536000");
+    await expect(fetch(`${baseUrl}/archive`).then((response) => response.text())).resolves.toContain(
+      "Trend Radar",
+    );
+    await expect(fetch(`${baseUrl}/track-record`).then((response) => response.text())).resolves.toContain(
+      "Trend Radar",
+    );
     await expect(fetch(`${baseUrl}/health`).then((response) => response.json())).resolves.toEqual({
       status: "ok",
     });
@@ -103,6 +109,21 @@ describe("createWebServer", () => {
         schema_version: "1.0",
         total_count: 1,
         repositories: [repository],
+      }), { headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        schema_version: "1.0",
+        latest_snapshot_id: snapshotId,
+        latest_captured_at: "2026-08-31T01:17:00.000Z",
+        archive_count: 1,
+        matching_count: 1,
+        page: 1,
+        page_size: 10,
+        repositories: [{
+          ...repository,
+          rank: 8,
+          last_snapshot_id: "22222222-2222-4222-8222-222222222222",
+          last_observed_at: "2026-08-30T01:17:00.000Z",
+        }],
       }), { headers: { "Content-Type": "application/json" } }));
     const server = createWebServer({
       ...testDirectories(),
@@ -121,6 +142,10 @@ describe("createWebServer", () => {
     );
     expect(search.status).toBe(200);
     expect(search.headers.get("cache-control")).toContain("immutable");
+    const archive = await fetch(`${baseUrl}/api/archive?page=1&page_size=10&query=owner`);
+    expect(archive.status).toBe(200);
+    expect(archive.headers.get("cache-control")).toBe("no-store");
+    expect((await archive.json() as { repositories: unknown[] }).repositories).toHaveLength(1);
   });
 
   it("serves timeline, one snapshot, and proxies RPC requests", async () => {
@@ -192,5 +217,6 @@ describe("createWebServer", () => {
     const baseUrl = await listen(server);
 
     expect((await fetch(`${baseUrl}/..%2Fpackage.json`)).status).toBe(404);
+    expect((await fetch(`${baseUrl}/unknown-page`)).status).toBe(404);
   });
 });

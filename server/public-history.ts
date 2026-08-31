@@ -14,6 +14,10 @@ import {
   parseStarSeriesResponse,
   type StarSeriesResponse,
 } from "../src/lib/star-series.ts";
+import {
+  parseArchivePageResponse,
+  type ArchivePageResponse,
+} from "../src/lib/archive.ts";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 
@@ -161,6 +165,31 @@ export class PublicHistoryApi {
       p_snapshot_id: snapshotId,
       p_query: query,
       p_limit: limit,
+    }));
+  }
+
+  async readArchivePage({
+    page,
+    pageSize,
+    query,
+  }: {
+    page: number;
+    pageSize: number;
+    query: string | null;
+  }): Promise<ArchivePageResponse> {
+    if (!Number.isInteger(page) || page < 1) {
+      throw new RangeError("Archive page must be a positive integer");
+    }
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+      throw new RangeError("Archive page size must be between 1 and 100");
+    }
+    if (query !== null && query.length > 200) {
+      throw new TypeError("Archive query must contain at most 200 characters");
+    }
+    return parseArchivePageResponse(await this.rpc("archive_page", {
+      p_page: page,
+      p_page_size: pageSize,
+      p_query: query,
     }));
   }
 

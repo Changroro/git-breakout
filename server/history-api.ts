@@ -164,6 +164,31 @@ function attachHistoryApi(
     }
   });
 
+  middlewares.use("/api/archive", (request, response) => {
+    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    response.setHeader("Cache-Control", "no-store");
+    if (request.method !== "GET") {
+      response.statusCode = 405;
+      response.setHeader("Allow", "GET");
+      response.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    try {
+      const requestUrl = new URL(request.url ?? "", "http://localhost");
+      response.statusCode = 200;
+      response.end(JSON.stringify(database.readArchivePage(
+        requirePositiveInteger(requestUrl, "page", 1_000_000),
+        requirePositiveInteger(requestUrl, "page_size", 100),
+        requestUrl.searchParams.get("query"),
+      )));
+    } catch (error) {
+      response.statusCode = error instanceof TypeError || error instanceof RangeError ? 400 : 500;
+      response.end(JSON.stringify({
+        error: error instanceof Error ? error.message : "Unknown archive error",
+      }));
+    }
+  });
+
   middlewares.use("/api/card", async (request, response) => {
     if (request.method !== "GET") {
       response.statusCode = 405;
