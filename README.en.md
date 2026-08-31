@@ -49,6 +49,8 @@ Every point on the timeline is a persisted ranking snapshot. Selecting a point r
 ### Discovery and ranking
 
 - **GitHub-wide discovery**: merges three Trending periods and two Search windows while validating renamed or unavailable repositories.
+- **Verified early discovery**: records the interval between observations and the observed rank only when the first source was Search or GH Archive and the repository is later observed in GitHub Trending Daily.
+- **Track Record**: publishes verified hits, median observed lead, and 7-day and 14-day follow-through while excluding unknown legacy provenance and collection gaps from denominators.
 - **14-day cutoff**: gives new repositories a 14-day grace period, then retains candidates with 7-day star growth or a push within 30 days.
 - **Two-hour observations**: derives 1-hour, 6-hour, and 24-hour star deltas from persisted measurements.
 - **Momentum score**: combines observed growth, age-adjusted star velocity, size, forks, open issues, and recent pushes.
@@ -65,6 +67,7 @@ Every point on the timeline is a persisted ranking snapshot. Selecting a point r
 - **First-party star growth chart**: renders a row-level sparkline from star observations collected since discovery.
 - **Responsive UI**: desktop table, mobile cards, and light/dark themes.
 - **Page-sized reads**: sends only ten repositories and bounded facets needed by the current view instead of the entire snapshot.
+- **Public methodology**: the question-mark dialog exposes the momentum formula, Breakout and Current Heat components, evidence rules, and coverage limits.
 
 ### Storage and automation
 
@@ -124,7 +127,7 @@ Trending + Search + retained pool
 
 ## Historical backfill
 
-The current implementation accurately preserves rankings and growth **from the moment the service starts observing them**. It does not fabricate earlier snapshots.
+The current implementation accurately preserves rankings and growth **from the moment the service starts observing them**. It does not fabricate earlier snapshots, and observations captured before source provenance was stored remain `legacy` and are excluded from early-discovery results.
 
 | Backfill target | Support | Reason |
 | --- | --- | --- |

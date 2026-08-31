@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import type { RepositoryCandidate, RepositoryGrowth } from "../src/lib/ranking.ts";
+import {
+  normalizeObservationSources,
+  type RepositoryCandidate,
+  type RepositoryGrowth,
+} from "../src/lib/ranking.ts";
 import { BOOTSTRAP_REPOSITORY_NAMES } from "./bootstrap-repositories.ts";
 import { fetchGitHubRepositories, type GitHubRepositorySnapshot } from "./github.ts";
 import { HistoryDatabase, type StarObservation } from "./history.ts";
@@ -145,6 +149,10 @@ export function createRepositoryCandidate(
     description: repository.description,
     language: repository.language,
     topics: [...repository.topics],
+    observation_sources: normalizeObservationSources(
+      repository.observationSources,
+      "observationSources",
+    ),
     created_at: repository.createdAt,
     pushed_at: repository.pushedAt,
     metrics: { ...repository.metrics },
@@ -187,9 +195,10 @@ export async function collectOnce({
     const repositories = await fetchGitHubRepositories({
       token: githubToken,
       capturedAt: startedAt,
-      previouslyObservedNames: database.readLatestCollectionCapturedAt() === null
+      retainedRepositoryNames: database.readLatestCollectionCapturedAt() === null
         ? [...BOOTSTRAP_REPOSITORY_NAMES]
         : database.readRetainedRepositoryNames(),
+      ghArchiveRepositoryNames: [],
       fetchImplementation,
     });
     const capturedAt = now().toISOString();

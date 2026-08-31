@@ -66,6 +66,14 @@ export const sampleRepositories: RepositoryCandidate[] = seeds.map((seed) => ({
   description: seed.description,
   language: seed.language,
   topics: ["ai", seed.language.toLowerCase()],
+  observation_sources: [
+    ...(seed.dailyRank === null ? [] : ["official_daily" as const]),
+    ...(seed.weeklyRank === null ? [] : ["official_weekly" as const]),
+    ...(seed.monthlyRank === null ? [] : ["official_monthly" as const]),
+    ...(seed.dailyRank === null && seed.weeklyRank === null && seed.monthlyRank === null
+      ? ["github_search_pushed" as const]
+      : []),
+  ],
   created_at: subtractTime(seed.createdDaysAgo, 0),
   pushed_at: subtractTime(0, seed.pushedHoursAgo),
   metrics: {
@@ -126,6 +134,7 @@ function historicalRepositories(capturedAt: string, snapshotIndex: number): Repo
     return [{
       ...repository,
       topics: [...repository.topics],
+      observation_sources: [...repository.observation_sources],
       pushed_at: pushAge === null ? null : new Date(capturedTimestamp - pushAge).toISOString(),
       metrics: {
         ...repository.metrics,

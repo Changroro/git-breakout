@@ -41,6 +41,33 @@ describe("HistoryDatabase", () => {
     database.close();
   });
 
+  it("marks stored repository payloads without provenance as legacy-compatible", () => {
+    const database = createDatabase();
+    const databasePath = database.database.name;
+    database.database.prepare(`
+      INSERT INTO ranking_snapshots (id, captured_at, source, status, created_at)
+      VALUES (?, ?, ?, 'completed', ?)
+    `).run("legacy-run", "2026-08-24T00:00:00.000Z", "legacy", "2026-08-24T00:00:00.000Z");
+    database.database.prepare(`
+      INSERT INTO ranking_snapshot_repositories (snapshot_id, full_name, rank, payload_json)
+      VALUES (?, ?, ?, ?)
+    `).run(
+      "legacy-run",
+      "owner/repository",
+      1,
+      JSON.stringify({ full_name: "owner/repository", rank: 1 }),
+    );
+    database.close();
+
+    const reopened = new HistoryDatabase(databasePath);
+    const repository = reopened.readHistory().snapshots[0].repositories[0];
+    expect(repository.observation_sources).toBeNull();
+    expect(repository.open_graph_image_url).toBe(
+      "https://opengraph.githubassets.com/legacy-v1/owner/repository",
+    );
+    reopened.close();
+  });
+
   it("refuses to overwrite an existing run", () => {
     const database = createDatabase();
     const snapshot = {

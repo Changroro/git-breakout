@@ -26,6 +26,10 @@ describe("local ranking API", () => {
     expect(result.page).toBe(Math.ceil(result.matching_count / 3));
     expect(result.repositories.length).toBeLessThanOrEqual(3);
     expect(result.repositories.every((repository) => repository.language === "TypeScript")).toBe(true);
+    expect(result.track_record).toMatchObject({ verified_count: 0, evidence_started_at: null });
+    expect(result.repositories.every(
+      (repository) => repository.discovery_evidence.outcome === "legacy",
+    )).toBe(true);
   });
 
   it("returns bounded repository search results", () => {

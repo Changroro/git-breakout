@@ -10,7 +10,9 @@ import {
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ClockIcon,
   FilterIcon,
+  GraphIcon,
   HistoryIcon,
   MarkGithubIcon,
   MailIcon,
@@ -21,6 +23,8 @@ import {
   SidebarExpandIcon,
   StarIcon,
   SunIcon,
+  TelescopeIcon,
+  QuestionIcon,
   XIcon,
 } from "@primer/octicons-react";
 import {
@@ -29,6 +33,7 @@ import {
   parseTimelineResponse,
   resolveSnapshotId,
   type RankingPageResponse,
+  type RankingPageRepository,
   type RankingSnapshotMetadata,
   type RepositorySearchResponse,
 } from "./lib/history";
@@ -60,6 +65,11 @@ import {
   parseReadRepositories,
   serializeReadRepositories,
 } from "./lib/repository-search";
+import type {
+  DiscoveryEvidence,
+  TrackRecord,
+  TrackRecordConversion,
+} from "./lib/discovery-track-record";
 
 const PAGE_SIZE = 10;
 const DEFAULT_TOPIC_LIMIT = 12;
@@ -82,6 +92,16 @@ const timelineDateFormatter = new Intl.DateTimeFormat("en-US", {
   timeZone: "Asia/Seoul",
   month: "short",
   day: "numeric",
+});
+const evidenceDateFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "Asia/Seoul",
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+});
+const percentageFormatter = new Intl.NumberFormat("en-US", {
+  style: "percent",
+  maximumFractionDigits: 0,
 });
 
 type Theme = "light" | "dark";
@@ -550,6 +570,41 @@ function resolveRepositorySeries(
   return series;
 }
 
+export function formatObservedLeadDuration(hours: number): string {
+  if (!Number.isFinite(hours) || hours < 0) {
+    throw new RangeError("Observed lead hours must be a finite non-negative number");
+  }
+  if (hours < 1) {
+    return "<1h";
+  }
+  if (hours < 24) {
+    return `${Math.round(hours)}h`;
+  }
+  const roundedDays = Math.round(hours / 24 * 10) / 10;
+  return `${roundedDays.toLocaleString("en-US", { maximumFractionDigits: 1 })}d`;
+}
+
+export function DiscoveryEvidenceBadge({ evidence }: { evidence: DiscoveryEvidence }) {
+  if (evidence.outcome !== "verified") {
+    return null;
+  }
+  if (evidence.lead_hours === null) {
+    throw new TypeError("Verified discovery evidence requires lead_hours");
+  }
+  if (evidence.coverage !== "complete") {
+    throw new TypeError("Verified discovery evidence requires complete coverage");
+  }
+  const lead = formatObservedLeadDuration(evidence.lead_hours);
+  return (
+    <span
+      className="discovery-evidence-badge"
+      title={`Radar first observed this repository ${lead} before Radar first observed it in GitHub Trending Daily`}
+    >
+      <ClockIcon size={11} />Observed {lead} before Daily
+    </span>
+  );
+}
+
 function RepositoryStarGrowth({
   repositoryName,
   state,
@@ -610,7 +665,7 @@ function RankingRow({
   isRead,
   onRead,
 }: {
-  repository: RankedRepository;
+  repository: RankingPageRepository;
   displayRank: number;
   rankingView: RankingView;
   rowIndex: number;
@@ -648,6 +703,7 @@ function RankingRow({
               <span>{repository.full_name}</span>
             </a>
             {isRead ? <span className="repository-read-label"><CheckIcon size={12} />Read</span> : null}
+            <DiscoveryEvidenceBadge evidence={repository.discovery_evidence} />
             {phase === null ? null : (
               <span
                 className={`trend-phase trend-phase-${phase}`}
@@ -1069,6 +1125,314 @@ function Timeline({
   );
 }
 
+function MethodologyDialog({
+  open,
+  trackRecord,
+  onClose,
+}: {
+  open: boolean;
+  trackRecord: TrackRecord;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) {
+      throw new Error("Methodology dialog is unavailable");
+    }
+    if (open && !dialog.open) {
+      dialog.showModal();
+    } else if (!open && dialog.open) {
+      dialog.close();
+    }
+  }, [open]);
+
+  return (
+    <dialog
+      aria-labelledby="methodology-title"
+      className="methodology-dialog"
+      id="ranking-methodology-dialog"
+      ref={dialogRef}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onClose={onClose}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      <div className="methodology-panel">
+        <header className="methodology-heading">
+          <div>
+            <span className="methodology-eyebrow">Transparent methodology</span>
+            <h2 id="methodology-title">How ranking and discovery evidence work</h2>
+          </div>
+          <button aria-label="Close methodology" onClick={onClose} type="button">
+            <XIcon size={18} />
+          </button>
+        </header>
+
+        <div className="methodology-body">
+          <section>
+            <h3>Verified early discovery</h3>
+            <p>
+              GitHub Trending Daily is the primary benchmark; Weekly and Monthly appearances are
+              tracked separately. Collection runs every two hours, so a lead time is the interval
+              between our first observation and our first observed Trending appearance, not the
+              exact moment GitHub added the repository.
+            </p>
+            <p>
+              Candidates come from official Trending, GitHub Search for newly created or recently
+              pushed repositories, GH Archive activity, and the retained observation pool. Only a
+              first observation proven to come from Search or GH Archive can enter the early-discovery
+              cohort.
+            </p>
+            <ul>
+              <li><strong>Verified:</strong> observed outside Trending Daily, then later observed in Daily.</li>
+              <li><strong>Pending:</strong> still inside the 14-day evaluation window.</li>
+              <li><strong>Not converted:</strong> no observed Daily appearance after 14 days of complete coverage.</li>
+              <li><strong>Inconclusive:</strong> a collection gap prevents a complete evaluation.</li>
+              <li><strong>Already trending:</strong> Daily was already present at first observation.</li>
+              <li><strong>Legacy:</strong> provenance cannot be proved, so it is excluded from verified results.</li>
+            </ul>
+            <p>
+              Seven- and fourteen-day follow-through include only discoveries old enough for the
+              window with complete official coverage. Pending, already-trending, legacy, and
+              coverage-gap observations are excluded from the denominator.
+            </p>
+          </section>
+
+          <section>
+            <div className="methodology-section-title">
+              <h3>Momentum</h3>
+              <code>baseline-v1</code>
+            </div>
+            <p>The score is additive, with observed growth carrying the most weight:</p>
+            <dl className="methodology-weights">
+              <div><dt>Observed stars per day</dt><dd>log1p(value) × 55</dd></div>
+              <div><dt>Lifetime star velocity</dt><dd>log1p(stars ÷ age days) × 28</dd></div>
+              <div><dt>Stars</dt><dd>log1p(value) × 5</dd></div>
+              <div><dt>Forks</dt><dd>log1p(value) × 2</dd></div>
+              <div><dt>Open issues</dt><dd>log1p(value) × 0.5</dd></div>
+              <div><dt>Recent push</dt><dd>max(0, 14 − push age days)</dd></div>
+              <div><dt>First observation</dt><dd>12</dd></div>
+              <div><dt>Official Trending signal</dt><dd>0</dd></div>
+            </dl>
+          </section>
+
+          <section>
+            <div className="methodology-section-title">
+              <h3>Breakout and Current Heat</h3>
+              <code>trend-intelligence-v3-shadow</code>
+            </div>
+            <p>
+              Each score is 100 times the equal-weight mean of its known components. Missing
+              components are omitted rather than replaced with zero.
+            </p>
+            <div className="methodology-models">
+              <div>
+                <h4>Breakout</h4>
+                <p>
+                  Peer-relative star growth, star acceleration, actor acceleration, and unique-actor
+                  breadth are converted to percentiles inside the same language, age, and star-size
+                  cohort.
+                </p>
+                <ul>
+                  <li>Relative growth: star delta ÷ prior stars, normalized to 24 hours.</li>
+                  <li>Star acceleration: 6h/hour − 24h/hour, or 1h − 6h/hour.</li>
+                  <li>Actor acceleration: the same short-versus-long rate change for unique actors.</li>
+                  <li>Organic breadth: unique actors in the selected event window.</li>
+                </ul>
+              </div>
+              <div>
+                <h4>Current Heat</h4>
+                <p>
+                  Global star-velocity percentile, global unique-actor percentile, event-category
+                  diversity, and short-window actor persistence measure current attention.
+                </p>
+                <ul>
+                  <li>Star velocity: selected star delta normalized to 24 hours.</li>
+                  <li>Organic breadth: unique actors in the selected event window.</li>
+                  <li>Diversity: active Watch, Fork, PR/Issue/Comment, and Push/Release categories ÷ 4.</li>
+                  <li>Persistence: scaled short-window actors ÷ longer-window actors, capped at 1.</li>
+                </ul>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <h3>Windows, confidence, and limits</h3>
+            <p>
+              Star and event evidence use the longest complete window in the order 24h → 6h → 1h.
+              v3 requires positive observed star growth, rejects events older than four hours, and
+              requires at least eight comparable repositories for Breakout.
+            </p>
+            <p>
+              Momentum confidence depends on observed star windows and repository metric
+              completeness. v3 confidence also depends on event coverage and cohort size; high
+              confidence requires a cohort of at least 20, complete 1h/6h/24h star windows, a 24h
+              event window, and prior 72h actor evidence.
+            </p>
+            <p>
+              Candidate retention gives new discoveries 14 days, then requires seven-day star
+              growth or a push within 30 days. Search pagination, API availability, collection gaps,
+              deleted repositories, and GitHub&apos;s changing Trending output can limit coverage.
+            </p>
+          </section>
+
+          <footer className="methodology-meta">
+            <span>Evidence schema {trackRecord.schema_version}</span>
+            <span>Generated {formatCapturedAt(trackRecord.generated_at)}</span>
+          </footer>
+        </div>
+      </div>
+    </dialog>
+  );
+}
+
+function TrackRecordMetric({
+  label,
+  value,
+  detail,
+  collecting,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  collecting: boolean;
+}) {
+  return (
+    <div className={`track-record-metric ${collecting ? "track-record-metric-collecting" : ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </div>
+  );
+}
+
+function conversionMetric(conversion: TrackRecordConversion): {
+  value: string;
+  detail: string;
+  collecting: boolean;
+} {
+  if (conversion.eligible === 0) {
+    return {
+      value: "Collecting evidence",
+      detail: "No eligible discoveries yet",
+      collecting: true,
+    };
+  }
+  if (conversion.rate === null) {
+    throw new TypeError("Eligible conversion evidence requires a rate");
+  }
+  return {
+    value: percentageFormatter.format(conversion.rate),
+    detail: `${conversion.converted} of ${conversion.eligible} eligible discoveries`,
+    collecting: false,
+  };
+}
+
+export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }) {
+  const [isMethodologyOpen, setIsMethodologyOpen] = useState(false);
+  const sevenDay = conversionMetric(trackRecord.conversion_7d);
+  const fourteenDay = conversionMetric(trackRecord.conversion_14d);
+  const verifiedReady = trackRecord.verified_count > 0;
+  const medianLead = trackRecord.median_lead_hours;
+  const medianReady = verifiedReady && medianLead !== null;
+  const evidenceStart = trackRecord.evidence_started_at === null
+    ? "Evidence window is not established"
+    : `Evidence since ${evidenceDateFormatter.format(new Date(trackRecord.evidence_started_at))}`;
+
+  return (
+    <section className="track-record" aria-labelledby="track-record-title">
+      <div className="track-record-heading">
+        <div className="track-record-title">
+          <TelescopeIcon size={17} />
+          <div>
+            <h2 id="track-record-title">Track Record</h2>
+            <p>Observed before official GitHub Trending</p>
+          </div>
+        </div>
+        <div className="track-record-heading-meta">
+          <span>{evidenceStart}</span>
+          <button
+            aria-controls="ranking-methodology-dialog"
+            aria-expanded={isMethodologyOpen}
+            aria-haspopup="dialog"
+            aria-label="How ranking and discovery evidence work"
+            onClick={() => setIsMethodologyOpen(true)}
+            title="How ranking and discovery evidence work"
+            type="button"
+          >
+            <QuestionIcon size={16} />
+          </button>
+        </div>
+      </div>
+
+      <div className="track-record-content">
+        <div className="track-record-metrics">
+          <TrackRecordMetric
+            collecting={!verifiedReady}
+            label="Verified early"
+            value={verifiedReady ? numberFormatter.format(trackRecord.verified_count) : "Collecting evidence"}
+            detail={verifiedReady
+              ? `${trackRecord.period_hits.daily} Daily · ${trackRecord.period_hits.weekly} Weekly · ${trackRecord.period_hits.monthly} Monthly`
+              : "Legacy and unproven observations are excluded"}
+          />
+          <TrackRecordMetric
+            collecting={!medianReady}
+            label="Median observed lead"
+            value={medianReady
+              ? formatObservedLeadDuration(medianLead)
+              : "Collecting evidence"}
+            detail={medianReady ? "Observation interval, not exact entry time" : "Waiting for verified Daily entries"}
+          />
+          <TrackRecordMetric label="7-day follow-through" {...sevenDay} />
+          <TrackRecordMetric label="14-day follow-through" {...fourteenDay} />
+        </div>
+
+        <div className="track-record-recent">
+          <div className="track-record-recent-heading">
+            <GraphIcon size={14} />
+            <h3>Recent verified</h3>
+          </div>
+          {trackRecord.recent_hits.length === 0 ? (
+            <p className="track-record-empty">Verified outcomes will appear as evidence matures.</p>
+          ) : (
+            <ol>
+              {trackRecord.recent_hits.map((hit) => (
+                <li key={`${hit.full_name}-${hit.first_trending_at}`}>
+                  <a
+                    href={`https://github.com/${hit.full_name.split("/").map(encodeURIComponent).join("/")}`}
+                    rel="noreferrer"
+                    target="_blank"
+                  >
+                    <RepoIcon size={13} />
+                    <span>{hit.full_name}</span>
+                  </a>
+                  <span>
+                    Observed {formatObservedLeadDuration(hit.lead_hours)} before Daily · Daily #{hit.first_trending_rank}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      </div>
+
+      <MethodologyDialog
+        open={isMethodologyOpen}
+        trackRecord={trackRecord}
+        onClose={() => setIsMethodologyOpen(false)}
+      />
+    </section>
+  );
+}
+
 function RankingPage({
   snapshots,
   selectedId,
@@ -1150,6 +1514,8 @@ function RankingPage({
         </p>
         <Timeline snapshots={snapshots} selectedId={selectedId} onSelect={onSelect} />
       </section>
+
+      <TrackRecordSection trackRecord={selectedSnapshot.track_record} />
 
       <div className={`ranking-layout ${isSidebarCollapsed ? "ranking-layout-collapsed" : ""}`}>
         <DesktopFilters
@@ -1314,6 +1680,21 @@ export function InitialLoadingState() {
             <span className="loading-skeleton-block" />
           </div>
           <span className="loading-skeleton-block loading-skeleton-track" />
+        </div>
+      </section>
+      <section aria-hidden="true" className="loading-skeleton-track-record">
+        <div className="loading-skeleton-track-record-heading">
+          <span className="loading-skeleton-block" />
+          <span className="loading-skeleton-block" />
+        </div>
+        <div className="loading-skeleton-track-record-metrics">
+          {Array.from({ length: 4 }, (_, index) => (
+            <div key={index}>
+              <span className="loading-skeleton-block" />
+              <span className="loading-skeleton-block" />
+              <span className="loading-skeleton-block" />
+            </div>
+          ))}
         </div>
       </section>
       <div aria-hidden="true" className="loading-skeleton-layout">

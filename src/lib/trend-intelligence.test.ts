@@ -21,6 +21,7 @@ function repository(index: number, options: {
     description: `Repository ${index}`,
     language: "TypeScript",
     topics: ["developer-tools"],
+    observation_sources: ["github_search_pushed"],
     created_at: "2026-06-01T00:00:00.000Z",
     pushed_at: "2026-08-28T11:00:00.000Z",
     metrics: { stars, forks: 20, watchers: stars, open_issues: 5 },
@@ -229,9 +230,10 @@ describe("rankTrendIntelligence", () => {
     const repositoriesBefore = structuredClone(repositories);
     const signalsBefore = structuredClone(signals);
 
-    rankTrendIntelligence(repositories, signals, CAPTURED_AT);
+    const ranked = rankTrendIntelligence(repositories, signals, CAPTURED_AT);
 
     expect(repositories).toEqual(repositoriesBefore);
     expect(signals).toEqual(signalsBefore);
+    expect(ranked[0].observation_sources).not.toBe(repositories[0].observation_sources);
   });
 });
