@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { RankedRepository } from "./ranking";
 import {
   rankTrendIntelligence,
+  trendIntelligenceFor,
   type RepositoryEventSignals,
 } from "./trend-intelligence";
 
@@ -167,6 +168,37 @@ describe("rankTrendIntelligence", () => {
     expect(ranked[0].trend_intelligence.phase).toBe("insufficient_data");
     expect(ranked[0].trend_intelligence.confidence).toBe("low");
     expect(ranked[0].trend_intelligence.missing_evidence).toContain("github_events");
+  });
+
+  it("does not label event-only repositories as breakout without star growth", () => {
+    const repositories = Array.from({ length: 10 }, (_, index) => repository(index, {
+      delta6: 0,
+      delta24: 0,
+      stars: index,
+    }));
+    const signals = Array.from({ length: 10 }, (_, index) => eventSignals(index, {
+      h6: 100 + index * 10,
+      h24: 200 + index * 20,
+    }));
+
+    const ranked = rankTrendIntelligence(repositories, signals, CAPTURED_AT);
+
+    expect(ranked.every((item) => item.trend_intelligence.breakout.score === null)).toBe(true);
+    expect(ranked.every((item) => item.trend_intelligence.current_heat.score === null)).toBe(true);
+    expect(ranked.every((item) => item.trend_intelligence.phase === "insufficient_data")).toBe(true);
+  });
+
+  it("writes the revised score version while accepting historical v2 snapshots", () => {
+    const ranked = rankTrendIntelligence(
+      Array.from({ length: 10 }, (_, index) => repository(index, { delta6: 5, delta24: 20 })),
+      Array.from({ length: 10 }, (_, index) => eventSignals(index, { h6: 10, h24: 30 })),
+      CAPTURED_AT,
+    );
+
+    expect(ranked[0].trend_intelligence.score_version).toBe("trend-intelligence-v3-shadow");
+    const historical = structuredClone(ranked[0]);
+    historical.trend_intelligence.score_version = "trend-intelligence-v2-shadow";
+    expect(trendIntelligenceFor(historical)?.score_version).toBe("trend-intelligence-v2-shadow");
   });
 
   it("rejects stale event evidence", () => {

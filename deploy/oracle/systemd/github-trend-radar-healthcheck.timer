@@ -1,0 +1,11 @@
+[Unit]
+Description=Check GitHub Trend Radar public health every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=github-trend-radar-healthcheck.service
+
+[Install]
+WantedBy=timers.target

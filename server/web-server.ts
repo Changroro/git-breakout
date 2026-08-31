@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, resolve, sep } from "node:path";
 import { loadRepositoryCard } from "./card-cache.ts";
 import { PublicHistoryApi } from "./public-history.ts";
+import type { RankingView } from "../src/lib/repository-filters.ts";
 
 const MAX_PROXY_BODY_BYTES = 32 * 1024 * 1024;
 const PROXY_TIMEOUT_MS = 60_000;
@@ -27,10 +28,27 @@ type WebServerDependencies = {
   fetchImplementation?: typeof fetch;
 };
 
-function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
+function setSecurityHeaders(response: ServerResponse): void {
+  response.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; script-src 'self' https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
+  );
+  response.setHeader("Permissions-Policy", "camera=(), geolocation=(), microphone=()");
+  response.setHeader("Referrer-Policy", "no-referrer");
+  response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("X-Frame-Options", "DENY");
+}
+
+function sendJson(
+  response: ServerResponse,
+  statusCode: number,
+  payload: unknown,
+  cacheControl = "no-store",
+): void {
   response.statusCode = statusCode;
   response.setHeader("Content-Type", "application/json; charset=utf-8");
-  response.setHeader("Cache-Control", "no-store");
+  response.setHeader("Cache-Control", cacheControl);
   response.end(JSON.stringify(payload));
 }
 
@@ -41,6 +59,30 @@ function errorMessage(error: unknown): string {
 function rejectMethod(response: ServerResponse, allowed: string): void {
   response.setHeader("Allow", allowed);
   sendJson(response, 405, { error: "Method not allowed" });
+}
+
+function requirePositiveIntegerParameter(
+  requestUrl: URL,
+  name: string,
+  maximum: number,
+): number {
+  const value = requestUrl.searchParams.get(name);
+  if (value === null || !/^\d+$/.test(value)) {
+    throw new TypeError(`${name} must be a positive integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > maximum) {
+    throw new RangeError(`${name} must be between 1 and ${maximum}`);
+  }
+  return parsed;
+}
+
+function requireRankingView(requestUrl: URL): RankingView {
+  const view = requestUrl.searchParams.get("view");
+  if (view === "momentum" || view === "breakout" || view === "current") {
+    return view;
+  }
+  throw new TypeError("view must be momentum, breakout, or current");
 }
 
 async function readRequestBody(request: IncomingMessage): Promise<Buffer | undefined> {
@@ -142,7 +184,9 @@ function serveStatic(
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader(
     "Cache-Control",
-    pathname === "/" ? "no-cache" : "public, max-age=31536000, immutable",
+    pathname === "/" || pathname === "/theme-init.js"
+      ? "no-cache"
+      : "public, max-age=31536000, immutable",
   );
   if (request.method === "HEAD") {
     response.end();
@@ -173,13 +217,18 @@ export function createWebServer(
   const cardCacheDirectory = resolve(config.cacheDirectory, "repository-cards");
 
   const server = createServer(async (request, response) => {
+    setSecurityHeaders(response);
     const requestUrl = new URL(request.url ?? "/", "http://localhost");
     if (requestUrl.pathname === "/health") {
       if (request.method !== "GET") {
         rejectMethod(response, "GET");
         return;
       }
-      sendJson(response, 200, { status: "ok" });
+      try {
+        sendJson(response, 200, await historyApi.readHealth());
+      } catch (error) {
+        sendJson(response, 503, { error: errorMessage(error) });
+      }
       return;
     }
     if (requestUrl.pathname === "/api/timeline") {
@@ -205,9 +254,64 @@ export function createWebServer(
         return;
       }
       try {
-        sendJson(response, 200, await historyApi.readSnapshot(snapshotId));
+        sendJson(
+          response,
+          200,
+          await historyApi.readSnapshot(snapshotId),
+          "public, max-age=31536000, immutable",
+        );
       } catch (error) {
         sendJson(response, error instanceof RangeError ? 404 : 502, { error: errorMessage(error) });
+      }
+      return;
+    }
+    if (requestUrl.pathname === "/api/ranking") {
+      if (request.method !== "GET") {
+        rejectMethod(response, "GET");
+        return;
+      }
+      try {
+        const snapshotId = requestUrl.searchParams.get("snapshot");
+        if (snapshotId === null) {
+          throw new TypeError("snapshot is required");
+        }
+        const ranking = await historyApi.readRankingPage({
+          snapshotId,
+          page: requirePositiveIntegerParameter(requestUrl, "page", 1_000_000),
+          pageSize: requirePositiveIntegerParameter(requestUrl, "page_size", 100),
+          language: requestUrl.searchParams.get("language"),
+          topic: requestUrl.searchParams.get("topic"),
+          view: requireRankingView(requestUrl),
+        });
+        sendJson(response, 200, ranking, "public, max-age=31536000, immutable");
+      } catch (error) {
+        sendJson(response, error instanceof TypeError || error instanceof RangeError ? 400 : 502, {
+          error: errorMessage(error),
+        });
+      }
+      return;
+    }
+    if (requestUrl.pathname === "/api/search") {
+      if (request.method !== "GET") {
+        rejectMethod(response, "GET");
+        return;
+      }
+      try {
+        const snapshotId = requestUrl.searchParams.get("snapshot");
+        const query = requestUrl.searchParams.get("query");
+        if (snapshotId === null || query === null) {
+          throw new TypeError("snapshot and query are required");
+        }
+        const search = await historyApi.searchRepositories(
+          snapshotId,
+          query,
+          requirePositiveIntegerParameter(requestUrl, "limit", 20),
+        );
+        sendJson(response, 200, search, "public, max-age=31536000, immutable");
+      } catch (error) {
+        sendJson(response, error instanceof TypeError || error instanceof RangeError ? 400 : 502, {
+          error: errorMessage(error),
+        });
       }
       return;
     }
@@ -247,7 +351,12 @@ export function createWebServer(
         return;
       }
       try {
-        sendJson(response, 200, await historyApi.readStarSeries(snapshotId, repositoryNames));
+        sendJson(
+          response,
+          200,
+          await historyApi.readStarSeries(snapshotId, repositoryNames),
+          "public, max-age=31536000, immutable",
+        );
       } catch (error) {
         sendJson(response, error instanceof TypeError ? 400 : 502, { error: errorMessage(error) });
       }

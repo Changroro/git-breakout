@@ -1,0 +1,12 @@
+[Unit]
+Description=Back up GitHub Trend Radar PostgreSQL
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+Environment=TREND_RADAR_REPO=/home/ubuntu/github-trend-radar
+Environment=TREND_RADAR_BACKUP_DIR=/home/ubuntu/backups/github-trend-radar
+Environment=TREND_RADAR_BACKUP_RETENTION_DAYS=14
+ExecStart=/usr/bin/bash /home/ubuntu/github-trend-radar/deploy/oracle/backup.sh

@@ -36,18 +36,68 @@ afterEach(async () => {
 
 describe("createWebServer", () => {
   it("serves the built application and health endpoint", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(
+      JSON.stringify({ status: "ok" }),
+      { headers: { "Content-Type": "application/json" } },
+    ));
     const server = createWebServer({
       ...testDirectories(),
       internalApiUrl: "http://rest:3000",
-    });
+    }, { fetchImplementation });
     const baseUrl = await listen(server);
 
     const page = await fetch(baseUrl);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("Trend Radar");
+    expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(page.headers.get("strict-transport-security")).toContain("max-age=31536000");
     await expect(fetch(`${baseUrl}/health`).then((response) => response.json())).resolves.toEqual({
       status: "ok",
     });
+  });
+
+  it("serves immutable ranking pages and bounded search results", async () => {
+    const repository = {
+      full_name: "owner/repository",
+      open_graph_image_url: "https://opengraph.githubassets.com/example/owner/repository",
+    };
+    const fetchImplementation = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        schema_version: "1.0",
+        id: snapshotId,
+        captured_at: "2026-08-27T01:17:00.000Z",
+        source: "github_combined",
+        repository_count: 2500,
+        matching_count: 1,
+        page: 1,
+        page_size: 10,
+        intelligence_available: true,
+        languages: [{ value: "typescript", label: "TypeScript", count: 1 }],
+        topics: [{ value: "ai", label: "ai", count: 1 }],
+        repositories: [repository],
+      }), { headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        schema_version: "1.0",
+        total_count: 1,
+        repositories: [repository],
+      }), { headers: { "Content-Type": "application/json" } }));
+    const server = createWebServer({
+      ...testDirectories(),
+      internalApiUrl: "http://rest:3000",
+    }, { fetchImplementation });
+    const baseUrl = await listen(server);
+
+    const ranking = await fetch(
+      `${baseUrl}/api/ranking?snapshot=${snapshotId}&page=1&page_size=10&view=momentum`,
+    );
+    expect(ranking.status).toBe(200);
+    expect(ranking.headers.get("cache-control")).toContain("immutable");
+    expect((await ranking.json() as { repositories: unknown[] }).repositories).toHaveLength(1);
+    const search = await fetch(
+      `${baseUrl}/api/search?snapshot=${snapshotId}&query=owner&limit=10`,
+    );
+    expect(search.status).toBe(200);
+    expect(search.headers.get("cache-control")).toContain("immutable");
   });
 
   it("serves timeline, one snapshot, and proxies RPC requests", async () => {

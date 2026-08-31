@@ -57,7 +57,7 @@ export type TrendScore = {
 };
 
 export type TrendIntelligence = {
-  score_version: "trend-intelligence-v2-shadow";
+  score_version: "trend-intelligence-v2-shadow" | "trend-intelligence-v3-shadow";
   phase: TrendPhase;
   confidence: Confidence;
   star_evidence_window_hours: 1 | 6 | 24 | null;
@@ -84,7 +84,10 @@ export function trendIntelligenceFor(repository: RankedRepository): TrendIntelli
     typeof value !== "object"
     || value === null
     || !("score_version" in value)
-    || value.score_version !== "trend-intelligence-v2-shadow"
+    || ![
+      "trend-intelligence-v2-shadow",
+      "trend-intelligence-v3-shadow",
+    ].includes(String(value.score_version))
   ) {
     throw new TypeError(`Repository ${repository.full_name} has invalid trend intelligence`);
   }
@@ -388,7 +391,7 @@ export function rankTrendIntelligence(
     cohorts.set(row.cohortKey, cohort);
   });
   const globallyScoreable = rows.filter((row) =>
-    row.starVelocity !== null && row.organicBreadth !== null
+    row.starVelocity !== null && row.starVelocity > 0 && row.organicBreadth !== null
   );
 
   return rows.map((row) => {
@@ -406,6 +409,7 @@ export function rankTrendIntelligence(
     }
 
     const canScoreCurrent = row.starVelocity !== null
+      && row.starVelocity > 0
       && row.organicBreadth !== null
       && row.eventDiversity !== null
       && globallyScoreable.length >= 2;
@@ -424,6 +428,8 @@ export function rankTrendIntelligence(
     };
     const canScoreBreakout = cohortScoreable.length >= MIN_TREND_COHORT_SIZE
       && row.relativeGrowth !== null
+      && row.starVelocity !== null
+      && row.starVelocity > 0
       && row.organicBreadth !== null;
     const breakoutComponents: ScoreComponents = {
       star_velocity: null,
@@ -463,7 +469,7 @@ export function rankTrendIntelligence(
         components: { ...row.repository.momentum.components },
       },
       trend_intelligence: {
-        score_version: "trend-intelligence-v2-shadow",
+        score_version: "trend-intelligence-v3-shadow",
         phase,
         confidence,
         star_evidence_window_hours: row.starEvidenceWindowHours,

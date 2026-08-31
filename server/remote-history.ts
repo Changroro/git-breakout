@@ -20,6 +20,10 @@ type CollectionContext = {
   }>;
 };
 
+export type CollectionSchedule = {
+  nextDueAt: string;
+};
+
 export type SnapshotTimelineEntry = {
   id: string;
   capturedAt: string;
@@ -77,6 +81,23 @@ function requireBoolean(value: unknown, field: string): boolean {
     throw new TypeError(`${field} must be boolean`);
   }
   return value;
+}
+
+export function parseCollectionSchedule(value: unknown): CollectionSchedule {
+  const schedule = requireRecord(value, "Collection schedule");
+  return {
+    nextDueAt: requireTimestamp(schedule.next_due_at, "Collection schedule.next_due_at"),
+  };
+}
+
+export function millisecondsUntilCollectionDue(
+  schedule: CollectionSchedule,
+  currentTime: Date,
+): number {
+  if (!Number.isFinite(currentTime.getTime())) {
+    throw new TypeError("Collection schedule current time must be valid");
+  }
+  return Math.max(0, Date.parse(schedule.nextDueAt) - currentTime.getTime());
 }
 
 function parseEventWindow(value: unknown, field: string): TrendWindowSignals {
@@ -320,6 +341,10 @@ export class RemoteHistoryApi {
 
   async startCollection(runId: string, startedAt: string): Promise<void> {
     await this.rpc("start_collection", { p_run_id: runId, p_started_at: startedAt });
+  }
+
+  async readCollectionSchedule(): Promise<CollectionSchedule> {
+    return parseCollectionSchedule(await this.rpc("collection_schedule", {}));
   }
 
   async readCollectionContext(): Promise<CollectionContext> {

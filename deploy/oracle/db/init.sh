@@ -7,3 +7,9 @@ psql \
   --username "$POSTGRES_USER" \
   --dbname "$POSTGRES_DB" \
   --file /opt/trend-radar/schema.sql
+
+psql \
+  --set=ON_ERROR_STOP=1 \
+  --username "$POSTGRES_USER" \
+  --dbname "$POSTGRES_DB" \
+  --file /opt/trend-radar/migrations/006_operational_hardening.sql

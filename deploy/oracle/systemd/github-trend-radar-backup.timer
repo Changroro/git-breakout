@@ -1,0 +1,10 @@
+[Unit]
+Description=Run GitHub Trend Radar PostgreSQL backup daily
+
+[Timer]
+OnCalendar=*-*-* 18:30:00 UTC
+Persistent=true
+Unit=github-trend-radar-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -25,22 +24,21 @@ import {
   XIcon,
 } from "@primer/octicons-react";
 import {
-  parseRankingSnapshot,
+  parseRankingPageResponse,
+  parseRepositorySearchResponse,
   parseTimelineResponse,
   resolveSnapshotId,
-  type RankingSnapshot,
+  type RankingPageResponse,
   type RankingSnapshotMetadata,
+  type RepositorySearchResponse,
 } from "./lib/history";
 import {
   getVisiblePages,
   navigateRankingHref,
-  parsePage,
   type RankingNavigationMode,
 } from "./lib/pagination";
 import {
   buildRankingHref,
-  buildRepositoryFilterOptions,
-  filterRepositories,
   parseRankingView,
   parseRepositoryFilters,
   type RankingView,
@@ -60,12 +58,10 @@ import {
 import {
   addReadRepository,
   parseReadRepositories,
-  searchRepositories,
   serializeReadRepositories,
 } from "./lib/repository-search";
 
 const PAGE_SIZE = 10;
-const SNAPSHOT_CACHE_LIMIT = 5;
 const DEFAULT_TOPIC_LIMIT = 12;
 const SEARCH_TOPIC_LIMIT = 40;
 const SEARCH_RESULT_LIMIT = 10;
@@ -94,20 +90,27 @@ type StarSeriesState =
   | { status: "ready"; requestKey: string; series: Map<string, RepositoryStarSeries> }
   | { status: "error"; requestKey: string; message: string };
 
+type RepositorySearchState =
+  | { status: "idle"; requestKey: string }
+  | { status: "loading"; requestKey: string }
+  | { status: "ready"; requestKey: string; response: RepositorySearchResponse }
+  | { status: "error"; requestKey: string; message: string };
+
 function formatCapturedAt(value: string): string {
   return `${capturedAtFormatter.format(new Date(value))} KST`;
 }
 
-function cacheSnapshot(cache: Map<string, RankingSnapshot>, snapshot: RankingSnapshot): void {
-  cache.delete(snapshot.id);
-  cache.set(snapshot.id, snapshot);
-  if (cache.size > SNAPSHOT_CACHE_LIMIT) {
-    const oldestId = cache.keys().next().value;
-    if (typeof oldestId !== "string") {
-      throw new Error("Snapshot cache did not contain an eviction candidate");
-    }
-    cache.delete(oldestId);
+function requestedPage(search: string): number {
+  const value = new URLSearchParams(search).get("page");
+  if (value === null) return 1;
+  if (!/^\d+$/.test(value)) {
+    throw new TypeError("page must be a positive integer");
   }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new RangeError("page must be a positive integer");
+  }
+  return parsed;
 }
 
 function getInitialTheme(): Theme {
@@ -178,23 +181,6 @@ function repositoryViewScore(repository: RankedRepository, view: RankingView): n
   return view === "breakout"
     ? intelligence.breakout.score
     : intelligence.current_heat.score;
-}
-
-function repositoriesForView(
-  repositories: readonly RankedRepository[],
-  view: RankingView,
-): RankedRepository[] {
-  if (view === "momentum") return [...repositories];
-  return repositories
-    .filter((repository) => repositoryViewScore(repository, view) !== null)
-    .sort((left, right) => {
-      const leftScore = repositoryViewScore(left, view);
-      const rightScore = repositoryViewScore(right, view);
-      if (leftScore === null || rightScore === null) {
-        throw new Error(`${view} ranking contains an unavailable score`);
-      }
-      return rightScore - leftScore || left.full_name.localeCompare(right.full_name);
-    });
 }
 
 function rankingViewCopy(view: RankingView): { title: string; description: string } {
@@ -289,13 +275,15 @@ function RepositoryCardThumbnail({ repository }: { repository: RankedRepository 
 
 function RepositorySearchDialog({
   open,
-  repositories,
+  snapshotId,
+  repositoryCount,
   readRepositories,
   onClose,
   onRead,
 }: {
   open: boolean;
-  repositories: readonly RankedRepository[];
+  snapshotId: string;
+  repositoryCount: number;
   readRepositories: ReadonlySet<string>;
   onClose: () => void;
   onRead: (fullName: string) => void;
@@ -305,11 +293,21 @@ function RepositorySearchDialog({
   const resultRefs = useRef<Array<HTMLAnchorElement | null>>([]);
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
-  const results = useMemo(
-    () => searchRepositories(repositories, query),
-    [query, repositories],
-  );
-  const visibleResults = results.slice(0, SEARCH_RESULT_LIMIT);
+  const normalizedQuery = query.trim();
+  const requestKey = `${snapshotId}\n${normalizedQuery}`;
+  const [searchState, setSearchState] = useState<RepositorySearchState>({
+    status: "idle",
+    requestKey,
+  });
+  const currentSearchState = searchState.requestKey === requestKey
+    ? searchState
+    : { status: "idle" as const, requestKey };
+  const visibleResults = currentSearchState.status === "ready"
+    ? currentSearchState.response.repositories
+    : [];
+  const totalResults = currentSearchState.status === "ready"
+    ? currentSearchState.response.total_count
+    : 0;
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -328,6 +326,51 @@ function RepositorySearchDialog({
       dialog.close();
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open || normalizedQuery === "") {
+      setSearchState({ status: "idle", requestKey });
+      return;
+    }
+    const controller = new AbortController();
+    setSearchState({ status: "loading", requestKey });
+
+    async function loadSearchResults() {
+      try {
+        const parameters = new URLSearchParams({
+          snapshot: snapshotId,
+          query: normalizedQuery,
+          limit: String(SEARCH_RESULT_LIMIT),
+        });
+        const response = await fetch(`/api/search?${parameters.toString()}`, {
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Repository search failed with status ${response.status}`);
+        }
+        setSearchState({
+          status: "ready",
+          requestKey,
+          response: parseRepositorySearchResponse(await response.json()),
+        });
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setSearchState({
+            status: "error",
+            requestKey,
+            message: error instanceof Error ? error.message : "Unknown repository search error",
+          });
+        }
+      }
+    }
+
+    const timeoutId = window.setTimeout(() => void loadSearchResults(), 180);
+    return () => {
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [open, requestKey]);
 
   function selectResult(index: number) {
     const result = visibleResults[index];
@@ -377,7 +420,7 @@ function RepositorySearchDialog({
             aria-controls="repository-search-results"
             aria-label="Search repositories"
             autoComplete="off"
-            placeholder={`Search ${numberFormatter.format(repositories.length)} repositories...`}
+            placeholder={`Search ${numberFormatter.format(repositoryCount)} repositories...`}
             ref={inputRef}
             type="search"
             value={query}
@@ -407,21 +450,29 @@ function RepositorySearchDialog({
         </div>
 
         <div className="repository-search-body">
-          {query.trim() === "" ? (
+          {normalizedQuery === "" ? (
             <div className="repository-search-empty">
               <SearchIcon size={24} />
               <p>Search by repository name, description, language, or topic.</p>
             </div>
+          ) : currentSearchState.status === "loading" || currentSearchState.status === "idle" ? (
+            <div className="repository-search-empty" role="status">
+              <p>Searching repositories…</p>
+            </div>
+          ) : currentSearchState.status === "error" ? (
+            <div className="repository-search-empty" role="alert">
+              <p>{currentSearchState.message}</p>
+            </div>
           ) : visibleResults.length === 0 ? (
             <div className="repository-search-empty">
-              <p>No repositories found for “{query.trim()}”.</p>
+              <p>No repositories found for “{normalizedQuery}”.</p>
             </div>
           ) : (
             <>
               <p className="repository-search-count">
-                {results.length > SEARCH_RESULT_LIMIT
-                  ? `Showing ${SEARCH_RESULT_LIMIT} of ${numberFormatter.format(results.length)} results`
-                  : `${numberFormatter.format(results.length)} results`}
+                {totalResults > SEARCH_RESULT_LIMIT
+                  ? `Showing ${SEARCH_RESULT_LIMIT} of ${numberFormatter.format(totalResults)} results`
+                  : `${numberFormatter.format(totalResults)} results`}
               </p>
               <ol id="repository-search-results" className="repository-search-results">
                 {visibleResults.map((repository, index) => {
@@ -784,7 +835,7 @@ function FilterPanel({
         {visibleTopics.length === 0 ? (
           <p className="filter-options-empty">No topics found</p>
         ) : normalizedSearch === "" && matchingTopics.length > DEFAULT_TOPIC_LIMIT ? (
-          <p className="filter-options-note">Showing top {DEFAULT_TOPIC_LIMIT}. Search to find more.</p>
+          <p className="filter-options-note">Showing top {DEFAULT_TOPIC_LIMIT}. Search indexed topics.</p>
         ) : null}
       </section>
 
@@ -1032,7 +1083,7 @@ function RankingPage({
 }: {
   snapshots: readonly RankingSnapshotMetadata[];
   selectedId: string;
-  selectedSnapshot: RankingSnapshot;
+  selectedSnapshot: RankingPageResponse;
   isSnapshotLoading: boolean;
   snapshotError: string | null;
   readRepositories: ReadonlySet<string>;
@@ -1045,29 +1096,18 @@ function RankingPage({
   const rankingView = parseRankingView(locationSearch);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
-  const filterOptions = useMemo(
-    () => buildRepositoryFilterOptions(selectedSnapshot.repositories),
-    [selectedSnapshot.repositories],
-  );
-  const filteredRepositories = useMemo(
-    () => filterRepositories(selectedSnapshot.repositories, filters),
-    [filters, selectedSnapshot.repositories],
-  );
-  const viewRepositories = useMemo(
-    () => repositoriesForView(filteredRepositories, rankingView),
-    [filteredRepositories, rankingView],
-  );
-  const totalPages = Math.ceil(viewRepositories.length / PAGE_SIZE);
-  const requestedPage = new URLSearchParams(locationSearch).get("page");
-  const currentPage = totalPages === 0 ? 1 : parsePage(requestedPage, totalPages);
-  const start = (currentPage - 1) * PAGE_SIZE;
-  const repositories = viewRepositories.slice(start, start + PAGE_SIZE);
+  const filterOptions = {
+    languages: selectedSnapshot.languages,
+    topics: selectedSnapshot.topics,
+  };
+  const totalPages = Math.ceil(selectedSnapshot.matching_count / selectedSnapshot.page_size);
+  const currentPage = selectedSnapshot.page;
+  const start = (currentPage - 1) * selectedSnapshot.page_size;
+  const repositories = selectedSnapshot.repositories;
   const starSeries = useRepositoryStarSeries(selectedSnapshot.id, repositories);
   const filterCount = activeFilterCount(filters);
   const viewCopy = rankingViewCopy(rankingView);
-  const intelligenceAvailable = selectedSnapshot.repositories.some((repository) => (
-    trendIntelligenceFor(repository) !== null
-  ));
+  const intelligenceAvailable = selectedSnapshot.intelligence_available;
 
   function changeFilters(nextFilters: RepositoryFilters) {
     onNavigate(
@@ -1152,9 +1192,9 @@ function RankingPage({
             <span className="result-count">
               {rankingView === "momentum"
                 ? filterCount === 0
-                  ? `${selectedSnapshot.repositories.length} repositories`
-                  : `${filteredRepositories.length} of ${selectedSnapshot.repositories.length} repositories`
-                : `${viewRepositories.length} scored of ${filteredRepositories.length} matching`}
+                  ? `${selectedSnapshot.repository_count} repositories`
+                  : `${selectedSnapshot.matching_count} of ${selectedSnapshot.repository_count} repositories`
+                : `${selectedSnapshot.matching_count} scored repositories`}
             </span>
           </div>
         </div>
@@ -1334,7 +1374,7 @@ export function SiteFooter() {
 export default function App() {
   const [snapshots, setSnapshots] = useState<RankingSnapshotMetadata[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedSnapshot, setSelectedSnapshot] = useState<RankingSnapshot | null>(null);
+  const [selectedSnapshot, setSelectedSnapshot] = useState<RankingPageResponse | null>(null);
   const [isSnapshotLoading, setIsSnapshotLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -1342,7 +1382,6 @@ export default function App() {
     parseReadRepositories(localStorage.getItem(READ_REPOSITORIES_STORAGE_KEY))
   ));
   const [locationSearch, setLocationSearch] = useState(window.location.search);
-  const snapshotCache = useRef(new Map<string, RankingSnapshot>());
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1391,31 +1430,34 @@ export default function App() {
       return;
     }
     const snapshotId = selectedId;
-    const cachedSnapshot = snapshotCache.current.get(snapshotId);
     setError(null);
-    if (cachedSnapshot !== undefined) {
-      cacheSnapshot(snapshotCache.current, cachedSnapshot);
-      setSelectedSnapshot(cachedSnapshot);
-      setIsSnapshotLoading(false);
-      return;
-    }
     const controller = new AbortController();
     setIsSnapshotLoading(true);
 
     async function loadSnapshot() {
       try {
-        const response = await fetch(`/api/snapshot?${new URLSearchParams({ id: snapshotId })}`, {
+        const filters = parseRepositoryFilters(locationSearch);
+        const view = parseRankingView(locationSearch);
+        const page = requestedPage(locationSearch);
+        const parameters = new URLSearchParams({
+          snapshot: snapshotId,
+          page: String(page),
+          page_size: String(PAGE_SIZE),
+          view,
+        });
+        if (filters.language !== null) parameters.set("language", filters.language);
+        if (filters.topic !== null) parameters.set("topic", filters.topic);
+        const response = await fetch(`/api/ranking?${parameters.toString()}`, {
           headers: { Accept: "application/json" },
           signal: controller.signal,
         });
         if (!response.ok) {
-          throw new Error(`Snapshot request failed with status ${response.status}`);
+          throw new Error(`Ranking request failed with status ${response.status}`);
         }
-        const snapshot = parseRankingSnapshot(await response.json());
+        const snapshot = parseRankingPageResponse(await response.json());
         if (snapshot.id !== snapshotId) {
           throw new Error(`Snapshot response ${snapshot.id} does not match ${snapshotId}`);
         }
-        cacheSnapshot(snapshotCache.current, snapshot);
         setSelectedSnapshot(snapshot);
       } catch (caughtError) {
         if (!controller.signal.aborted) {
@@ -1430,7 +1472,7 @@ export default function App() {
 
     void loadSnapshot();
     return () => controller.abort();
-  }, [selectedId]);
+  }, [locationSearch, selectedId]);
 
   function navigate(href: string, mode: RankingNavigationMode) {
     navigateRankingHref(window.history, href, mode);
@@ -1538,7 +1580,8 @@ export default function App() {
       {selectedSnapshot === null ? null : (
         <RepositorySearchDialog
           open={isSearchOpen}
-          repositories={selectedSnapshot.repositories}
+          snapshotId={selectedSnapshot.id}
+          repositoryCount={selectedSnapshot.repository_count}
           readRepositories={readRepositories}
           onClose={() => setIsSearchOpen(false)}
           onRead={markRepositoryRead}
