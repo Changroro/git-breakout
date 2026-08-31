@@ -2,6 +2,11 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import type { HistoryResponse, RankingSnapshot } from "../src/lib/history.ts";
+import {
+  parseArchivePageResponse,
+  type ArchivePageResponse,
+  type ArchiveRepository,
+} from "../src/lib/archive.ts";
 import { rankRepositories, type RepositoryCandidate, type RankedRepository } from "../src/lib/ranking.ts";
 import {
   parseStarSeriesResponse,
@@ -587,6 +592,77 @@ export class HistoryDatabase {
     }
 
     return { schema_version: "1.0", snapshots };
+  }
+
+  readArchivePage(page: number, pageSize: number, query: string | null): ArchivePageResponse {
+    if (!Number.isInteger(page) || page < 1) {
+      throw new RangeError("Archive page must be a positive integer");
+    }
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+      throw new RangeError("Archive page size must be between 1 and 100");
+    }
+    if (query !== null && query.length > 200) {
+      throw new TypeError("Archive query must contain at most 200 characters");
+    }
+    const history = this.readHistory();
+    const latest = history.snapshots.at(-1);
+    if (latest === undefined) {
+      throw new Error("No completed ranking snapshots are available");
+    }
+    const activeNames = new Set(
+      latest.repositories.map((repository) => repository.full_name.toLocaleLowerCase("en-US")),
+    );
+    const lastObserved = new Map<string, ArchiveRepository>();
+    history.snapshots.forEach((snapshot) => {
+      snapshot.repositories.forEach((repository) => {
+        lastObserved.set(repository.full_name.toLocaleLowerCase("en-US"), {
+          ...repository,
+          topics: [...repository.topics],
+          observation_sources: repository.observation_sources === null
+            ? null
+            : [...repository.observation_sources],
+          metrics: { ...repository.metrics },
+          official_ranks: { ...repository.official_ranks },
+          growth: { ...repository.growth },
+          momentum: {
+            ...repository.momentum,
+            reasons: [...repository.momentum.reasons],
+            components: { ...repository.momentum.components },
+          },
+          last_snapshot_id: snapshot.id,
+          last_observed_at: snapshot.captured_at,
+        });
+      });
+    });
+    const archived = [...lastObserved.entries()]
+      .filter(([name]) => !activeNames.has(name))
+      .map(([, repository]) => repository)
+      .sort((left, right) => (
+        Date.parse(right.last_observed_at) - Date.parse(left.last_observed_at)
+        || left.full_name.localeCompare(right.full_name)
+      ));
+    const terms = query?.trim().toLocaleLowerCase("en-US").split(/\s+/).filter(Boolean) ?? [];
+    const matching = archived.filter((repository) => {
+      const searchable = [
+        repository.full_name,
+        repository.description,
+        repository.language,
+        ...repository.topics,
+      ].filter((value): value is string => value !== null).join(" ").toLocaleLowerCase("en-US");
+      return terms.every((term) => searchable.includes(term));
+    });
+    const normalizedPage = Math.min(page, Math.max(1, Math.ceil(matching.length / pageSize)));
+    const start = (normalizedPage - 1) * pageSize;
+    return parseArchivePageResponse({
+      schema_version: "1.0",
+      latest_snapshot_id: latest.id,
+      latest_captured_at: latest.captured_at,
+      archive_count: archived.length,
+      matching_count: matching.length,
+      page: normalizedPage,
+      page_size: pageSize,
+      repositories: matching.slice(start, start + pageSize),
+    });
   }
 
   close(): void {

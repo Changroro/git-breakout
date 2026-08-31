@@ -22,6 +22,47 @@ describe("HistoryDatabase", () => {
     const database = createDatabase();
 
     expect(() => database.readHistory()).toThrow("No completed ranking snapshots are available");
+    expect(() => database.readArchivePage(1, 10, null)).toThrow(
+      "No completed ranking snapshots are available",
+    );
+    database.close();
+  });
+
+  it("archives repositories absent from the latest snapshot without deleting history", () => {
+    const database = createDatabase();
+    database.appendSnapshot({
+      id: "run-1",
+      capturedAt: "2026-08-25T00:00:00.000Z",
+      source: "test",
+      repositories: [sampleRepositories[0], sampleRepositories[1]],
+    });
+    database.appendSnapshot({
+      id: "run-2",
+      capturedAt: "2026-08-26T00:00:00.000Z",
+      source: "test",
+      repositories: [sampleRepositories[1]],
+    });
+
+    const archive = database.readArchivePage(1, 10, "OPENAI rust");
+    expect(archive).toMatchObject({
+      latest_snapshot_id: "run-2",
+      archive_count: 1,
+      matching_count: 1,
+      repositories: [{
+        full_name: sampleRepositories[0].full_name,
+        last_snapshot_id: "run-1",
+        last_observed_at: "2026-08-25T00:00:00.000Z",
+      }],
+    });
+    expect(database.readHistory().snapshots[0].repositories).toHaveLength(2);
+
+    database.appendSnapshot({
+      id: "run-3",
+      capturedAt: "2026-08-27T00:00:00.000Z",
+      source: "test",
+      repositories: [sampleRepositories[0], sampleRepositories[1]],
+    });
+    expect(database.readArchivePage(1, 10, null).archive_count).toBe(0);
     database.close();
   });
 

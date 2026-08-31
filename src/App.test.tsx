@@ -2,10 +2,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   DiscoveryEvidenceBadge,
+  buildArchiveHref,
   formatCompactNumber,
   formatObservedLeadDuration,
   InitialLoadingState,
   rankingViewCopy,
+  resolveAppPath,
+  SiteNavigation,
   SiteFooter,
   TrackRecordSection,
 } from "./App";
@@ -13,9 +16,9 @@ import type { DiscoveryEvidence, TrackRecord } from "./lib/discovery-track-recor
 
 describe("ranking view guidance", () => {
   it("explains each ranking model in plain language", () => {
-    expect(rankingViewCopy("momentum").description).toContain("Overall strength");
-    expect(rankingViewCopy("breakout").description).toContain("Rising unusually fast");
-    expect(rankingViewCopy("current").description).toContain("strongest attention right now");
+    expect(rankingViewCopy("momentum").description).toContain("Durable overall strength");
+    expect(rankingViewCopy("breakout").description).toContain("Peer-relative acceleration");
+    expect(rankingViewCopy("current").description).toContain("Absolute attention now");
   });
 
   it("formats compact values with locale-neutral English units", () => {
@@ -23,6 +26,25 @@ describe("ranking view guidance", () => {
     expect(formatCompactNumber(35_000)).toBe("35k");
     expect(formatCompactNumber(1_200_000)).toBe("1.2m");
     expect(() => formatCompactNumber(Number.NaN)).toThrow("must be finite");
+  });
+});
+
+describe("application navigation", () => {
+  it("uses bookmarkable paths for rankings, archive, and track record", () => {
+    expect(resolveAppPath("/")).toBe("/");
+    expect(resolveAppPath("/archive")).toBe("/archive");
+    expect(resolveAppPath("/track-record")).toBe("/track-record");
+    expect(() => resolveAppPath("/unknown")).toThrow("Unknown application path");
+    expect(buildArchiveHref(2, " rust ")).toBe("?page=2&query=rust");
+  });
+
+  it("marks the current primary destination", () => {
+    const markup = renderToStaticMarkup(
+      <SiteNavigation currentPath="/archive" onNavigate={() => undefined} />,
+    );
+
+    expect(markup).toContain('aria-current="page" href="/archive"');
+    expect(markup).toContain("Track Record");
   });
 });
 

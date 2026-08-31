@@ -152,7 +152,9 @@ function resolveStaticFile(staticDirectory: string, pathname: string): string | 
   } catch {
     return null;
   }
-  const relativePath = decodedPath === "/" ? "index.html" : decodedPath.slice(1);
+  const relativePath = ["/", "/archive", "/track-record"].includes(decodedPath)
+    ? "index.html"
+    : decodedPath.slice(1);
   const filePath = resolve(staticDirectory, relativePath);
   const staticRoot = resolve(staticDirectory);
   if (filePath !== staticRoot && !filePath.startsWith(`${staticRoot}${sep}`)) {
@@ -184,7 +186,7 @@ function serveStatic(
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader(
     "Cache-Control",
-    pathname === "/" || pathname === "/theme-init.js"
+    ["/", "/archive", "/track-record", "/theme-init.js"].includes(pathname)
       ? "no-cache"
       : "public, max-age=31536000, immutable",
   );
@@ -308,6 +310,25 @@ export function createWebServer(
           requirePositiveIntegerParameter(requestUrl, "limit", 20),
         );
         sendJson(response, 200, search, "public, max-age=31536000, immutable");
+      } catch (error) {
+        sendJson(response, error instanceof TypeError || error instanceof RangeError ? 400 : 502, {
+          error: errorMessage(error),
+        });
+      }
+      return;
+    }
+    if (requestUrl.pathname === "/api/archive") {
+      if (request.method !== "GET") {
+        rejectMethod(response, "GET");
+        return;
+      }
+      try {
+        const archive = await historyApi.readArchivePage({
+          page: requirePositiveIntegerParameter(requestUrl, "page", 1_000_000),
+          pageSize: requirePositiveIntegerParameter(requestUrl, "page_size", 100),
+          query: requestUrl.searchParams.get("query"),
+        });
+        sendJson(response, 200, archive, "no-store");
       } catch (error) {
         sendJson(response, error instanceof TypeError || error instanceof RangeError ? 400 : 502, {
           error: errorMessage(error),

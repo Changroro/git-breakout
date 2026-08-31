@@ -161,6 +161,39 @@ describe("PublicHistoryApi", () => {
     );
   });
 
+  it("loads a searchable archive page", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(
+      JSON.stringify({
+        schema_version: "1.0",
+        latest_snapshot_id: snapshotId,
+        latest_captured_at: "2026-08-31T01:17:00.000Z",
+        archive_count: 20,
+        matching_count: 1,
+        page: 2,
+        page_size: 10,
+        repositories: [{
+          ...repository,
+          rank: 4,
+          last_snapshot_id: "22222222-2222-4222-8222-222222222222",
+          last_observed_at: "2026-08-30T01:17:00.000Z",
+        }],
+      }),
+      { headers: { "Content-Type": "application/json" } },
+    ));
+    const api = new PublicHistoryApi({ baseUrl: "http://rest:3000", fetchImplementation });
+
+    await expect(api.readArchivePage({ page: 2, pageSize: 10, query: "owner" })).resolves.toMatchObject({
+      archive_count: 20,
+      matching_count: 1,
+    });
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      "http://rest:3000/rpc/archive_page",
+      expect.objectContaining({
+        body: JSON.stringify({ p_page: 2, p_page_size: 10, p_query: "owner" }),
+      }),
+    );
+  });
+
   it("rejects a repository count mismatch", async () => {
     const fetchImplementation = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify([{

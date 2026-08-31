@@ -3,6 +3,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type FormEvent,
   type MouseEvent,
 } from "react";
 import * as Slider from "@radix-ui/react-slider";
@@ -70,6 +71,11 @@ import type {
   TrackRecord,
   TrackRecordConversion,
 } from "./lib/discovery-track-record";
+import {
+  parseArchivePageResponse,
+  type ArchivePageResponse,
+  type ArchiveRepository,
+} from "./lib/archive";
 
 const PAGE_SIZE = 10;
 const DEFAULT_TOPIC_LIMIT = 12;
@@ -105,6 +111,7 @@ const percentageFormatter = new Intl.NumberFormat("en-US", {
 });
 
 type Theme = "light" | "dark";
+export type AppPath = "/" | "/archive" | "/track-record";
 type StarSeriesState =
   | { status: "loading"; requestKey: string }
   | { status: "ready"; requestKey: string; series: Map<string, RepositoryStarSeries> }
@@ -115,6 +122,28 @@ type RepositorySearchState =
   | { status: "loading"; requestKey: string }
   | { status: "ready"; requestKey: string; response: RepositorySearchResponse }
   | { status: "error"; requestKey: string; message: string };
+
+export function resolveAppPath(pathname: string): AppPath {
+  if (pathname === "/" || pathname === "/archive" || pathname === "/track-record") {
+    return pathname;
+  }
+  throw new TypeError(`Unknown application path ${pathname}`);
+}
+
+export function buildArchiveHref(page: number, query: string): string {
+  if (!Number.isInteger(page) || page < 1) {
+    throw new RangeError("Archive page must be a positive integer");
+  }
+  const normalizedQuery = query.trim();
+  if (normalizedQuery.length > 200) {
+    throw new TypeError("Archive query must contain at most 200 characters");
+  }
+  const parameters = new URLSearchParams({ page: String(page) });
+  if (normalizedQuery !== "") {
+    parameters.set("query", normalizedQuery);
+  }
+  return `?${parameters.toString()}`;
+}
 
 function formatCapturedAt(value: string): string {
   return `${capturedAtFormatter.format(new Date(value))} KST`;
@@ -214,18 +243,18 @@ export function rankingViewCopy(view: RankingView): { title: string; description
   if (view === "breakout") {
     return {
       title: "Breakout signals",
-      description: "Rising unusually fast compared with repositories of similar language, age, and size.",
+      description: "Peer-relative acceleration: finds repositories rising unusually fast for their language, age, and size, even before they become large.",
     };
   }
   if (view === "current") {
     return {
       title: "Current heat",
-      description: "Receiving the strongest attention right now across stars and GitHub activity.",
+      description: "Absolute attention now: ranks the strongest recent star velocity, unique actors, activity diversity, and persistence.",
     };
   }
   return {
     title: "Repository momentum",
-    description: "Overall strength based on observed growth, repository scale, and recent activity.",
+    description: "Durable overall strength: combines observed star growth, lifetime velocity, repository scale, and recent activity.",
   };
 }
 
@@ -1443,6 +1472,243 @@ export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }
   );
 }
 
+export function SiteNavigation({
+  currentPath,
+  onNavigate,
+}: {
+  currentPath: AppPath;
+  onNavigate: (event: MouseEvent<HTMLAnchorElement>, path: AppPath) => void;
+}) {
+  const links: Array<{ path: AppPath; label: string }> = [
+    { path: "/", label: "Rankings" },
+    { path: "/archive", label: "Archive" },
+    { path: "/track-record", label: "Track Record" },
+  ];
+  return (
+    <nav aria-label="Primary" className="site-navigation">
+      <div className="site-navigation-inner">
+        {links.map((link) => (
+          <a
+            aria-current={currentPath === link.path ? "page" : undefined}
+            href={link.path}
+            key={link.path}
+            onClick={(event) => onNavigate(event, link.path)}
+          >
+            {link.label}
+          </a>
+        ))}
+      </div>
+    </nav>
+  );
+}
+
+function TrackRecordPage({ trackRecord }: { trackRecord: TrackRecord }) {
+  return (
+    <main className="page-container standalone-page track-record-page">
+      <section className="standalone-page-intro" aria-labelledby="track-record-page-title">
+        <h1 id="track-record-page-title">Track Record</h1>
+        <p>
+          Verifiable outcomes for repositories observed before they appeared in GitHub Trending Daily.
+        </p>
+      </section>
+      <TrackRecordSection trackRecord={trackRecord} />
+    </main>
+  );
+}
+
+function ArchiveRow({
+  repository,
+  isRead,
+  onRead,
+  onOpenSnapshot,
+}: {
+  repository: ArchiveRepository;
+  isRead: boolean;
+  onRead: (fullName: string) => void;
+  onOpenSnapshot: (event: MouseEvent<HTMLAnchorElement>, snapshotId: string) => void;
+}) {
+  const stars = requireDisplayValue(repository.metrics.stars, "metrics.stars", repository.full_name);
+  return (
+    <li className={`archive-row ${isRead ? "archive-row-read" : ""}`}>
+      <RepositoryCardThumbnail repository={repository} />
+      <div className="archive-repository-copy">
+        <div className="repository-title-line">
+          <a
+            className="repository-name"
+            href={repository.url}
+            rel="noreferrer"
+            target="_blank"
+            onClick={() => onRead(repository.full_name)}
+          >
+            <RepoIcon size={14} />
+            {repository.full_name}
+          </a>
+          {isRead ? <span className="repository-read-label"><CheckIcon size={12} />Read</span> : null}
+        </div>
+        <p>{repository.description ?? "No description"}</p>
+        <span className="archive-mobile-meta">
+          {repository.language ?? "Unknown language"} · {formatCompactNumber(stars)} stars · last rank #{repository.rank}
+        </span>
+      </div>
+      <span className="archive-stat">{repository.language ?? "—"}</span>
+      <span className="archive-stat"><StarIcon size={12} />{formatCompactNumber(stars)}</span>
+      <span className="archive-stat">#{repository.rank}</span>
+      <span className="archive-last-observed">
+        <time dateTime={repository.last_observed_at}>{formatCapturedAt(repository.last_observed_at)}</time>
+        <a
+          href={`/?page=1&snapshot=${encodeURIComponent(repository.last_snapshot_id)}`}
+          onClick={(event) => onOpenSnapshot(event, repository.last_snapshot_id)}
+        >
+          View snapshot
+        </a>
+      </span>
+    </li>
+  );
+}
+
+function ArchivePage({
+  locationSearch,
+  readRepositories,
+  onRead,
+  onNavigate,
+  onOpenSnapshot,
+}: {
+  locationSearch: string;
+  readRepositories: ReadonlySet<string>;
+  onRead: (fullName: string) => void;
+  onNavigate: (href: string, mode: RankingNavigationMode) => void;
+  onOpenSnapshot: (event: MouseEvent<HTMLAnchorElement>, snapshotId: string) => void;
+}) {
+  const parameters = new URLSearchParams(locationSearch);
+  const page = requestedPage(locationSearch);
+  const query = parameters.get("query")?.trim() ?? "";
+  const [queryInput, setQueryInput] = useState(query);
+  const [archive, setArchive] = useState<ArchivePageResponse | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+
+  useEffect(() => setQueryInput(query), [query]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setIsLoading(true);
+    setArchiveError(null);
+    async function loadArchive() {
+      try {
+        const requestParameters = new URLSearchParams({
+          page: String(page),
+          page_size: String(PAGE_SIZE),
+        });
+        if (query !== "") requestParameters.set("query", query);
+        const response = await fetch(`/api/archive?${requestParameters.toString()}`, {
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Archive request failed with status ${response.status}`);
+        }
+        setArchive(parseArchivePageResponse(await response.json()));
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setArchiveError(error instanceof Error ? error.message : "Unknown archive error");
+        }
+      } finally {
+        if (!controller.signal.aborted) setIsLoading(false);
+      }
+    }
+    void loadArchive();
+    return () => controller.abort();
+  }, [page, query]);
+
+  function submitSearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    onNavigate(buildArchiveHref(1, queryInput), "push");
+  }
+
+  const totalPages = archive === null
+    ? 0
+    : Math.ceil(archive.matching_count / archive.page_size);
+
+  return (
+    <main className="page-container standalone-page archive-page">
+      <section className="standalone-page-intro" aria-labelledby="archive-page-title">
+        <h1 id="archive-page-title">Archive</h1>
+        <p>
+          Previously observed repositories absent from the latest collection. Their original ranking
+          snapshots remain available in History, and rediscovered repositories return to Rankings automatically.
+        </p>
+      </section>
+
+      <section aria-busy={isLoading} className={`archive-board ${isLoading ? "archive-board-loading" : ""}`}>
+        <div className="archive-board-heading">
+          <div>
+            <h2>Inactive observations</h2>
+            <p>Last-known repository data, ordered by most recent observation.</p>
+          </div>
+          <span className="result-count">
+            {archive === null
+              ? "Loading"
+              : query === ""
+                ? `${archive.archive_count} repositories`
+                : `${archive.matching_count} of ${archive.archive_count} repositories`}
+          </span>
+        </div>
+        <form className="archive-search" onSubmit={submitSearch} role="search">
+          <label htmlFor="archive-search-input">Search archive</label>
+          <div>
+            <SearchIcon size={16} />
+            <input
+              id="archive-search-input"
+              maxLength={200}
+              placeholder="Repository, language, or topic"
+              type="search"
+              value={queryInput}
+              onChange={(event) => setQueryInput(event.target.value)}
+            />
+            <button type="submit">Search</button>
+          </div>
+        </form>
+        <div className="archive-column-heading" aria-hidden="true">
+          <span>Card</span><span>Repository</span><span>Language</span><span>Stars</span><span>Last rank</span><span>Last observed</span>
+        </div>
+        {archiveError !== null ? (
+          <p className="archive-status" role="alert">{archiveError}</p>
+        ) : archive === null ? (
+          <div className="archive-status" role="status">Loading archived repositories…</div>
+        ) : archive.repositories.length === 0 ? (
+          <div className="archive-empty-state">
+            <h3>{query === "" ? "Archive is empty" : `No results for “${query}”`}</h3>
+            <p>{query === ""
+              ? "Repositories appear here only after leaving the latest collection."
+              : "Try a repository name, language, or topic."}</p>
+          </div>
+        ) : (
+          <ol className="archive-list">
+            {archive.repositories.map((repository) => (
+              <ArchiveRow
+                isRead={readRepositories.has(repository.full_name.toLocaleLowerCase("en-US"))}
+                key={repository.full_name}
+                onRead={onRead}
+                onOpenSnapshot={onOpenSnapshot}
+                repository={repository}
+              />
+            ))}
+          </ol>
+        )}
+        {totalPages === 0 || archive === null ? null : (
+          <div className="board-footer">
+            <Pagination
+              currentPage={archive.page}
+              totalPages={totalPages}
+              onPageChange={(nextPage) => onNavigate(buildArchiveHref(nextPage, query), "push")}
+            />
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
 function RankingPage({
   snapshots,
   selectedId,
@@ -1470,6 +1736,7 @@ function RankingPage({
   const rankingView = parseRankingView(locationSearch);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
+  const [isMethodologyOpen, setIsMethodologyOpen] = useState(false);
   const filterOptions = {
     languages: selectedSnapshot.languages,
     topics: selectedSnapshot.topics,
@@ -1524,8 +1791,6 @@ function RankingPage({
         </p>
         <Timeline snapshots={snapshots} selectedId={selectedId} onSelect={onSelect} />
       </section>
-
-      <TrackRecordSection trackRecord={selectedSnapshot.track_record} />
 
       <div className={`ranking-layout ${isSidebarCollapsed ? "ranking-layout-collapsed" : ""}`}>
         <DesktopFilters
@@ -1604,13 +1869,22 @@ function RankingPage({
           >Current heat</button>
         </div>
 
-        <p
+        <div
           aria-live="polite"
           className="ranking-view-description"
           id="ranking-view-description"
         >
-          {viewCopy.description}
-        </p>
+          <p>{viewCopy.description}</p>
+          <button
+            aria-controls="ranking-methodology-dialog"
+            aria-expanded={isMethodologyOpen}
+            aria-haspopup="dialog"
+            onClick={() => setIsMethodologyOpen(true)}
+            type="button"
+          >
+            <QuestionIcon size={14} />How scoring works
+          </button>
+        </div>
 
         {snapshotError === null ? null : (
           <p className="snapshot-error" role="alert">{snapshotError}</p>
@@ -1680,6 +1954,11 @@ function RankingPage({
         onChange={changeFilters}
         onClose={() => setIsMobileFiltersOpen(false)}
       />
+      <MethodologyDialog
+        open={isMethodologyOpen}
+        trackRecord={selectedSnapshot.track_record}
+        onClose={() => setIsMethodologyOpen(false)}
+      />
     </main>
   );
 }
@@ -1701,21 +1980,6 @@ export function InitialLoadingState() {
             <span className="loading-skeleton-block" />
           </div>
           <span className="loading-skeleton-block loading-skeleton-track" />
-        </div>
-      </section>
-      <section aria-hidden="true" className="loading-skeleton-track-record">
-        <div className="loading-skeleton-track-record-heading">
-          <span className="loading-skeleton-block" />
-          <span className="loading-skeleton-block" />
-        </div>
-        <div className="loading-skeleton-track-record-metrics">
-          {Array.from({ length: 4 }, (_, index) => (
-            <div key={index}>
-              <span className="loading-skeleton-block" />
-              <span className="loading-skeleton-block" />
-              <span className="loading-skeleton-block" />
-            </div>
-          ))}
         </div>
       </section>
       <div aria-hidden="true" className="loading-skeleton-layout">
@@ -1783,7 +2047,9 @@ export default function App() {
   const [readRepositories, setReadRepositories] = useState<ReadonlySet<string>>(() => (
     parseReadRepositories(localStorage.getItem(READ_REPOSITORIES_STORAGE_KEY))
   ));
+  const [locationPath, setLocationPath] = useState<AppPath>(() => resolveAppPath(window.location.pathname));
   const [locationSearch, setLocationSearch] = useState(window.location.search);
+  const rankingLocationSearch = locationPath === "/" ? locationSearch : "";
 
   useEffect(() => {
     const controller = new AbortController();
@@ -1798,7 +2064,9 @@ export default function App() {
           throw new Error(`Timeline request failed with status ${response.status}`);
         }
         const timeline = parseTimelineResponse(await response.json());
-        const requestedId = new URLSearchParams(window.location.search).get("snapshot");
+        const requestedId = window.location.pathname === "/"
+          ? new URLSearchParams(window.location.search).get("snapshot")
+          : null;
         const resolvedId = resolveSnapshotId(requestedId, timeline.snapshots);
         setSnapshots(timeline.snapshots);
         setSelectedId(resolvedId);
@@ -1815,10 +2083,14 @@ export default function App() {
 
   useEffect(() => {
     function handlePopState() {
+      const nextPath = resolveAppPath(window.location.pathname);
       const nextSearch = window.location.search;
+      setLocationPath(nextPath);
       setLocationSearch(nextSearch);
       if (snapshots !== null) {
-        const requestedId = new URLSearchParams(nextSearch).get("snapshot");
+        const requestedId = nextPath === "/"
+          ? new URLSearchParams(nextSearch).get("snapshot")
+          : null;
         setSelectedId(resolveSnapshotId(requestedId, snapshots));
       }
     }
@@ -1838,9 +2110,12 @@ export default function App() {
 
     async function loadSnapshot() {
       try {
-        const filters = parseRepositoryFilters(locationSearch);
-        const view = parseRankingView(locationSearch);
-        const page = requestedPage(locationSearch);
+        const isRankingPage = locationPath === "/";
+        const filters = isRankingPage
+          ? parseRepositoryFilters(rankingLocationSearch)
+          : { language: null, topic: null };
+        const view = isRankingPage ? parseRankingView(rankingLocationSearch) : "momentum";
+        const page = isRankingPage ? requestedPage(rankingLocationSearch) : 1;
         const parameters = new URLSearchParams({
           snapshot: snapshotId,
           page: String(page),
@@ -1874,11 +2149,11 @@ export default function App() {
 
     void loadSnapshot();
     return () => controller.abort();
-  }, [locationSearch, selectedId]);
+  }, [locationPath, rankingLocationSearch, selectedId]);
 
   function navigate(href: string, mode: RankingNavigationMode) {
     navigateRankingHref(window.history, href, mode);
-    setLocationSearch(href);
+    setLocationSearch(window.location.search);
   }
 
   function navigateHome(event: MouseEvent<HTMLAnchorElement>) {
@@ -1890,15 +2165,34 @@ export default function App() {
       throw new Error("Ranking timeline must contain a latest snapshot");
     }
     event.preventDefault();
-    navigate(
-      buildRankingHref(
-        1,
-        latestSnapshot.id,
-        { language: null, topic: null },
-        "momentum",
-      ),
-      "push",
+    const rankingHref = buildRankingHref(
+      1,
+      latestSnapshot.id,
+      { language: null, topic: null },
+      "momentum",
     );
+    window.history.pushState(null, "", `/${rankingHref}`);
+    setLocationPath("/");
+    setLocationSearch(window.location.search);
+    setSelectedId(latestSnapshot.id);
+  }
+
+  function navigatePath(event: MouseEvent<HTMLAnchorElement>, path: AppPath) {
+    if (path === "/") {
+      navigateHome(event);
+      return;
+    }
+    if (snapshots === null) {
+      return;
+    }
+    const latestSnapshot = snapshots.at(-1);
+    if (latestSnapshot === undefined) {
+      throw new Error("Ranking timeline must contain a latest snapshot");
+    }
+    event.preventDefault();
+    window.history.pushState(null, "", path);
+    setLocationPath(path);
+    setLocationSearch("");
     setSelectedId(latestSnapshot.id);
   }
 
@@ -1918,6 +2212,23 @@ export default function App() {
     setSelectedId(snapshotId);
   }
 
+  function openArchivedSnapshot(event: MouseEvent<HTMLAnchorElement>, snapshotId: string) {
+    if (snapshots === null || !snapshots.some((snapshot) => snapshot.id === snapshotId)) {
+      throw new RangeError(`Snapshot ${snapshotId} does not exist`);
+    }
+    event.preventDefault();
+    const href = buildRankingHref(
+      1,
+      snapshotId,
+      { language: null, topic: null },
+      "momentum",
+    );
+    window.history.pushState(null, "", `/${href}`);
+    setLocationPath("/");
+    setLocationSearch(window.location.search);
+    setSelectedId(snapshotId);
+  }
+
   function markRepositoryRead(fullName: string) {
     const nextReadRepositories = addReadRepository(readRepositories, fullName);
     localStorage.setItem(
@@ -1933,7 +2244,7 @@ export default function App() {
         <div className="header-inner">
           <a
             className="brand"
-            href="?page=1"
+            href="/"
             aria-label="AI Trend Radar home"
             onClick={navigateHome}
           >
@@ -1954,6 +2265,7 @@ export default function App() {
             <ThemeButton />
           </div>
         </div>
+        <SiteNavigation currentPath={locationPath} onNavigate={navigatePath} />
       </header>
 
       {error !== null && selectedSnapshot === null ? (
@@ -1965,7 +2277,7 @@ export default function App() {
         </main>
       ) : snapshots === null || selectedId === null || selectedSnapshot === null ? (
         <InitialLoadingState />
-      ) : (
+      ) : locationPath === "/" ? (
         <RankingPage
           snapshots={snapshots}
           selectedId={selectedId}
@@ -1978,6 +2290,16 @@ export default function App() {
           locationSearch={locationSearch}
           onNavigate={navigate}
         />
+      ) : locationPath === "/archive" ? (
+        <ArchivePage
+          locationSearch={locationSearch}
+          readRepositories={readRepositories}
+          onRead={markRepositoryRead}
+          onNavigate={navigate}
+          onOpenSnapshot={openArchivedSnapshot}
+        />
+      ) : (
+        <TrackRecordPage trackRecord={selectedSnapshot.track_record} />
       )}
       {selectedSnapshot === null ? null : (
         <RepositorySearchDialog
