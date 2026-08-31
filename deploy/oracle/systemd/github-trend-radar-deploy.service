@@ -9,4 +9,6 @@ Type=oneshot
 User=ubuntu
 Environment=TREND_RADAR_REPO=/home/ubuntu/github-trend-radar
 Environment=TREND_RADAR_STATE_DIR=/home/ubuntu/.local/state/github-trend-radar
-ExecStart=/usr/bin/bash /usr/local/sbin/github-trend-radar-deploy
+ExecStart=/usr/bin/git -C /home/ubuntu/github-trend-radar fetch --prune origin refs/heads/main:refs/remotes/origin/main
+ExecStart=/usr/bin/git -C /home/ubuntu/github-trend-radar merge --ff-only refs/remotes/origin/main
+ExecStart=/usr/bin/bash /home/ubuntu/github-trend-radar/deploy/oracle/auto-deploy.sh
