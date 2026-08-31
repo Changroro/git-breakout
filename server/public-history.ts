@@ -1,9 +1,14 @@
 import {
+  parseRankingPageResponse,
   parseRankingSnapshot,
+  parseRepositorySearchResponse,
   parseTimelineResponse,
+  type RankingPageResponse,
   type RankingSnapshot,
+  type RepositorySearchResponse,
   type TimelineResponse,
 } from "../src/lib/history.ts";
+import type { RankingView } from "../src/lib/repository-filters.ts";
 import { parseSnapshotTimeline } from "./remote-history.ts";
 import {
   parseStarSeriesResponse,
@@ -59,6 +64,19 @@ export class PublicHistoryApi {
     return readJsonResponse(response, `Public history ${name}`);
   }
 
+  async readHealth(): Promise<{ status: "ok" }> {
+    const response = await this.rpc("health", {});
+    if (
+      typeof response !== "object"
+      || response === null
+      || !("status" in response)
+      || response.status !== "ok"
+    ) {
+      throw new TypeError("Public history health response must report ok");
+    }
+    return { status: "ok" };
+  }
+
   async readTimeline(): Promise<TimelineResponse> {
     const timeline = parseSnapshotTimeline(await this.rpc("snapshot_timeline", {}));
     return parseTimelineResponse({
@@ -95,6 +113,55 @@ export class PublicHistoryApi {
       source: metadata.source,
       repositories,
     });
+  }
+
+  async readRankingPage({
+    snapshotId,
+    page,
+    pageSize,
+    language,
+    topic,
+    view,
+  }: {
+    snapshotId: string;
+    page: number;
+    pageSize: number;
+    language: string | null;
+    topic: string | null;
+    view: RankingView;
+  }): Promise<RankingPageResponse> {
+    if (!Number.isInteger(page) || page < 1) {
+      throw new RangeError("Ranking page must be a positive integer");
+    }
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+      throw new RangeError("Ranking page size must be between 1 and 100");
+    }
+    return parseRankingPageResponse(await this.rpc("snapshot_page", {
+      p_snapshot_id: snapshotId,
+      p_page: page,
+      p_page_size: pageSize,
+      p_language: language,
+      p_topic: topic,
+      p_view: view,
+    }));
+  }
+
+  async searchRepositories(
+    snapshotId: string,
+    query: string,
+    limit: number,
+  ): Promise<RepositorySearchResponse> {
+    if (query.trim() === "" || query.length > 200) {
+      throw new TypeError("Repository search query must contain 1 to 200 characters");
+    }
+    if (!Number.isInteger(limit) || limit < 1 || limit > 20) {
+      throw new RangeError("Repository search limit must be between 1 and 20");
+    }
+    return parseRepositorySearchResponse(await this.rpc("search_snapshot_repositories", {
+      p_snapshot_id: snapshotId,
+      p_query: query,
+      p_limit: limit,
+    }));
   }
 
   async readStarSeries(

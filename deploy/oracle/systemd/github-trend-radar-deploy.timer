@@ -1,0 +1,11 @@
+[Unit]
+Description=Check GitHub Trend Radar main for deployment
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=github-trend-radar-deploy.service
+
+[Install]
+WantedBy=timers.target

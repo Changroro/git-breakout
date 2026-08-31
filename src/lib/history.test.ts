@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   parseHistoryResponse,
+  parseRankingPageResponse,
+  parseRepositorySearchResponse,
   parseTimelineResponse,
   resolveSnapshotId,
   type RankingSnapshot,
@@ -42,5 +44,44 @@ describe("history", () => {
     expect(() => parseTimelineResponse({ schema_version: "1.0", snapshots: [] })).toThrow(
       "At least one completed snapshot is required",
     );
+  });
+
+  it("parses one server-ranked page and its filter facets", () => {
+    expect(parseRankingPageResponse({
+      schema_version: "1.0",
+      id: "snapshot",
+      captured_at: "2026-08-27T01:17:00.000Z",
+      source: "github_combined",
+      repository_count: 2500,
+      matching_count: 42,
+      page: 2,
+      page_size: 10,
+      intelligence_available: true,
+      languages: [{ value: "typescript", label: "TypeScript", count: 20 }],
+      topics: [{ value: "ai", label: "ai", count: 12 }],
+      repositories: [{
+        full_name: "owner/repository",
+        open_graph_image_url: "https://opengraph.githubassets.com/example/owner/repository",
+      }],
+    })).toMatchObject({ page: 2, matching_count: 42, repository_count: 2500 });
+  });
+
+  it("parses bounded repository search results", () => {
+    expect(parseRepositorySearchResponse({
+      schema_version: "1.0",
+      total_count: 1,
+      repositories: [{
+        full_name: "owner/repository",
+        open_graph_image_url: "https://opengraph.githubassets.com/example/owner/repository",
+      }],
+    }).total_count).toBe(1);
+    expect(() => parseRepositorySearchResponse({
+      schema_version: "1.0",
+      total_count: 0,
+      repositories: [{
+        full_name: "owner/repository",
+        open_graph_image_url: "https://opengraph.githubassets.com/example/owner/repository",
+      }],
+    })).toThrow("cannot exceed total_count");
   });
 });

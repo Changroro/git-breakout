@@ -55,7 +55,7 @@ Search 쿼리 하나당 최대 1,000개만 가져오므로 이것을 “GitHub �
 - **신뢰도 표시**: 첫 관측은 실제 성장으로 간주하지 않고 `low` 신뢰도로 기록한다.
 - **Breakout 섀도 랭킹**: 언어·나이·Star 규모가 비슷한 저장소 안에서 상대 성장, Star·actor 가속도, 관심 폭을 비교한다.
 - **Current Heat 섀도 랭킹**: 절대 Star 속도, 고유 actor, 활동 다양성, 지속성으로 현재 관심의 크기를 별도로 보여준다.
-- **증거 기반 상태**: 이벤트가 오래됐거나 cohort가 작으면 점수를 만들지 않고 `insufficient_data`와 누락 근거를 저장한다.
+- **증거 기반 상태**: 실제 Star 증가가 없거나 이벤트가 오래됐거나 cohort가 작으면 점수를 만들지 않고 `insufficient_data`와 누락 근거를 저장한다.
 
 ### 히스토리와 UI
 
@@ -64,6 +64,7 @@ Search 쿼리 하나당 최대 1,000개만 가져오므로 이것을 “GitHub �
 - **실제 Repository 카드**: GitHub Open Graph 이미지를 캐시해 저장소별로 표시한다.
 - **자체 Star 성장 그래프**: 최초 관측 이후 직접 저장한 Star 시계열을 행별 스파크라인으로 표시한다.
 - **반응형 화면**: 데스크톱 표와 모바일 카드 레이아웃, 라이트·다크 테마를 제공한다.
+- **페이지 단위 조회**: 화면에 필요한 저장소 10개와 제한된 facet만 전송하고, 전체 스냅샷은 브라우저로 내려보내지 않는다.
 
 ### 저장과 자동화
 
@@ -72,6 +73,7 @@ Search 쿼리 하나당 최대 1,000개만 가져오므로 이것을 “GitHub �
 - **예약 수집**: GitHub Actions 워크플로가 2시간마다 원격 수집을 실행하도록 구성돼 있다.
 - **독립 이벤트 수집**: GH Archive 집계 워크플로가 별도로 동작해 이벤트 장애가 기존 모멘텀 스냅샷을 막지 않는다.
 - **중복 방지**: DB lease와 Actions concurrency로 수집기가 겹치지 않게 한다.
+- **운영 보호**: 일일 PostgreSQL 백업, 주간 실제 복구 검증, 5분 상태·디스크 점검을 systemd timer로 실행한다.
 
 ## 랭킹 방식
 
@@ -93,13 +95,13 @@ score = log1p(observedStarsPerDay) × 55
 - GitHub Trending 순위는 후보 발견과 이유 표시에 사용하며, 현재 버전에서는 점수에 직접 더하지 않는다.
 - 동점이면 `owner/repository` 이름 순으로 정렬해 결과를 결정적으로 유지한다.
 
-### Trend Intelligence v2 섀도 모델
+### Trend Intelligence v3 섀도 모델
 
-기본 정렬을 교체하지 않은 채 `Breakout`과 `Current heat` 보기를 함께 저장한다. `Breakout`은 같은 언어·나이·Star 규모 cohort 안의 백분위를, `Current heat`는 전체 후보군의 현재 Star 속도와 고유 actor 폭을 사용한다. Star와 이벤트는 완전히 수집된 24시간·6시간·1시간 창 중 가장 긴 창을 사용하고 그 길이를 스냅샷에 기록한다. 짧은 창은 신뢰도를 낮추며, cohort가 8개 미만이거나 이벤트가 4시간보다 오래된 경우 점수를 만들지 않는다.
+기본 정렬을 교체하지 않은 채 `Breakout`과 `Current heat` 보기를 함께 저장한다. `Breakout`은 같은 언어·나이·Star 규모 cohort 안의 백분위를, `Current heat`는 전체 후보군의 현재 Star 속도와 고유 actor 폭을 사용한다. Star와 이벤트는 완전히 수집된 24시간·6시간·1시간 창 중 가장 긴 창을 사용하고 그 길이를 스냅샷에 기록한다. 실제 Star 증가가 없는 이벤트 노이즈, 8개 미만 cohort, 4시간보다 오래된 이벤트는 점수를 만들지 않는다.
 
 공개 이벤트는 후보 발굴에도 사용한다. 최근 24시간 고유 actor 수, 활동 종류, 이벤트 수가 높은 저장소를 기존 후보군에 더한 뒤 GitHub API로 현재 상태를 검증한다. 이벤트 집계는 168시간만 보관하며 랭킹 스냅샷은 그대로 남는다.
 
-비교 조사, 산식과 승격 기준은 [Trend Intelligence v2 연구 및 설계](docs/research/trend-intelligence-v2.md)에 정리했다.
+비교 조사와 기본 산식은 [Trend Intelligence v2 연구 및 설계](docs/research/trend-intelligence-v2.md)에 정리했고, v3는 실제 Star 증가 조건을 추가한다.
 
 ```text
 Trending + Search + retained pool
@@ -180,7 +182,7 @@ npm run collect:events:remote -- --hour=2026-08-28T00:00:00.000Z --limit=5000
 
 Oracle용 Compose를 실행하기 전에 `.env.example`의 필수 값을 채우고 Cloudflare Tunnel 설정 예제를 복사해 Tunnel ID와 hostname을 입력해야 한다.
 
-Compose는 PostgreSQL, PostgREST, Node 웹 서버, Cloudflare Tunnel을 실행한다. 웹 서버는 정적 UI를 제공하고, 타임라인 메타데이터와 선택한 스냅샷만 PostgREST에서 조회하며, `/rpc/*` 수집 요청을 내부 PostgREST로 전달한다.
+Compose는 PostgreSQL, PostgREST, Node 웹 서버, Cloudflare Tunnel을 실행한다. 웹 서버는 정적 UI를 제공하고, 타임라인 메타데이터와 선택한 스냅샷의 현재 페이지·검색 결과만 PostgREST에서 조회하며, `/rpc/*` 수집 요청을 내부 PostgREST로 전달한다.
 
 ```bash
 cp deploy/oracle/.env.example deploy/oracle/.env
@@ -216,7 +218,7 @@ GitHub Actions에는 다음을 등록한다.
 
 - 개인 프로젝트이며 공개 웹, API, 예약 수집기를 운영 중이다.
 - Star 그래프는 외부 서비스 없이 이 프로젝트가 직접 수집한 스냅샷만 사용한다.
-- Trend Intelligence v2는 섀도 단계이며 기본 정렬은 검증된 `baseline-v1`을 유지한다.
+- Trend Intelligence v3는 섀도 단계이며 기본 정렬은 검증된 `baseline-v1`을 유지한다.
 - GitHub 공식 제품이 아니며 GitHub의 상표와 이용 조건을 따른다.
 - 소스 저장소는 비공개이며 재배포 라이선스를 제공하지 않는다.
 
@@ -224,9 +226,9 @@ GitHub Actions에는 다음을 등록한다.
 
 - [ ] 날짜 구간 분할과 완전성 상태를 포함한 저장소 후보군 백필
 - [x] 공개 웹 UI에서 선택한 PostgREST 스냅샷 온디맨드 조회
-- [ ] 원격 DB 백업과 스냅샷 보존 정책
+- [x] 원격 DB 일일 백업·주간 복구 검증과 스냅샷 영구 보존 정책
 - [x] 외부 서비스 의존 없는 자체 관측 Star 성장 그래프
-- [ ] v2 예측과 24·72시간 후 실제 결과를 비교하는 Accuracy 화면
+- [ ] v3 예측과 24·72시간 후 실제 결과를 비교하는 Accuracy 화면
 
 ---
 

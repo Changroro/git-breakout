@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as wait } from "node:timers/promises";
 import { rankRepositories } from "../src/lib/ranking.ts";
 import { rankTrendIntelligence } from "../src/lib/trend-intelligence.ts";
 import { createRepositoryCandidate } from "./collector.ts";
 import { BOOTSTRAP_REPOSITORY_NAMES } from "./bootstrap-repositories.ts";
 import { fetchGitHubRepositories } from "./github.ts";
-import { RemoteHistoryApi } from "./remote-history.ts";
+import { millisecondsUntilCollectionDue, RemoteHistoryApi } from "./remote-history.ts";
 import { selectRetainedRepositoryNames } from "./retention.ts";
 
 function requireEnvironment(name: string): string {
@@ -20,6 +21,12 @@ const historyApi = new RemoteHistoryApi({
   baseUrl: requireEnvironment("TREND_RADAR_API_URL"),
   collectorToken: requireEnvironment("TREND_RADAR_COLLECTOR_TOKEN"),
 });
+const schedule = await historyApi.readCollectionSchedule();
+const waitMilliseconds = millisecondsUntilCollectionDue(schedule, new Date());
+if (waitMilliseconds > 0) {
+  process.stdout.write(`Collection is due at ${schedule.nextDueAt}; waiting ${waitMilliseconds}ms\n`);
+  await wait(waitMilliseconds);
+}
 const runId = randomUUID();
 const startedAt = new Date().toISOString();
 let started = false;

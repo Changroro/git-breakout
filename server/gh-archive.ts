@@ -28,6 +28,17 @@ export type GhArchiveRepositoryBucket = {
   actor_ids: number[];
 };
 
+export type RejectedGhArchiveLine = {
+  lineNumber: number;
+  reason: string;
+};
+
+export type GhArchiveAggregationResult = {
+  buckets: GhArchiveRepositoryBucket[];
+  lineCount: number;
+  rejectedLines: RejectedGhArchiveLine[];
+};
+
 type MutableBucket = Omit<GhArchiveRepositoryBucket, "actor_ids"> & {
   actorIds: Set<number>;
 };
@@ -57,7 +68,7 @@ function addLine(
   line: string,
   bucketAt: string,
   lineNumber: number,
-): void {
+): RejectedGhArchiveLine | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(line);
@@ -65,7 +76,7 @@ function addLine(
     throw new SyntaxError(`GH Archive line ${lineNumber} is invalid JSON: ${String(error)}`);
   }
   const event = recordValue(parsed, `GH Archive line ${lineNumber}`);
-  if (typeof event.type !== "string" || !(event.type in RELEVANT_EVENT_FIELDS)) return;
+  if (typeof event.type !== "string" || !(event.type in RELEVANT_EVENT_FIELDS)) return null;
   const eventType = event.type as RelevantEventType;
   const actor = recordValue(event.actor, `GH Archive line ${lineNumber} actor`);
   const repository = recordValue(event.repo, `GH Archive line ${lineNumber} repo`);
@@ -73,7 +84,7 @@ function addLine(
     throw new TypeError(`GH Archive line ${lineNumber} actor.id must be a positive integer`);
   }
   if (typeof repository.name !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(repository.name)) {
-    throw new TypeError(`GH Archive line ${lineNumber} repo.name must use owner/name format`);
+    return { lineNumber, reason: "repo.name must use owner/name format" };
   }
   if (eventType === "WatchEvent") {
     const payload = recordValue(event.payload, `GH Archive line ${lineNumber} payload`);
@@ -99,6 +110,7 @@ function addLine(
   bucket[countField] += 1;
   bucket.actorIds.add(actor.id as number);
   buckets.set(key, bucket);
+  return null;
 }
 
 function finalizeBuckets(buckets: Map<string, MutableBucket>): GhArchiveRepositoryBucket[] {
@@ -113,11 +125,19 @@ function finalizeBuckets(buckets: Map<string, MutableBucket>): GhArchiveReposito
 export function aggregateGhArchiveLines(
   lines: readonly string[],
   bucketAt: string,
-): GhArchiveRepositoryBucket[] {
+): GhArchiveAggregationResult {
   parseBucketTimestamp(bucketAt);
   const buckets = new Map<string, MutableBucket>();
-  lines.forEach((line, index) => addLine(buckets, line, bucketAt, index + 1));
-  return finalizeBuckets(buckets);
+  const rejectedLines: RejectedGhArchiveLine[] = [];
+  lines.forEach((line, index) => {
+    const rejected = addLine(buckets, line, bucketAt, index + 1);
+    if (rejected !== null) rejectedLines.push(rejected);
+  });
+  return {
+    buckets: finalizeBuckets(buckets),
+    lineCount: lines.length,
+    rejectedLines,
+  };
 }
 
 function eventDiversity(bucket: GhArchiveRepositoryBucket): number {
@@ -168,7 +188,7 @@ export function formatGhArchiveUrl(bucketAt: string): string {
 export async function fetchGhArchiveBucket(
   bucketAt: string,
   fetchImplementation: typeof fetch = fetch,
-): Promise<GhArchiveRepositoryBucket[]> {
+): Promise<GhArchiveAggregationResult> {
   parseBucketTimestamp(bucketAt);
   const url = formatGhArchiveUrl(bucketAt);
   const response = await fetchImplementation(url, {
@@ -185,13 +205,19 @@ export async function fetchGhArchiveBucket(
   const compressed = Readable.fromWeb(response.body);
   const lines = createInterface({ input: compressed.pipe(createGunzip()), crlfDelay: Infinity });
   const buckets = new Map<string, MutableBucket>();
+  const rejectedLines: RejectedGhArchiveLine[] = [];
   let lineNumber = 0;
   for await (const line of lines) {
     lineNumber += 1;
-    addLine(buckets, line, bucketAt, lineNumber);
+    const rejected = addLine(buckets, line, bucketAt, lineNumber);
+    if (rejected !== null) rejectedLines.push(rejected);
   }
   if (lineNumber === 0) {
     throw new Error(`GH Archive ${bucketAt} contained no events`);
   }
-  return finalizeBuckets(buckets);
+  return {
+    buckets: finalizeBuckets(buckets),
+    lineCount: lineNumber,
+    rejectedLines,
+  };
 }

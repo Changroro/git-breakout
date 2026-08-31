@@ -139,6 +139,24 @@ grant select, insert on radar.snapshot_repositories to collector;
 grant select, insert, update, delete on radar.repository_event_buckets to collector;
 grant select on radar.snapshots, radar.snapshot_repositories to web_anon;
 
+create function api.collection_schedule()
+returns jsonb
+language sql
+stable
+set search_path = pg_catalog, radar
+as $$
+  select jsonb_build_object(
+    'next_due_at', coalesce(
+      max(runs.started_at) + make_interval(mins => settings.interval_minutes),
+      now()
+    )
+  )
+  from radar.collector_settings settings
+  left join radar.collector_runs runs on runs.status = 'completed'
+  where settings.id
+  group by settings.interval_minutes;
+$$;
+
 create function api.start_collection(p_run_id uuid, p_started_at timestamptz)
 returns void
 language plpgsql
@@ -709,6 +727,7 @@ $$;
 revoke execute on all functions in schema api from public;
 revoke execute on function radar.repository_event_window(text, timestamptz, integer) from public;
 grant execute on function radar.repository_event_window(text, timestamptz, integer) to collector;
+grant execute on function api.collection_schedule() to collector;
 grant execute on function api.start_collection(uuid, timestamptz) to collector;
 grant execute on function api.fail_collection(uuid, timestamptz, text) to collector;
 grant execute on function api.collection_context() to collector;

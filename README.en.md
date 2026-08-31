@@ -55,7 +55,7 @@ Every point on the timeline is a persisted ranking snapshot. Selecting a point r
 - **Confidence levels**: a first observation is not treated as real growth and is stored with `low` confidence.
 - **Shadow Breakout ranking**: compares peer-relative growth, star and actor acceleration, and attention breadth within language, age, and star-size cohorts.
 - **Shadow Current Heat ranking**: separates current attention using absolute star velocity, unique actors, activity diversity, and persistence.
-- **Evidence states**: stale events or undersized cohorts produce `insufficient_data` with explicit missing evidence instead of an estimated score.
+- **Evidence states**: zero observed star growth, stale events, or undersized cohorts produce `insufficient_data` with explicit missing evidence instead of an estimated score.
 
 ### History and interface
 
@@ -64,6 +64,7 @@ Every point on the timeline is a persisted ranking snapshot. Selecting a point r
 - **Real repository cards**: caches each repository's GitHub Open Graph image.
 - **First-party star growth chart**: renders a row-level sparkline from star observations collected since discovery.
 - **Responsive UI**: desktop table, mobile cards, and light/dark themes.
+- **Page-sized reads**: sends only ten repositories and bounded facets needed by the current view instead of the entire snapshot.
 
 ### Storage and automation
 
@@ -72,6 +73,7 @@ Every point on the timeline is a persisted ranking snapshot. Selecting a point r
 - **Scheduled collection**: includes a GitHub Actions workflow designed to collect every two hours.
 - **Independent event collection**: GH Archive aggregation runs separately so event-source failures do not block baseline momentum snapshots.
 - **Duplicate prevention**: database leases and Actions concurrency prevent overlapping collectors.
+- **Operational safeguards**: systemd timers run daily PostgreSQL backups, weekly restore drills, and five-minute health and disk checks.
 
 ## Ranking model
 
@@ -93,13 +95,13 @@ score = log1p(observedStarsPerDay) × 55
 - Trending ranks affect discovery and reason labels but do not directly add score in this version.
 - Ties are resolved by `owner/repository` name for deterministic output.
 
-### Trend Intelligence v2 shadow model
+### Trend Intelligence v3 shadow model
 
-The collector persists optional `Breakout` and `Current heat` views without replacing the default ranking. `Breakout` uses percentiles within matching language, repository-age, and star-size cohorts. `Current heat` uses current star velocity and unique-actor breadth across the candidate pool. Star and event evidence use the longest fully covered 24-hour, 6-hour, or 1-hour window and persist that window length with the score. Shorter windows reduce confidence, while cohorts below eight repositories or event evidence older than four hours remain unscored.
+The collector persists optional `Breakout` and `Current heat` views without replacing the default ranking. `Breakout` uses percentiles within matching language, repository-age, and star-size cohorts. `Current heat` uses current star velocity and unique-actor breadth across the candidate pool. Star and event evidence use the longest fully covered 24-hour, 6-hour, or 1-hour window and persist that window length with the score. Event-only noise without observed star growth, cohorts below eight repositories, and event evidence older than four hours remain unscored.
 
 Public events also expand discovery. Repositories with high unique-actor breadth, activity diversity, and event volume over the last 24 hours join the existing candidate pool before GitHub API validation. Aggregated events expire after 168 hours while ranking snapshots remain intact.
 
-The comparison research, model contract, and promotion criteria are documented in [Trend Intelligence v2 research and design](docs/research/trend-intelligence-v2.md).
+The base model and comparison research are documented in [Trend Intelligence v2 research and design](docs/research/trend-intelligence-v2.md); v3 adds the positive observed-star-growth gate.
 
 ```text
 Trending + Search + retained pool
@@ -180,7 +182,7 @@ npm run collect:events:remote -- --hour=2026-08-28T00:00:00.000Z --limit=5000
 
 Before starting the Oracle Compose stack, fill every required `.env.example` value and copy the Cloudflare Tunnel example with your own Tunnel ID and hostname.
 
-Compose runs PostgreSQL, PostgREST, the Node web server, and Cloudflare Tunnel. The web server serves the static UI, loads timeline metadata and only the selected snapshot from PostgREST, and forwards `/rpc/*` collection requests to the internal PostgREST service.
+Compose runs PostgreSQL, PostgREST, the Node web server, and Cloudflare Tunnel. The web server serves the static UI, loads timeline metadata and only the selected page or search result from PostgREST, and forwards `/rpc/*` collection requests to the internal PostgREST service.
 
 ```bash
 cp deploy/oracle/.env.example deploy/oracle/.env
@@ -216,7 +218,7 @@ Configure these GitHub Actions values:
 
 - This is a personal project with the public web app, API, and scheduled collector operating.
 - Star charts use only snapshots collected directly by this project, with no external data service.
-- Trend Intelligence v2 remains in shadow mode; the verified `baseline-v1` stays the default ranking.
+- Trend Intelligence v3 remains in shadow mode; the verified `baseline-v1` stays the default ranking.
 - This project is not affiliated with GitHub and remains subject to GitHub's trademarks and service terms.
 - The source repository is private and does not grant redistribution rights.
 
@@ -224,9 +226,9 @@ Configure these GitHub Actions values:
 
 - [ ] Time-sliced repository discovery backfill with explicit completeness states
 - [x] On-demand PostgREST snapshot reads from the public web UI
-- [ ] Remote database backup and snapshot retention policy
+- [x] Daily remote database backups, weekly restore drills, and indefinite snapshot retention
 - [x] First-party observed star growth charts without an external data service
-- [ ] Accuracy view comparing v2 predictions with actual outcomes after 24 and 72 hours
+- [ ] Accuracy view comparing v3 predictions with actual outcomes after 24 and 72 hours
 
 ---
 

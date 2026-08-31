@@ -1,10 +1,38 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  millisecondsUntilCollectionDue,
   parseCollectionContext,
+  parseCollectionSchedule,
   parseEventSignalContext,
   parseSnapshotTimeline,
   RemoteHistoryApi,
 } from "./remote-history.ts";
+
+describe("collection schedule", () => {
+  it("waits until the database-derived due time", () => {
+    const schedule = parseCollectionSchedule({
+      next_due_at: "2026-08-30T23:22:20.199Z",
+    });
+
+    expect(schedule).toEqual({ nextDueAt: "2026-08-30T23:22:20.199Z" });
+    expect(millisecondsUntilCollectionDue(
+      schedule,
+      new Date("2026-08-30T23:21:58.482Z"),
+    )).toBe(21_717);
+    expect(millisecondsUntilCollectionDue(
+      schedule,
+      new Date("2026-08-30T23:22:21.000Z"),
+    )).toBe(0);
+  });
+
+  it("rejects malformed schedule responses", () => {
+    expect(() => parseCollectionSchedule({ next_due_at: null })).toThrow("valid timestamp");
+    expect(() => millisecondsUntilCollectionDue(
+      { nextDueAt: "2026-08-30T23:22:20.199Z" },
+      new Date("invalid"),
+    )).toThrow("current time");
+  });
+});
 
 describe("parseCollectionContext", () => {
   it("parses persisted repository observations", () => {
@@ -197,6 +225,28 @@ describe("RemoteHistoryApi", () => {
         method: "POST",
         headers: expect.objectContaining({ Authorization: "Bearer collector-token" }),
       }),
+    );
+  });
+
+  it("reads the next collection time from PostgREST", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      next_due_at: "2026-08-30T23:22:20.199Z",
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    const api = new RemoteHistoryApi({
+      baseUrl: "https://radar.example.com",
+      collectorToken: "collector-token",
+      fetchImplementation: fetchMock as typeof fetch,
+    });
+
+    await expect(api.readCollectionSchedule()).resolves.toEqual({
+      nextDueAt: "2026-08-30T23:22:20.199Z",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://radar.example.com/rpc/collection_schedule",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 

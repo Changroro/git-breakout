@@ -6,11 +6,7 @@
     <meta name="description" content="GitHub 저장소의 성장 신호를 한눈에 확인하는 AI Trend Radar 랭킹입니다." />
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <script>
-      const savedTheme = localStorage.getItem("theme");
-      const systemTheme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-      document.documentElement.dataset.theme = savedTheme ?? systemTheme;
-    </script>
+    <script src="/theme-init.js"></script>
     <title>AI Trend Radar</title>
   </head>
   <body>
