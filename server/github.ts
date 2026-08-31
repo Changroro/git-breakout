@@ -1,11 +1,22 @@
 import { load } from "cheerio";
-import type { OfficialRanks, RepositoryMetrics } from "../src/lib/ranking.ts";
+import {
+  normalizeObservationSources,
+  type ObservationSource,
+  type OfficialRanks,
+  type RepositoryMetrics,
+} from "../src/lib/ranking.ts";
 
 export type TrendingPeriod = "daily" | "weekly" | "monthly";
 
 export type OfficialRepository = {
   fullName: string;
   ranks: OfficialRanks;
+  observationSources: ObservationSource[];
+};
+
+export type SearchedRepository = {
+  fullName: string;
+  observationSources: ObservationSource[];
 };
 
 export type GitHubRepositorySnapshot = {
@@ -15,6 +26,7 @@ export type GitHubRepositorySnapshot = {
   description: string | null;
   language: string | null;
   topics: string[];
+  observationSources: ObservationSource[];
   createdAt: string;
   pushedAt: string;
   metrics: RepositoryMetrics;
@@ -51,6 +63,12 @@ const GRAPHQL_BATCH_SIZE = 20;
 const SEARCH_PAGE_SIZE = 100;
 const SEARCH_RESULT_LIMIT = 1_000;
 const REQUEST_TIMEOUT_MS = 15_000;
+
+const PERIOD_SOURCES: Record<TrendingPeriod, ObservationSource> = {
+  daily: "official_daily",
+  weekly: "official_weekly",
+  monthly: "official_monthly",
+};
 
 function emptyRanks(): OfficialRanks {
   return { daily: null, weekly: null, monthly: null };
@@ -101,7 +119,11 @@ export function parseOfficialTrending(html: string, period: TrendingPeriod): Off
     seen.add(key);
     const ranks = emptyRanks();
     ranks[period] = repositories.length + 1;
-    repositories.push({ fullName, ranks });
+    repositories.push({
+      fullName,
+      ranks,
+      observationSources: [PERIOD_SOURCES[period]],
+    });
   });
 
   if (repositories.length === 0) {
@@ -131,12 +153,14 @@ function mergeOfficialRepositories(
   const merged = new Map<string, OfficialRepository>();
   periodResults.forEach((repositories) => {
     repositories.forEach((repository) => {
+      const incomingSources = normalizeObservationSources(repository.observationSources);
       const key = repository.fullName.toLowerCase();
       const existing = merged.get(key);
       if (existing === undefined) {
         merged.set(key, {
           fullName: repository.fullName,
           ranks: { ...repository.ranks },
+          observationSources: incomingSources,
         });
         return;
       }
@@ -146,6 +170,10 @@ function mergeOfficialRepositories(
           existing.ranks[period] = rank;
         }
       });
+      existing.observationSources = normalizeObservationSources([
+        ...existing.observationSources,
+        ...incomingSources,
+      ]);
     });
   });
   return [...merged.values()];
@@ -229,7 +257,7 @@ export async function searchGitHubRepositoryNames(
   token: string,
   capturedAt: string,
   fetchImplementation: typeof fetch = fetch,
-): Promise<string[]> {
+): Promise<SearchedRepository[]> {
   if (token.trim() === "") {
     throw new TypeError("GITHUB_TOKEN is required");
   }
@@ -239,39 +267,88 @@ export async function searchGitHubRepositoryNames(
   }
   const createdAfter = new Date(capturedTimestamp - 7 * 86_400_000).toISOString();
   const pushedAfter = new Date(capturedTimestamp - 86_400_000).toISOString();
-  const names = [
-    ...await searchRepositoryNames(`created:>=${createdAfter}`, token, fetchImplementation),
-    ...await searchRepositoryNames(`pushed:>=${pushedAfter}`, token, fetchImplementation),
+  const createdNames = await searchRepositoryNames(
+    `created:>=${createdAfter}`,
+    token,
+    fetchImplementation,
+  );
+  const pushedNames = await searchRepositoryNames(
+    `pushed:>=${pushedAfter}`,
+    token,
+    fetchImplementation,
+  );
+  const discoveries: SearchedRepository[] = [
+    ...createdNames.map((fullName) => ({
+      fullName,
+      observationSources: ["github_search_created" as const],
+    })),
+    ...pushedNames.map((fullName) => ({
+      fullName,
+      observationSources: ["github_search_pushed" as const],
+    })),
   ];
-  const seen = new Set<string>();
-  return names.filter((name) => {
-    const key = name.toLowerCase();
-    if (seen.has(key)) {
-      return false;
+  const merged = new Map<string, SearchedRepository>();
+  discoveries.forEach((repository) => {
+    const key = repository.fullName.toLowerCase();
+    const existing = merged.get(key);
+    if (existing === undefined) {
+      merged.set(key, {
+        fullName: repository.fullName,
+        observationSources: normalizeObservationSources(repository.observationSources),
+      });
+      return;
     }
-    seen.add(key);
-    return true;
+    const incomingSources = normalizeObservationSources(repository.observationSources);
+    existing.observationSources = normalizeObservationSources([
+      ...existing.observationSources,
+      ...incomingSources,
+    ]);
   });
+  return [...merged.values()];
 }
 
 function mergeRepositoryCandidates(
   official: readonly OfficialRepository[],
-  searchedNames: readonly string[],
-  previouslyObservedNames: readonly string[],
+  searched: readonly SearchedRepository[],
+  retainedRepositoryNames: readonly string[],
+  ghArchiveRepositoryNames: readonly string[],
 ): OfficialRepository[] {
   const merged = new Map<string, OfficialRepository>();
   official.forEach((repository) => {
     merged.set(repository.fullName.toLowerCase(), {
       fullName: repository.fullName,
       ranks: { ...repository.ranks },
+      observationSources: normalizeObservationSources(repository.observationSources),
     });
   });
-  [...searchedNames, ...previouslyObservedNames].forEach((fullName) => {
-    validateFullName(fullName);
-    const key = fullName.toLowerCase();
-    if (!merged.has(key)) {
-      merged.set(key, { fullName, ranks: emptyRanks() });
+  const discoveries: SearchedRepository[] = [
+    ...searched,
+    ...retainedRepositoryNames.map((fullName) => ({
+      fullName,
+      observationSources: ["retained" as const],
+    })),
+    ...ghArchiveRepositoryNames.map((fullName) => ({
+      fullName,
+      observationSources: ["gh_archive" as const],
+    })),
+  ];
+  discoveries.forEach((repository) => {
+    validateFullName(repository.fullName);
+    const incomingSources = normalizeObservationSources(repository.observationSources);
+    const key = repository.fullName.toLowerCase();
+    const existing = merged.get(key);
+    if (existing === undefined) {
+      merged.set(key, {
+        fullName: repository.fullName,
+        ranks: emptyRanks(),
+        observationSources: incomingSources,
+      });
+      return;
     }
+    existing.observationSources = normalizeObservationSources([
+      ...existing.observationSources,
+      ...incomingSources,
+    ]);
   });
   return [...merged.values()];
 }
@@ -345,10 +422,17 @@ function mergeCanonicalMetadata(
 ): GitHubRepositorySnapshot[] {
   const merged = new Map<string, GitHubRepositorySnapshot>();
   repositories.forEach((repository) => {
+    const incomingSources = normalizeObservationSources(repository.observationSources);
     const key = repository.fullName.toLowerCase();
     const existing = merged.get(key);
     if (existing === undefined) {
-      merged.set(key, { ...repository, officialRanks: { ...repository.officialRanks } });
+      merged.set(key, {
+        ...repository,
+        topics: [...repository.topics],
+        observationSources: incomingSources,
+        officialRanks: { ...repository.officialRanks },
+        metrics: { ...repository.metrics },
+      });
       return;
     }
     PERIODS.forEach((period) => {
@@ -361,6 +445,10 @@ function mergeCanonicalMetadata(
         existing.officialRanks[period] = incomingRank;
       }
     });
+    existing.observationSources = normalizeObservationSources([
+      ...existing.observationSources,
+      ...incomingSources,
+    ]);
   });
   return [...merged.values()];
 }
@@ -430,6 +518,7 @@ async function fetchMetadataBatch(
       description: metadata.description,
       language: metadata.primaryLanguage?.name ?? null,
       topics: metadata.repositoryTopics.nodes.map(({ topic }) => topic.name),
+      observationSources: normalizeObservationSources(repository.observationSources),
       createdAt: metadata.createdAt,
       pushedAt: metadata.pushedAt,
       metrics: {
@@ -467,12 +556,14 @@ export async function fetchGitHubTrendingRepositories(
 export async function fetchGitHubRepositories({
   token,
   capturedAt,
-  previouslyObservedNames,
+  retainedRepositoryNames,
+  ghArchiveRepositoryNames,
   fetchImplementation = fetch,
 }: {
   token: string;
   capturedAt: string;
-  previouslyObservedNames: readonly string[];
+  retainedRepositoryNames: readonly string[];
+  ghArchiveRepositoryNames: readonly string[];
   fetchImplementation?: typeof fetch;
 }): Promise<GitHubRepositorySnapshot[]> {
   if (token.trim() === "") {
@@ -482,8 +573,13 @@ export async function fetchGitHubRepositories({
     throw new TypeError("capturedAt must be a valid ISO-8601 timestamp");
   }
   const official = await fetchOfficialRepositories(fetchImplementation);
-  const searchedNames = await searchGitHubRepositoryNames(token, capturedAt, fetchImplementation);
-  const candidates = mergeRepositoryCandidates(official, searchedNames, previouslyObservedNames);
+  const searched = await searchGitHubRepositoryNames(token, capturedAt, fetchImplementation);
+  const candidates = mergeRepositoryCandidates(
+    official,
+    searched,
+    retainedRepositoryNames,
+    ghArchiveRepositoryNames,
+  );
   const metadata: GitHubRepositorySnapshot[] = [];
   for (let start = 0; start < candidates.length; start += GRAPHQL_BATCH_SIZE) {
     metadata.push(

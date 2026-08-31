@@ -283,7 +283,7 @@ export function createWebServer(
           topic: requestUrl.searchParams.get("topic"),
           view: requireRankingView(requestUrl),
         });
-        sendJson(response, 200, ranking, "public, max-age=31536000, immutable");
+        sendJson(response, 200, ranking, "no-store");
       } catch (error) {
         sendJson(response, error instanceof TypeError || error instanceof RangeError ? 400 : 502, {
           error: errorMessage(error),

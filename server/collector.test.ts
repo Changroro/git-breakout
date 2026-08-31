@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { calculateGrowth, millisecondsUntilNextCollection } from "./collector.ts";
+import type { ObservationSource } from "../src/lib/ranking.ts";
+import {
+  calculateGrowth,
+  createRepositoryCandidate,
+  millisecondsUntilNextCollection,
+} from "./collector.ts";
 
 describe("calculateGrowth", () => {
   it("uses matching historical observations without inventing a one-hour window", () => {
@@ -53,6 +58,38 @@ describe("calculateGrowth", () => {
       observedStarsPerDay: null,
       firstObservation: true,
     });
+  });
+});
+
+describe("createRepositoryCandidate", () => {
+  it("preserves and clones observation sources", () => {
+    const repository = {
+      fullName: "owner/repository",
+      url: "https://github.com/owner/repository",
+      openGraphImageUrl: "https://opengraph.githubassets.com/test/owner/repository",
+      description: "Repository",
+      language: "TypeScript",
+      topics: ["ai"],
+      observationSources: [
+        "gh_archive",
+        "github_search_created",
+        "gh_archive",
+      ] as ObservationSource[],
+      createdAt: "2026-08-01T00:00:00.000Z",
+      pushedAt: "2026-08-25T00:00:00.000Z",
+      metrics: { stars: 10, forks: 2, watchers: 10, open_issues: 1 },
+      officialRanks: { daily: null, weekly: null, monthly: null },
+    };
+
+    const candidate = createRepositoryCandidate(
+      repository,
+      "2026-08-25T00:00:00.000Z",
+      [],
+      120,
+    );
+
+    expect(candidate.observation_sources).toEqual(["github_search_created", "gh_archive"]);
+    expect(candidate.observation_sources).not.toBe(repository.observationSources);
   });
 });
 

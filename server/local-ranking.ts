@@ -11,8 +11,23 @@ import {
 } from "../src/lib/repository-filters.ts";
 import { searchRepositories } from "../src/lib/repository-search.ts";
 import { trendIntelligenceFor } from "../src/lib/trend-intelligence.ts";
+import type { TrackRecord } from "../src/lib/discovery-track-record.ts";
 
 const MAX_TOPIC_FACETS = 500;
+
+function emptyTrackRecord(generatedAt: string): TrackRecord {
+  return {
+    schema_version: "1.0",
+    evidence_started_at: null,
+    generated_at: generatedAt,
+    verified_count: 0,
+    median_lead_hours: null,
+    conversion_7d: { converted: 0, eligible: 0, rate: null },
+    conversion_14d: { converted: 0, eligible: 0, rate: null },
+    period_hits: { daily: 0, weekly: 0, monthly: 0 },
+    recent_hits: [],
+  };
+}
 
 function repositoriesForView(
   snapshot: RankingSnapshot,
@@ -88,7 +103,19 @@ export function buildLocalRankingPage({
     ),
     languages: facets.languages,
     topics: boundedTopics(facets.topics, filters.topic),
-    repositories: candidates.slice(start, start + pageSize),
+    track_record: emptyTrackRecord(snapshot.captured_at),
+    repositories: candidates.slice(start, start + pageSize).map((repository) => ({
+      ...repository,
+      discovery_evidence: {
+        outcome: "legacy",
+        first_observed_at: null,
+        first_trending_daily_at: null,
+        first_trending_daily_rank: null,
+        lead_hours: null,
+        sources: null,
+        coverage: "unknown",
+      },
+    })),
   };
 }
 

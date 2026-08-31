@@ -460,6 +460,9 @@ export function rankTrendIntelligence(
     return {
       ...row.repository,
       topics: [...row.repository.topics],
+      observation_sources: row.repository.observation_sources === null
+        ? null
+        : [...row.repository.observation_sources],
       metrics: { ...row.repository.metrics },
       official_ranks: { ...row.repository.official_ranks },
       growth: { ...row.repository.growth },

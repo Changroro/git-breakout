@@ -1,4 +1,10 @@
-import type { RankedRepository } from "./ranking.ts";
+import { normalizeObservationSources, type RankedRepository } from "./ranking.js";
+import {
+  parseDiscoveryEvidence,
+  parseTrackRecord,
+  type DiscoveryEvidence,
+  type TrackRecord,
+} from "./discovery-track-record.js";
 
 export type RankingSnapshot = {
   id: string;
@@ -27,6 +33,10 @@ export type RepositoryFacet = {
   count: number;
 };
 
+export type RankingPageRepository = RankedRepository & {
+  discovery_evidence: DiscoveryEvidence;
+};
+
 export type RankingPageResponse = Omit<RankingSnapshot, "repositories"> & {
   schema_version: "1.0";
   repository_count: number;
@@ -34,9 +44,10 @@ export type RankingPageResponse = Omit<RankingSnapshot, "repositories"> & {
   page: number;
   page_size: number;
   intelligence_available: boolean;
+  track_record: TrackRecord;
   languages: RepositoryFacet[];
   topics: RepositoryFacet[];
-  repositories: RankedRepository[];
+  repositories: RankingPageRepository[];
 };
 
 export type RepositorySearchResponse = {
@@ -54,7 +65,7 @@ export function parseHistoryResponse(value: unknown): HistoryResponse {
     throw new TypeError("History response does not match schema version 1.0");
   }
 
-  value.snapshots.forEach((snapshot, index) => {
+  const snapshots = value.snapshots.map((snapshot, index) => {
     if (
       !isRecord(snapshot) ||
       typeof snapshot.id !== "string" ||
@@ -65,7 +76,7 @@ export function parseHistoryResponse(value: unknown): HistoryResponse {
     ) {
       throw new TypeError(`History snapshot ${index} is invalid`);
     }
-    snapshot.repositories.forEach((repository, repositoryIndex) => {
+    const repositories = snapshot.repositories.map((repository, repositoryIndex) => {
       if (
         !isRecord(repository) ||
         typeof repository.open_graph_image_url !== "string" ||
@@ -75,10 +86,20 @@ export function parseHistoryResponse(value: unknown): HistoryResponse {
           `History snapshot ${index} repository ${repositoryIndex} has an invalid Open Graph image`,
         );
       }
+      return {
+        ...repository,
+        observation_sources: repository.observation_sources === null
+          ? null
+          : normalizeObservationSources(
+            repository.observation_sources,
+            `History snapshot ${index} repository ${repositoryIndex} observation_sources`,
+          ),
+      } as unknown as RankedRepository;
     });
+    return { ...snapshot, repositories } as RankingSnapshot;
   });
 
-  return value as HistoryResponse;
+  return { schema_version: "1.0", snapshots };
 }
 
 export function parseTimelineResponse(value: unknown): TimelineResponse {
@@ -188,14 +209,26 @@ export function parseRankingPageResponse(value: unknown): RankingPageResponse {
   if (typeof value.intelligence_available !== "boolean") {
     throw new TypeError("intelligence_available must be boolean");
   }
+  const repositories = metadata.repositories.map((repository, index) => {
+    const payload = repository as RankedRepository & { discovery_evidence?: unknown };
+    return {
+      ...repository,
+      discovery_evidence: parseDiscoveryEvidence(
+        payload.discovery_evidence,
+        `repositories[${index}].discovery_evidence`,
+      ),
+    };
+  });
   return {
     schema_version: "1.0",
     ...metadata,
+    repositories,
     repository_count: repositoryCount,
     matching_count: matchingCount,
     page,
     page_size: pageSize,
     intelligence_available: value.intelligence_available,
+    track_record: parseTrackRecord(value.track_record),
     languages: parseFacets(value.languages, "languages"),
     topics: parseFacets(value.topics, "topics"),
   };
