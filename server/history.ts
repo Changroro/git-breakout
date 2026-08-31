@@ -122,7 +122,7 @@ export class HistoryDatabase {
       )
       VALUES (1, 120, 14, 7, 30, 1000, '2026-08-25T00:00:00.000Z')
     `).run();
-    this.migrateLegacyOpenGraphImages();
+    this.migrateLegacyRepositoryPayloads();
   }
 
   private migrateCollectorRetentionSettings(): void {
@@ -150,7 +150,7 @@ export class HistoryDatabase {
     `).run();
   }
 
-  private migrateLegacyOpenGraphImages(): void {
+  private migrateLegacyRepositoryPayloads(): void {
     const rows = this.database.prepare(`
       SELECT snapshot_id, full_name, payload_json
       FROM ranking_snapshot_repositories
@@ -163,15 +163,22 @@ export class HistoryDatabase {
     this.database.transaction(() => {
       rows.forEach((row) => {
         const repository = JSON.parse(row.payload_json) as Record<string, unknown>;
-        if (typeof repository.open_graph_image_url === "string") {
-          return;
+        let changed = false;
+        if (typeof repository.open_graph_image_url !== "string") {
+          const segments = row.full_name.split("/");
+          if (segments.length !== 2 || segments.some((segment) => segment === "")) {
+            throw new TypeError(`Stored repository ${row.full_name} must use owner/name format`);
+          }
+          repository.open_graph_image_url = `https://opengraph.githubassets.com/legacy-v1/${segments.map(encodeURIComponent).join("/")}`;
+          changed = true;
         }
-        const segments = row.full_name.split("/");
-        if (segments.length !== 2 || segments.some((segment) => segment === "")) {
-          throw new TypeError(`Stored repository ${row.full_name} must use owner/name format`);
+        if (!Object.hasOwn(repository, "observation_sources")) {
+          repository.observation_sources = null;
+          changed = true;
         }
-        repository.open_graph_image_url = `https://opengraph.githubassets.com/legacy-v1/${segments.map(encodeURIComponent).join("/")}`;
-        update.run(JSON.stringify(repository), row.snapshot_id, row.full_name);
+        if (changed) {
+          update.run(JSON.stringify(repository), row.snapshot_id, row.full_name);
+        }
       });
     })();
   }

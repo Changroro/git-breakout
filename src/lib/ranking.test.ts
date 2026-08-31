@@ -11,6 +11,7 @@ function candidate(overrides: Partial<RepositoryCandidate> = {}): RepositoryCand
     description: "AI trend radar",
     language: "TypeScript",
     topics: ["ai"],
+    observation_sources: ["official_daily", "github_search_pushed"],
     created_at: "2026-08-15T00:00:00.000Z",
     pushed_at: "2026-08-24T00:00:00.000Z",
     metrics: {
@@ -114,6 +115,30 @@ describe("rankRepositories", () => {
     ], capturedAt)).toThrow("open_graph_image_url must be a valid HTTPS URL");
   });
 
+  it("rejects missing and invalid observation sources", () => {
+    const missing = candidate() as Partial<RepositoryCandidate>;
+    delete missing.observation_sources;
+    expect(() => rankRepositories([
+      missing as RepositoryCandidate,
+    ], capturedAt)).toThrow("observation_sources must be a non-empty array");
+    expect(() => rankRepositories([
+      candidate({ observation_sources: [] }),
+    ], capturedAt)).toThrow("observation_sources must be a non-empty array");
+    expect(() => rankRepositories([
+      candidate({ observation_sources: ["unknown"] as never }),
+    ], capturedAt)).toThrow("observation_sources contains an invalid observation source");
+  });
+
+  it("normalizes observation sources in deterministic order", () => {
+    const [ranked] = rankRepositories([
+      candidate({
+        observation_sources: ["retained", "official_daily", "retained", "gh_archive"],
+      }),
+    ], capturedAt);
+
+    expect(ranked.observation_sources).toEqual(["official_daily", "gh_archive", "retained"]);
+  });
+
   it("breaks equal scores by full_name", () => {
     const first = candidate({ full_name: "zeta/radar", url: "https://github.com/zeta/radar" });
     const second = candidate({ full_name: "alpha/radar", url: "https://github.com/alpha/radar" });
@@ -135,6 +160,7 @@ describe("rankRepositories", () => {
     expect(ranked.metrics).not.toBe(input.metrics);
     expect(ranked.growth).not.toBe(input.growth);
     expect(ranked.topics).not.toBe(input.topics);
+    expect(ranked.observation_sources).not.toBe(input.observation_sources);
   });
 
   it("returns the same ranking for repeated calls at the same captured time", () => {

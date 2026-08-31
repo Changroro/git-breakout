@@ -50,7 +50,8 @@ try {
   const repositories = await fetchGitHubRepositories({
     token: githubToken,
     capturedAt: startedAt,
-    previouslyObservedNames: [...retainedRepositoryNames, ...eventRepositoryNames],
+    retainedRepositoryNames,
+    ghArchiveRepositoryNames: eventRepositoryNames,
   });
   const capturedAt = new Date().toISOString();
   const candidates = repositories.map((repository) => createRepositoryCandidate(

@@ -5,6 +5,27 @@ const snapshotId = "11111111-1111-4111-8111-111111111111";
 const repository = {
   full_name: "owner/repository",
   open_graph_image_url: "https://opengraph.githubassets.com/example/owner/repository",
+  observation_sources: null,
+};
+const trackRecord = {
+  schema_version: "1.0",
+  evidence_started_at: null,
+  generated_at: "2026-08-27T01:17:00.000Z",
+  verified_count: 0,
+  median_lead_hours: null,
+  conversion_7d: { converted: 0, eligible: 0, rate: null },
+  conversion_14d: { converted: 0, eligible: 0, rate: null },
+  period_hits: { daily: 0, weekly: 0, monthly: 0 },
+  recent_hits: [],
+};
+const discoveryEvidence = {
+  outcome: "legacy",
+  first_observed_at: null,
+  first_trending_daily_at: null,
+  first_trending_daily_rank: null,
+  lead_hours: null,
+  sources: null,
+  coverage: "unknown",
 };
 
 describe("PublicHistoryApi", () => {
@@ -84,9 +105,10 @@ describe("PublicHistoryApi", () => {
       page: 2,
       page_size: 10,
       intelligence_available: true,
+      track_record: trackRecord,
       languages: [{ value: "typescript", label: "TypeScript", count: 100 }],
       topics: [{ value: "ai", label: "ai", count: 80 }],
-      repositories: [repository],
+      repositories: [{ ...repository, discovery_evidence: discoveryEvidence }],
     };
     const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(
       JSON.stringify(response),

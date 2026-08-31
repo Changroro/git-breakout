@@ -10,6 +10,18 @@ export const BASELINE_V1_WEIGHTS = {
 
 export type Confidence = "low" | "medium" | "high";
 
+export const OBSERVATION_SOURCES = [
+  "official_daily",
+  "official_weekly",
+  "official_monthly",
+  "github_search_created",
+  "github_search_pushed",
+  "gh_archive",
+  "retained",
+] as const;
+
+export type ObservationSource = typeof OBSERVATION_SOURCES[number];
+
 export interface RepositoryMetrics {
   stars: number | null;
   forks: number | null;
@@ -36,6 +48,7 @@ export interface RepositoryCandidate {
   description: string | null;
   language: string | null;
   topics: string[];
+  observation_sources: ObservationSource[];
   created_at: string | null;
   pushed_at: string | null;
   metrics: RepositoryMetrics;
@@ -43,6 +56,23 @@ export interface RepositoryCandidate {
   growth: RepositoryGrowth;
   observedStarsPerDay: number | null;
   firstObservation: boolean;
+}
+
+export function normalizeObservationSources(
+  value: unknown,
+  field = "observation_sources",
+): ObservationSource[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError(`${field} must be a non-empty array`);
+  }
+  const allowed = new Set<string>(OBSERVATION_SOURCES);
+  value.forEach((source) => {
+    if (typeof source !== "string" || !allowed.has(source)) {
+      throw new TypeError(`${field} contains an invalid observation source`);
+    }
+  });
+  const present = new Set(value as ObservationSource[]);
+  return OBSERVATION_SOURCES.filter((source) => present.has(source));
 }
 
 export interface ScoreComponents {
@@ -59,7 +89,8 @@ export interface ScoreComponents {
   metric_completeness: number;
 }
 
-export interface RankedRepository extends RepositoryCandidate {
+export interface RankedRepository extends Omit<RepositoryCandidate, "observation_sources"> {
+  observation_sources: ObservationSource[] | null;
   rank: number;
   momentum: {
     score: number;
@@ -158,6 +189,7 @@ function scoreCandidate(candidate: RepositoryCandidate, capturedAt: number): Ran
   validateNullableMetric(candidate.growth.stars_delta_1h, "growth.stars_delta_1h");
   validateNullableMetric(candidate.growth.stars_delta_6h, "growth.stars_delta_6h");
   validateNullableMetric(candidate.growth.stars_delta_24h, "growth.stars_delta_24h");
+  const observationSources = normalizeObservationSources(candidate.observation_sources);
 
   if (candidate.firstObservation) {
     if (candidate.observedStarsPerDay !== null) {
@@ -219,6 +251,7 @@ function scoreCandidate(candidate: RepositoryCandidate, capturedAt: number): Ran
   return {
     ...candidate,
     topics: [...candidate.topics],
+    observation_sources: observationSources,
     metrics: { ...candidate.metrics },
     official_ranks: { ...candidate.official_ranks },
     growth: { ...candidate.growth },

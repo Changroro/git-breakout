@@ -19,6 +19,7 @@ services:
       - ./db/init.sh:/docker-entrypoint-initdb.d/01-init.sh:ro
       - ./db/schema.sql:/opt/trend-radar/schema.sql:ro
       - ./db/migrations/006_operational_hardening.sql:/opt/trend-radar/migrations/006_operational_hardening.sql:ro
+      - ./db/migrations/007_discovery_track_record.sql:/opt/trend-radar/migrations/007_discovery_track_record.sql:ro
     networks:
       - internal
 

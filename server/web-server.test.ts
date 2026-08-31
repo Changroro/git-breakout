@@ -56,10 +56,11 @@ describe("createWebServer", () => {
     });
   });
 
-  it("serves immutable ranking pages and bounded search results", async () => {
+  it("does not cache mutable ranking pages and serves bounded search results", async () => {
     const repository = {
       full_name: "owner/repository",
       open_graph_image_url: "https://opengraph.githubassets.com/example/owner/repository",
+      observation_sources: null,
     };
     const fetchImplementation = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -72,9 +73,31 @@ describe("createWebServer", () => {
         page: 1,
         page_size: 10,
         intelligence_available: true,
+        track_record: {
+          schema_version: "1.0",
+          evidence_started_at: null,
+          generated_at: "2026-08-27T01:17:00.000Z",
+          verified_count: 0,
+          median_lead_hours: null,
+          conversion_7d: { converted: 0, eligible: 0, rate: null },
+          conversion_14d: { converted: 0, eligible: 0, rate: null },
+          period_hits: { daily: 0, weekly: 0, monthly: 0 },
+          recent_hits: [],
+        },
         languages: [{ value: "typescript", label: "TypeScript", count: 1 }],
         topics: [{ value: "ai", label: "ai", count: 1 }],
-        repositories: [repository],
+        repositories: [{
+          ...repository,
+          discovery_evidence: {
+            outcome: "legacy",
+            first_observed_at: null,
+            first_trending_daily_at: null,
+            first_trending_daily_rank: null,
+            lead_hours: null,
+            sources: null,
+            coverage: "unknown",
+          },
+        }],
       }), { headers: { "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         schema_version: "1.0",
@@ -91,7 +114,7 @@ describe("createWebServer", () => {
       `${baseUrl}/api/ranking?snapshot=${snapshotId}&page=1&page_size=10&view=momentum`,
     );
     expect(ranking.status).toBe(200);
-    expect(ranking.headers.get("cache-control")).toContain("immutable");
+    expect(ranking.headers.get("cache-control")).toBe("no-store");
     expect((await ranking.json() as { repositories: unknown[] }).repositories).toHaveLength(1);
     const search = await fetch(
       `${baseUrl}/api/search?snapshot=${snapshotId}&query=owner&limit=10`,
@@ -117,6 +140,7 @@ describe("createWebServer", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify([{
         full_name: "owner/repository",
         open_graph_image_url: "https://opengraph.githubassets.com/example/owner/repository",
+        observation_sources: null,
       }]), { headers: { "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         schema_version: "1.0",

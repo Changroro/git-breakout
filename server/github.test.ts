@@ -38,8 +38,16 @@ describe("GitHub collection", () => {
     const html = `<a href="/settings">Settings</a>${trendingHtml(["alpha/one", "beta/two"])}`;
 
     expect(parseOfficialTrending(html, "daily")).toEqual([
-      { fullName: "alpha/one", ranks: { daily: 1, weekly: null, monthly: null } },
-      { fullName: "beta/two", ranks: { daily: 2, weekly: null, monthly: null } },
+      {
+        fullName: "alpha/one",
+        ranks: { daily: 1, weekly: null, monthly: null },
+        observationSources: ["official_daily"],
+      },
+      {
+        fullName: "beta/two",
+        ranks: { daily: 2, weekly: null, monthly: null },
+        observationSources: ["official_daily"],
+      },
     ]);
   });
 
@@ -98,6 +106,11 @@ describe("GitHub collection", () => {
       { daily: 2, weekly: 1, monthly: null },
       { daily: null, weekly: 2, monthly: 1 },
     ]);
+    expect(repositories.map((repository) => repository.observationSources)).toEqual([
+      ["official_daily", "official_monthly"],
+      ["official_daily", "official_weekly"],
+      ["official_weekly", "official_monthly"],
+    ]);
   });
 
   it("searches new and recently pushed repositories with pagination", async () => {
@@ -116,13 +129,21 @@ describe("GitHub collection", () => {
       });
     });
 
-    const names = await searchGitHubRepositoryNames(
+    const repositories = await searchGitHubRepositoryNames(
       "github-token",
       "2026-08-26T12:00:00.000Z",
       fetchMock as typeof fetch,
     );
 
-    expect(names).toHaveLength(202);
+    expect(repositories).toHaveLength(202);
+    expect(repositories[0]).toEqual({
+      fullName: "new/repository-1",
+      observationSources: ["github_search_created"],
+    });
+    expect(repositories[101]).toEqual({
+      fullName: "active/repository-1",
+      observationSources: ["github_search_pushed"],
+    });
     expect(requests).toHaveLength(4);
     expect(requests.map((request) => request.searchParams.get("page"))).toEqual([
       "1",
@@ -139,7 +160,7 @@ describe("GitHub collection", () => {
     expect(requests.every((request) => request.searchParams.get("per_page") === "100")).toBe(true);
   });
 
-  it("merges official, searched, and previously observed repositories", async () => {
+  it("merges official, search, retained, and GH Archive sources", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
       if (url.startsWith("https://github.com/trending")) {
@@ -171,7 +192,8 @@ describe("GitHub collection", () => {
     const repositories = await fetchGitHubRepositories({
       token: "github-token",
       capturedAt: "2026-08-26T12:00:00.000Z",
-      previouslyObservedNames: ["delta/four", "BETA/TWO"],
+      retainedRepositoryNames: ["delta/four", "BETA/TWO"],
+      ghArchiveRepositoryNames: ["gamma/three", "epsilon/five"],
       fetchImplementation: fetchMock as typeof fetch,
     });
 
@@ -180,11 +202,19 @@ describe("GitHub collection", () => {
       "beta/two",
       "gamma/three",
       "delta/four",
+      "epsilon/five",
     ]);
     expect(repositories[0].officialRanks).toEqual({ daily: 1, weekly: 1, monthly: 1 });
     expect(repositories.slice(1).every((repository) =>
       Object.values(repository.officialRanks).every((rank) => rank === null)
     )).toBe(true);
+    expect(repositories.map((repository) => repository.observationSources)).toEqual([
+      ["official_daily", "official_weekly", "official_monthly", "github_search_created"],
+      ["github_search_created", "github_search_pushed", "retained"],
+      ["github_search_pushed", "gh_archive"],
+      ["retained"],
+      ["gh_archive"],
+    ]);
   });
 
   it("uses the canonical repository name returned after a rename", async () => {
@@ -215,13 +245,21 @@ describe("GitHub collection", () => {
     const repositories = await fetchGitHubRepositories({
       token: "github-token",
       capturedAt: "2026-08-26T12:00:00.000Z",
-      previouslyObservedNames: [],
+      retainedRepositoryNames: [],
+      ghArchiveRepositoryNames: [],
       fetchImplementation: fetchMock as typeof fetch,
     });
 
     expect(repositories).toHaveLength(1);
     expect(repositories[0].fullName).toBe("new-owner/new-name");
     expect(repositories[0].officialRanks).toEqual({ daily: 1, weekly: 1, monthly: 1 });
+    expect(repositories[0].observationSources).toEqual([
+      "official_daily",
+      "official_weekly",
+      "official_monthly",
+      "github_search_created",
+      "github_search_pushed",
+    ]);
   });
 
   it("excludes a repository that disappears after search", async () => {
@@ -264,7 +302,8 @@ describe("GitHub collection", () => {
     const repositories = await fetchGitHubRepositories({
       token: "github-token",
       capturedAt: "2026-08-26T12:00:00.000Z",
-      previouslyObservedNames: [],
+      retainedRepositoryNames: [],
+      ghArchiveRepositoryNames: [],
       fetchImplementation: fetchMock as typeof fetch,
     });
 
