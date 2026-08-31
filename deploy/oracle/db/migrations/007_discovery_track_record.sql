@@ -685,6 +685,7 @@ begin
     payload_json || jsonb_build_object(
       'discovery_evidence', jsonb_build_object(
         'outcome', case
+          when first_observation_sources is null then 'legacy'
           when first_official_daily_at = first_observed_at then 'already_trending'
           when not eligible then 'legacy'
           when coverage_gap then 'inconclusive'
