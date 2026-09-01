@@ -105,7 +105,7 @@ type RepositorySearchState =
   | { status: "ready"; requestKey: string; response: RepositorySearchResponse }
   | { status: "error"; requestKey: string; message: string };
 
-export type FooterTrafficState =
+export type TrafficState =
   | { status: "loading" }
   | { status: "ready"; visits: number }
   | { status: "unavailable" };
@@ -219,7 +219,21 @@ function ThemeButton() {
   );
 }
 
-function LanguageSwitcher({
+function LanguageGlobeIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="language-globe"
+      fill="none"
+      viewBox="0 0 24 24"
+    >
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M3.75 12h16.5M12 3.5c2.2 2.3 3.3 5.13 3.3 8.5S14.2 18.2 12 20.5M12 3.5C9.8 5.8 8.7 8.63 8.7 12s1.1 6.2 3.3 8.5" />
+    </svg>
+  );
+}
+
+export function LanguageSwitcher({
   locale,
   onChange,
 }: {
@@ -229,23 +243,23 @@ function LanguageSwitcher({
   const { t } = useI18n();
   return (
     <div className="language-switcher" role="group" aria-label={t("language.label")}>
+      <LanguageGlobeIcon />
       <button
         aria-pressed={locale === "ko"}
         className={locale === "ko" ? "language-option-active" : ""}
         onClick={() => onChange("ko")}
         type="button"
       >
-        <span className="language-option-wide">{t("language.korean")}</span>
-        <span className="language-option-compact">KO</span>
+        ko
       </button>
+      <span aria-hidden="true" className="language-divider" />
       <button
         aria-pressed={locale === "en"}
         className={locale === "en" ? "language-option-active" : ""}
         onClick={() => onChange("en")}
         type="button"
       >
-        <span className="language-option-wide">EN</span>
-        <span className="language-option-compact">EN</span>
+        en
       </button>
     </div>
   );
@@ -368,12 +382,25 @@ function useRepositoryStarSeries(
   return state.requestKey === requestKey ? state : { status: "loading", requestKey };
 }
 
+export function RepositoryThumbnailFallback({ repositoryName }: { repositoryName: string }) {
+  const { t } = useI18n();
+  return (
+    <span
+      aria-label={t("repository.previewFallback", { name: repositoryName })}
+      className="repository-thumbnail repository-thumbnail-error"
+      role="img"
+    >
+      <MarkGithubIcon aria-hidden="true" size={28} />
+    </span>
+  );
+}
+
 function RepositoryCardThumbnail({ repository }: { repository: RankedRepository }) {
   const [failed, setFailed] = useState(false);
   const { t } = useI18n();
 
   if (failed) {
-    return <span className="repository-thumbnail repository-thumbnail-error">{t("repository.previewUnavailable")}</span>;
+    return <RepositoryThumbnailFallback repositoryName={repository.full_name} />;
   }
 
   return <img
@@ -1294,26 +1321,26 @@ function MethodologyDialog({
               <section>
                 <h3>검증된 사전 발굴</h3>
                 <p>
-                  GitHub Trending Daily를 주 검증 기준으로 사용하고 Weekly와 Monthly 진입은 별도로 기록합니다.
-                  수집 주기가 2시간이므로 선행시간은 Radar의 최초 관측과 Trending 최초 관측 사이의 간격이며,
-                  GitHub가 저장소를 추가한 정확한 시각을 뜻하지 않습니다.
+                  GitHub 일간 트렌딩을 주 검증 기준으로 삼고 주간·월간 트렌딩 진입은 별도로 기록합니다.
+                  수집 주기가 2시간이므로 선행 시간은 AI Trend Radar와 GitHub Trending에서 각각 처음 관측한
+                  시점의 간격입니다. GitHub가 저장소를 추가한 정확한 시각과는 다를 수 있습니다.
                 </p>
                 <p>
-                  후보는 공식 Trending, 새로 생성되거나 최근 푸시된 저장소를 찾는 GitHub Search,
-                  GH Archive 활동과 기존 관측 풀에서 가져옵니다. 최초 관측 출처가 Search 또는 GH Archive로
-                  입증된 저장소만 사전 발굴 검증 대상에 포함합니다.
+                  후보는 공식 Trending과 GitHub Search, GH Archive 활동, 기존 관측 목록에서 찾습니다.
+                  GitHub Search는 새로 생성되거나 최근 푸시된 저장소를 찾는 데 사용합니다. 최초 관측 출처가
+                  GitHub Search나 GH Archive로 확인된 저장소만 사전 발굴 검증 대상에 포함합니다.
                 </p>
                 <ul>
-                  <li><strong>검증됨:</strong> Daily 밖에서 먼저 관측한 뒤 Daily에서 관측된 경우입니다.</li>
+                  <li><strong>검증 완료:</strong> 일간 트렌딩에 오르기 전에 먼저 관측한 경우입니다.</li>
                   <li><strong>평가 중:</strong> 아직 14일 평가 기간 안에 있습니다.</li>
-                  <li><strong>미진입:</strong> 수집 공백 없이 14일이 지났지만 Daily에서 관측되지 않았습니다.</li>
+                  <li><strong>미진입:</strong> 수집 공백 없이 14일이 지났지만 일간 트렌딩에서 관측되지 않았습니다.</li>
                   <li><strong>판단 불가:</strong> 수집 공백으로 완전한 평가를 할 수 없습니다.</li>
-                  <li><strong>이미 트렌딩:</strong> 최초 관측 시점부터 Daily에 있었습니다.</li>
+                  <li><strong>이미 트렌딩:</strong> 처음 관측했을 때부터 일간 트렌딩에 있었습니다.</li>
                   <li><strong>과거 데이터:</strong> 출처를 입증할 수 없어 검증 결과에서 제외합니다.</li>
                 </ul>
                 <p>
-                  7일·14일 진입률은 해당 기간이 충분히 지난 발굴 사례 중 공식 Trending 수집 범위가 완전한
-                  사례만 계산합니다. 평가 중, 이미 트렌딩, 과거 데이터와 수집 공백 사례는 분모에서 제외합니다.
+                  7일·14일 진입률은 평가 기간이 지난 사례 중 공식 Trending을 빠짐없이 수집한 사례만 계산합니다.
+                  평가 중인 사례와 이미 트렌딩이었던 저장소, 과거 데이터, 수집 공백 사례는 계산에서 제외합니다.
                 </p>
               </section>
 
@@ -1337,27 +1364,27 @@ function MethodologyDialog({
 
               <section>
                 <div className="methodology-section-title">
-                  <h3>급부상과 현재 열기</h3>
+                  <h3>급부상과 현재 관심도</h3>
                   <code>trend-intelligence-v3-shadow</code>
                 </div>
                 <p>확인 가능한 구성요소의 동일 가중 평균에 100을 곱합니다. 누락된 값은 0으로 처리하지 않고 계산에서 제외합니다.</p>
                 <div className="methodology-models">
                   <div>
                     <h4>급부상</h4>
-                    <p>같은 언어·생성 시기·스타 규모의 비교군 안에서 성장과 가속도가 얼마나 이례적인지 백분위로 계산합니다.</p>
+                    <p>언어·생성 시기·스타 규모가 비슷한 저장소와 비교해 성장 속도와 가속도가 얼마나 두드러지는지 백분위로 계산합니다.</p>
                     <ul>
                       <li>상대 성장: 스타 증가량 ÷ 이전 스타를 24시간 기준으로 환산합니다.</li>
                       <li>스타 가속: 시간당 6시간 증가율과 24시간 증가율, 또는 1시간과 6시간 증가율을 비교합니다.</li>
                       <li>참여자 가속: 고유 참여자의 단기·장기 변화율을 비교합니다.</li>
-                      <li>자연 유입 폭: 선택한 이벤트 구간의 고유 참여자 수입니다.</li>
+                      <li>참여 폭: 선택한 이벤트 구간의 고유 참여자 수입니다.</li>
                     </ul>
                   </div>
                   <div>
-                    <h4>현재 열기</h4>
-                    <p>전체 저장소에서 스타 속도, 고유 참여자, 활동 종류와 단기 지속성을 비교해 지금의 관심도를 계산합니다.</p>
+                    <h4>현재 관심도</h4>
+                    <p>전체 저장소를 기준으로 스타 증가 속도와 고유 참여자 수, 활동 종류, 단기 지속성을 비교합니다.</p>
                     <ul>
                       <li>스타 속도: 선택한 구간의 스타 증가량을 24시간 기준으로 환산합니다.</li>
-                      <li>자연 유입 폭: 선택한 이벤트 구간의 고유 참여자 수입니다.</li>
+                      <li>참여 폭: 선택한 이벤트 구간의 고유 참여자 수입니다.</li>
                       <li>다양성: Watch, Fork, PR·Issue·Comment, Push·Release 중 활성 범주의 비율입니다.</li>
                       <li>지속성: 단기 참여자를 장기 구간 기준으로 환산한 비율이며 최대 1입니다.</li>
                     </ul>
@@ -1368,7 +1395,7 @@ function MethodologyDialog({
               <section>
                 <h3>관측 구간, 신뢰도와 한계</h3>
                 <p>
-                  스타와 이벤트 근거는 완전하게 수집된 가장 긴 구간을 24h → 6h → 1h 순서로 사용합니다.
+                  스타와 이벤트 근거는 빠짐없이 수집된 가장 긴 구간을 24시간 → 6시간 → 1시간 순서로 사용합니다.
                   v3는 실제 스타 증가가 있어야 하며, 4시간보다 오래된 이벤트는 제외하고 급부상 계산에는
                   최소 8개의 비교 가능한 저장소가 필요합니다.
                 </p>
@@ -1379,7 +1406,7 @@ function MethodologyDialog({
                 </p>
                 <p>
                   새 후보는 14일간 유지하며 이후에는 최근 7일 스타 증가 또는 30일 내 푸시가 있어야 계속 추적합니다.
-                  Search 페이지네이션, API 가용성, 수집 공백, 삭제된 저장소와 GitHub Trending 출력 변화로 범위가 제한될 수 있습니다.
+                  GitHub Search의 검색 범위, API 가용성, 수집 공백, 삭제된 저장소, GitHub Trending 결과 변화에 따라 관측 범위가 달라질 수 있습니다.
                 </p>
               </section>
             </>
@@ -2208,65 +2235,41 @@ export function InitialLoadingState() {
   );
 }
 
-export function FooterTrafficBadge({ state }: { state: FooterTrafficState }) {
+export function HeaderTrafficBadge({ state }: { state: TrafficState }) {
   const { locale, t } = useI18n();
   const label = state.status === "loading"
-    ? t("footer.todayLoading")
+    ? t("traffic.loading")
     : state.status === "unavailable"
-      ? t("footer.todayUnavailable")
+      ? t("traffic.unavailable")
       : state.visits === 1
-        ? t("footer.todayVisit")
-        : t("footer.todayVisits", {
+        ? t("traffic.visitToday")
+        : t("traffic.visitsToday", {
           count: new Intl.NumberFormat(locale === "ko" ? "ko-KR" : "en-US").format(state.visits),
         });
+  const value = state.status === "loading"
+    ? "…"
+    : state.status === "unavailable"
+      ? "—"
+      : new Intl.NumberFormat(locale === "ko" ? "ko-KR" : "en-US").format(state.visits);
   return (
     <span
+      aria-label={label}
       aria-live="polite"
-      className={`footer-traffic footer-traffic-${state.status}`}
+      className={`header-traffic header-traffic-${state.status}`}
+      title={label}
     >
-      <PeopleIcon aria-hidden="true" size={14} />
-      {label}
+      <PeopleIcon aria-hidden="true" size={16} />
+      <span>{value}</span>
     </span>
   );
 }
 
 export function SiteFooter() {
   const { t } = useI18n();
-  const [traffic, setTraffic] = useState<FooterTrafficState>({ status: "loading" });
-
-  useEffect(() => {
-    const controller = new AbortController();
-
-    async function loadTraffic() {
-      try {
-        const response = await fetch("/api/traffic", {
-          headers: { Accept: "application/json" },
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          throw new Error(`Traffic request failed with status ${response.status}`);
-        }
-        const result = parsePublicTrafficResponse(await response.json());
-        setTraffic({ status: "ready", visits: result.visits });
-      } catch (error) {
-        if (!controller.signal.aborted) {
-          console.error(error);
-          setTraffic({ status: "unavailable" });
-        }
-      }
-    }
-
-    void loadTraffic();
-    return () => controller.abort();
-  }, []);
-
   return (
     <footer className="site-footer">
       <div className="footer-inner">
-        <div className="footer-meta">
-          <span className="footer-owner">Changroro</span>
-          <FooterTrafficBadge state={traffic} />
-        </div>
+        <span className="footer-owner">Changroro</span>
         <nav aria-label={t("footer.links")} className="footer-links">
           <a href="https://github.com/Changroro" rel="noreferrer" target="_blank">
             <MarkGithubIcon size={16} />
@@ -2295,6 +2298,7 @@ function AppContent({
   const [selectedSnapshot, setSelectedSnapshot] = useState<RankingPageResponse | null>(null);
   const [isSnapshotLoading, setIsSnapshotLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [traffic, setTraffic] = useState<TrafficState>({ status: "loading" });
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [readRepositories, setReadRepositories] = useState<ReadonlySet<string>>(() => (
     parseReadRepositories(localStorage.getItem(READ_REPOSITORIES_STORAGE_KEY))
@@ -2302,6 +2306,32 @@ function AppContent({
   const [locationPath, setLocationPath] = useState<AppPath>(() => resolveAppPath(window.location.pathname));
   const [locationSearch, setLocationSearch] = useState(window.location.search);
   const rankingLocationSearch = locationPath === "/" ? locationSearch : "";
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadTraffic() {
+      try {
+        const response = await fetch("/api/traffic", {
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Traffic request failed with status ${response.status}`);
+        }
+        const result = parsePublicTrafficResponse(await response.json());
+        setTraffic({ status: "ready", visits: result.visits });
+      } catch (trafficError) {
+        if (!controller.signal.aborted) {
+          console.error(trafficError);
+          setTraffic({ status: "unavailable" });
+        }
+      }
+    }
+
+    void loadTraffic();
+    return () => controller.abort();
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -2504,7 +2534,6 @@ function AppContent({
             <span>AI Trend Radar</span>
           </a>
           <div className="header-actions">
-            <LanguageSwitcher locale={locale} onChange={onLocaleChange} />
             <button
               aria-label={t("header.searchRepositories")}
               className="header-search-button"
@@ -2515,7 +2544,8 @@ function AppContent({
               <SearchIcon size={18} />
               <span>{t("header.search")}</span>
             </button>
-            <ThemeButton />
+            <HeaderTrafficBadge state={traffic} />
+            <LanguageSwitcher locale={locale} onChange={onLocaleChange} />
           </div>
         </div>
         <SiteNavigation currentPath={locationPath} onNavigate={navigatePath} />
@@ -2564,6 +2594,7 @@ function AppContent({
           onRead={markRepositoryRead}
         />
       )}
+      <ThemeButton />
       <SiteFooter />
     </div>
   );

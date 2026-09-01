@@ -17,4 +17,12 @@ describe("i18n", () => {
       "No results for “rust”",
     );
   });
+
+  it("uses natural Korean labels for ranking and discovery concepts", () => {
+    expect(translate("ko", "ranking.currentHeat")).toBe("현재 관심도");
+    expect(translate("ko", "repository.observedBeforeDaily", { lead: "6시간" })).toBe(
+      "일간 트렌딩보다 6시간 먼저 관측",
+    );
+    expect(translate("ko", "archive.inactive")).toBe("최근 수집에서 제외됨");
+  });
 });
