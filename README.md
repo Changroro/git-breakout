@@ -73,9 +73,9 @@ Search 쿼리 하나당 최대 1,000개만 가져오므로 이것을 “GitHub �
 
 - **로컬 개발**: SQLite에 수집 실행, lease, 스냅샷, 저장소 관측값을 저장한다.
 - **원격 운영**: PostgreSQL 17 + PostgREST 14를 별도 스택으로 운영한다.
-- **예약 수집**: GitHub Actions 워크플로가 2시간마다 원격 수집을 실행하도록 구성돼 있다.
-- **독립 이벤트 수집**: GH Archive 집계 워크플로가 별도로 동작해 이벤트 장애가 기존 모멘텀 스냅샷을 막지 않는다.
-- **중복 방지**: DB lease와 Actions concurrency로 수집기가 겹치지 않게 한다.
+- **예약 수집**: Oracle의 systemd timer가 DB의 2시간 수집 주기를 확인하고 원격 수집을 실행한다.
+- **이벤트 수집**: 각 수집 주기에 완료된 GH Archive 2시간분을 먼저 집계하며, 이벤트 장애가 발생해도 기본 모멘텀 스냅샷은 계속 생성한다.
+- **중복 방지**: 서버 파일 잠금과 DB lease로 수집기가 겹치지 않게 한다.
 - **운영 보호**: 일일 PostgreSQL 백업, 주간 실제 복구 검증, 5분 상태·디스크 점검을 systemd timer로 실행한다.
 
 ## 랭킹 방식
@@ -194,13 +194,16 @@ docker compose --env-file deploy/oracle/.env \
   -f deploy/oracle/docker-compose.yml up -d
 ```
 
-GitHub Actions에는 다음을 등록한다.
+Oracle 서버의 Git credential helper가 `github.com` 인증 정보를 반환하는지 확인한 뒤 수집 타이머를 설치한다.
 
-| 종류 | 이름 |
-| --- | --- |
-| Actions variable | `TREND_RADAR_API_URL` |
-| Actions secret | `COLLECTOR_GITHUB_TOKEN` |
-| Actions secret | `TREND_RADAR_COLLECTOR_TOKEN` |
+```bash
+sudo install -m 0644 deploy/oracle/systemd/github-trend-radar-collector.service \
+  /etc/systemd/system/github-trend-radar-collector.service
+sudo install -m 0644 deploy/oracle/systemd/github-trend-radar-collector.timer \
+  /etc/systemd/system/github-trend-radar-collector.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now github-trend-radar-collector.timer
+```
 
 </details>
 
@@ -214,7 +217,7 @@ GitHub Actions에는 다음을 등록한다.
 | 로컬 저장 | SQLite, better-sqlite3 |
 | 원격 저장 | PostgreSQL 17, PostgREST 14 |
 | 네트워크 | Cloudflare Tunnel |
-| 자동화 | GitHub Actions, 2시간 cron |
+| 자동화 | Oracle systemd timer, DB 기반 2시간 주기 |
 | 테스트 | Vitest, TypeScript strict build |
 
 ## 상태와 범위

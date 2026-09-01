@@ -73,9 +73,9 @@ Every point on the timeline is a persisted ranking snapshot. Selecting a point r
 
 - **Local development**: stores collection runs, leases, snapshots, and observations in SQLite.
 - **Remote operation**: uses an isolated PostgreSQL 17 and PostgREST 14 stack.
-- **Scheduled collection**: includes a GitHub Actions workflow designed to collect every two hours.
-- **Independent event collection**: GH Archive aggregation runs separately so event-source failures do not block baseline momentum snapshots.
-- **Duplicate prevention**: database leases and Actions concurrency prevent overlapping collectors.
+- **Scheduled collection**: an Oracle systemd timer checks the database-backed two-hour interval and starts remote collection when due.
+- **Event collection**: each cycle ingests two completed GH Archive hours first, while event-source failures do not block the baseline momentum snapshot.
+- **Duplicate prevention**: a server file lock and database lease prevent overlapping collectors.
 - **Operational safeguards**: systemd timers run daily PostgreSQL backups, weekly restore drills, and five-minute health and disk checks.
 
 ## Ranking model
@@ -194,13 +194,16 @@ docker compose --env-file deploy/oracle/.env \
   -f deploy/oracle/docker-compose.yml up -d
 ```
 
-Configure these GitHub Actions values:
+After confirming that the Oracle server's Git credential helper returns credentials for `github.com`, install the collector timer.
 
-| Type | Name |
-| --- | --- |
-| Actions variable | `TREND_RADAR_API_URL` |
-| Actions secret | `COLLECTOR_GITHUB_TOKEN` |
-| Actions secret | `TREND_RADAR_COLLECTOR_TOKEN` |
+```bash
+sudo install -m 0644 deploy/oracle/systemd/github-trend-radar-collector.service \
+  /etc/systemd/system/github-trend-radar-collector.service
+sudo install -m 0644 deploy/oracle/systemd/github-trend-radar-collector.timer \
+  /etc/systemd/system/github-trend-radar-collector.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now github-trend-radar-collector.timer
+```
 
 </details>
 
@@ -214,7 +217,7 @@ Configure these GitHub Actions values:
 | Local storage | SQLite, better-sqlite3 |
 | Remote storage | PostgreSQL 17, PostgREST 14 |
 | Network | Cloudflare Tunnel |
-| Automation | GitHub Actions, two-hour cron |
+| Automation | Oracle systemd timer, database-backed two-hour interval |
 | Tests | Vitest, strict TypeScript build |
 
 ## Status and scope
