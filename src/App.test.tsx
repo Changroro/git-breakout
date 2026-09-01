@@ -5,9 +5,11 @@ import {
   buildArchiveHref,
   formatCompactNumber,
   formatObservedLeadDuration,
+  HeaderTrafficBadge,
   InitialLoadingState,
-  FooterTrafficBadge,
+  LanguageSwitcher,
   rankingViewCopy,
+  RepositoryThumbnailFallback,
   resolveAppPath,
   SiteNavigation,
   SiteFooter,
@@ -93,18 +95,43 @@ describe("SiteFooter", () => {
     expect(markup).toContain('href="https://github.com/Changroro"');
     expect(markup).toContain('href="mailto:chbae624@gmail.com"');
   });
+});
 
-  it("renders localized public visit badges without exposing analytics details", () => {
-    const english = renderToStaticMarkup(<FooterTrafficBadge state={{ status: "ready", visits: 15 }} />);
+describe("minimal header controls", () => {
+  it("renders compact localized visitor counts without exposing analytics details", () => {
+    const english = renderToStaticMarkup(<HeaderTrafficBadge state={{ status: "ready", visits: 15 }} />);
     const korean = renderToStaticMarkup(
       <I18nProvider locale="ko">
-        <FooterTrafficBadge state={{ status: "ready", visits: 15 }} />
+        <HeaderTrafficBadge state={{ status: "ready", visits: 15 }} />
       </I18nProvider>,
     );
 
-    expect(english).toContain("Today · 15 visits");
-    expect(korean).toContain("오늘 · 방문 15회");
+    expect(english).toContain('aria-label="15 visits today"');
+    expect(korean).toContain('aria-label="오늘 방문 15회"');
+    expect(english).toContain(">15</span>");
     expect(english).not.toContain("Cloudflare");
+  });
+
+  it("renders a GitHub mark instead of thumbnail failure copy", () => {
+    const markup = renderToStaticMarkup(
+      <RepositoryThumbnailFallback repositoryName="owner/repository" />,
+    );
+
+    expect(markup).toContain("octicon-mark-github");
+    expect(markup).toContain('aria-label="owner/repository preview unavailable"');
+    expect(markup).not.toContain(">Preview unavailable<");
+  });
+
+  it("renders the language control as a globe with two compact options", () => {
+    const markup = renderToStaticMarkup(
+      <LanguageSwitcher locale="ko" onChange={() => undefined} />,
+    );
+
+    expect(markup).toContain("language-globe");
+    expect(markup).toContain('aria-pressed="true"');
+    expect(markup).toContain(">ko</button>");
+    expect(markup).toContain("language-divider");
+    expect(markup).toContain(">en</button>");
   });
 });
 
