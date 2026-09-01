@@ -8,7 +8,6 @@ import {
 } from "react";
 import * as Slider from "@radix-ui/react-slider";
 import {
-  CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ClockIcon,
@@ -18,6 +17,7 @@ import {
   MarkGithubIcon,
   MailIcon,
   MoonIcon,
+  PeopleIcon,
   RepoIcon,
   SearchIcon,
   SidebarCollapseIcon,
@@ -76,39 +76,21 @@ import {
   type ArchivePageResponse,
   type ArchiveRepository,
 } from "./lib/archive";
+import {
+  I18nProvider,
+  resolveInitialLocale,
+  translate,
+  useI18n,
+  type Locale,
+} from "./lib/i18n";
+import { parsePublicTrafficResponse } from "./lib/public-traffic";
 
 const PAGE_SIZE = 10;
 const DEFAULT_TOPIC_LIMIT = 12;
 const SEARCH_TOPIC_LIMIT = 40;
 const SEARCH_RESULT_LIMIT = 10;
 const READ_REPOSITORIES_STORAGE_KEY = "github-trend-radar:read-repositories";
-const numberFormatter = new Intl.NumberFormat("en-US", {
-  notation: "compact",
-  maximumFractionDigits: 1,
-});
-const capturedAtFormatter = new Intl.DateTimeFormat("en-US", {
-  timeZone: "Asia/Seoul",
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-});
-const timelineDateFormatter = new Intl.DateTimeFormat("en-US", {
-  timeZone: "Asia/Seoul",
-  month: "short",
-  day: "numeric",
-});
-const evidenceDateFormatter = new Intl.DateTimeFormat("en-US", {
-  timeZone: "Asia/Seoul",
-  year: "numeric",
-  month: "short",
-  day: "numeric",
-});
-const percentageFormatter = new Intl.NumberFormat("en-US", {
-  style: "percent",
-  maximumFractionDigits: 0,
-});
+const LOCALE_STORAGE_KEY = "github-trend-radar:locale";
 
 type Theme = "light" | "dark";
 export type AppPath = "/" | "/archive" | "/track-record";
@@ -122,6 +104,11 @@ type RepositorySearchState =
   | { status: "loading"; requestKey: string }
   | { status: "ready"; requestKey: string; response: RepositorySearchResponse }
   | { status: "error"; requestKey: string; message: string };
+
+export type FooterTrafficState =
+  | { status: "loading" }
+  | { status: "ready"; visits: number }
+  | { status: "unavailable" };
 
 export function resolveAppPath(pathname: string): AppPath {
   if (pathname === "/" || pathname === "/archive" || pathname === "/track-record") {
@@ -145,15 +132,47 @@ export function buildArchiveHref(page: number, query: string): string {
   return `?${parameters.toString()}`;
 }
 
-function formatCapturedAt(value: string): string {
-  return `${capturedAtFormatter.format(new Date(value))} KST`;
+function localeTag(locale: Locale): "en-US" | "ko-KR" {
+  return locale === "ko" ? "ko-KR" : "en-US";
 }
 
-export function formatCompactNumber(value: number): string {
+function formatCapturedAt(value: string, locale: Locale = "en"): string {
+  const formatter = new Intl.DateTimeFormat(localeTag(locale), {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: locale === "ko" ? "long" : "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${formatter.format(new Date(value))} KST`;
+}
+
+export function formatCompactNumber(value: number, locale: Locale = "en"): string {
   if (!Number.isFinite(value)) {
     throw new TypeError("Compact number must be finite");
   }
-  return numberFormatter.format(value).toLowerCase();
+  return new Intl.NumberFormat(localeTag(locale), {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(value).toLowerCase();
+}
+
+function formatTimelineDate(value: string, locale: Locale): string {
+  return new Intl.DateTimeFormat(localeTag(locale), {
+    timeZone: "Asia/Seoul",
+    month: locale === "ko" ? "long" : "short",
+    day: "numeric",
+  }).format(new Date(value));
+}
+
+function formatEvidenceDate(value: string, locale: Locale): string {
+  return new Intl.DateTimeFormat(localeTag(locale), {
+    timeZone: "Asia/Seoul",
+    year: "numeric",
+    month: locale === "ko" ? "long" : "short",
+    day: "numeric",
+  }).format(new Date(value));
 }
 
 function requestedPage(search: string): number {
@@ -179,6 +198,7 @@ function getInitialTheme(): Theme {
 
 function ThemeButton() {
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
+  const { t } = useI18n();
 
   function toggleTheme() {
     const nextTheme = theme === "light" ? "dark" : "light";
@@ -192,10 +212,42 @@ function ThemeButton() {
       className="theme-button"
       type="button"
       onClick={toggleTheme}
-      aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+      aria-label={theme === "light" ? t("theme.switchDark") : t("theme.switchLight")}
     >
       {theme === "light" ? <MoonIcon size={18} /> : <SunIcon size={18} />}
     </button>
+  );
+}
+
+function LanguageSwitcher({
+  locale,
+  onChange,
+}: {
+  locale: Locale;
+  onChange: (locale: Locale) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="language-switcher" role="group" aria-label={t("language.label")}>
+      <button
+        aria-pressed={locale === "ko"}
+        className={locale === "ko" ? "language-option-active" : ""}
+        onClick={() => onChange("ko")}
+        type="button"
+      >
+        <span className="language-option-wide">{t("language.korean")}</span>
+        <span className="language-option-compact">KO</span>
+      </button>
+      <button
+        aria-pressed={locale === "en"}
+        className={locale === "en" ? "language-option-active" : ""}
+        onClick={() => onChange("en")}
+        type="button"
+      >
+        <span className="language-option-wide">EN</span>
+        <span className="language-option-compact">EN</span>
+      </button>
+    </div>
   );
 }
 
@@ -206,29 +258,32 @@ function requireDisplayValue<T>(value: T | null, field: string, fullName: string
   return value;
 }
 
-function sourceLabel(source: string): string {
+function sourceLabel(source: string, locale: Locale = "en"): string {
   if (source === "sample") {
-    return "Sample snapshot";
+    return translate(locale, "source.sample");
   }
   if (source === "github_official") {
-    return "Official GitHub Trending";
+    return translate(locale, "source.official");
   }
   if (source === "github_combined") {
-    return "Official Trending + GitHub-wide discovery";
+    return translate(locale, "source.combined");
   }
   if (source === "github_events_v2_shadow") {
-    return "GitHub-wide events + transparent shadow scoring";
+    return translate(locale, "source.events");
   }
   throw new TypeError(`Unknown ranking source ${source}`);
 }
 
-const phaseLabels: Record<Exclude<TrendPhase, "insufficient_data">, string> = {
-  spark: "Spark",
-  breakout: "Breakout",
-  hot: "Hot",
-  steady: "Steady",
-  cooling: "Cooling",
-};
+function phaseLabel(phase: Exclude<TrendPhase, "insufficient_data">, locale: Locale): string {
+  const keys = {
+    spark: "phase.spark",
+    breakout: "phase.breakout",
+    hot: "phase.hot",
+    steady: "phase.steady",
+    cooling: "phase.cooling",
+  } as const;
+  return translate(locale, keys[phase]);
+}
 
 function repositoryViewScore(repository: RankedRepository, view: RankingView): number | null {
   if (view === "momentum") return repository.momentum.score;
@@ -239,22 +294,25 @@ function repositoryViewScore(repository: RankedRepository, view: RankingView): n
     : intelligence.current_heat.score;
 }
 
-export function rankingViewCopy(view: RankingView): { title: string; description: string } {
+export function rankingViewCopy(
+  view: RankingView,
+  locale: Locale = "en",
+): { title: string; description: string } {
   if (view === "breakout") {
     return {
-      title: "Breakout signals",
-      description: "Peer-relative acceleration: finds repositories rising unusually fast for their language, age, and size, even before they become large.",
+      title: translate(locale, "ranking.breakoutTitle"),
+      description: translate(locale, "ranking.breakoutDescription"),
     };
   }
   if (view === "current") {
     return {
-      title: "Current heat",
-      description: "Absolute attention now: ranks the strongest recent star velocity, unique actors, activity diversity, and persistence.",
+      title: translate(locale, "ranking.currentTitle"),
+      description: translate(locale, "ranking.currentDescription"),
     };
   }
   return {
-    title: "Repository momentum",
-    description: "Durable overall strength: combines observed star growth, lifetime velocity, repository scale, and recent activity.",
+    title: translate(locale, "ranking.momentumTitle"),
+    description: translate(locale, "ranking.momentumDescription"),
   };
 }
 
@@ -312,13 +370,14 @@ function useRepositoryStarSeries(
 
 function RepositoryCardThumbnail({ repository }: { repository: RankedRepository }) {
   const [failed, setFailed] = useState(false);
+  const { t } = useI18n();
 
   if (failed) {
-    return <span className="repository-thumbnail repository-thumbnail-error">Preview unavailable</span>;
+    return <span className="repository-thumbnail repository-thumbnail-error">{t("repository.previewUnavailable")}</span>;
   }
 
   return <img
-    alt={`${repository.full_name} GitHub repository preview`}
+    alt={t("repository.previewAlt", { name: repository.full_name })}
     className="repository-thumbnail"
     decoding="async"
     src={`/api/card?${new URLSearchParams({
@@ -347,6 +406,7 @@ function RepositorySearchDialog({
   onClose: () => void;
   onRead: (fullName: string) => void;
 }) {
+  const { locale, t } = useI18n();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const resultRefs = useRef<Array<HTMLAnchorElement | null>>([]);
@@ -472,14 +532,14 @@ function RepositorySearchDialog({
       }}
     >
       <div className="repository-search-panel">
-        <h2 className="visually-hidden" id="repository-search-title">Search repositories</h2>
+        <h2 className="visually-hidden" id="repository-search-title">{t("header.searchRepositories")}</h2>
         <div className="repository-search-field">
           <SearchIcon size={22} />
           <input
             aria-controls="repository-search-results"
-            aria-label="Search repositories"
+            aria-label={t("header.searchRepositories")}
             autoComplete="off"
-            placeholder={`Search ${formatCompactNumber(repositoryCount)} repositories...`}
+            placeholder={t("search.placeholder", { count: formatCompactNumber(repositoryCount, locale) })}
             ref={inputRef}
             type="search"
             value={query}
@@ -503,7 +563,7 @@ function RepositorySearchDialog({
               }
             }}
           />
-          <button aria-label="Close search" onClick={onClose} type="button">
+          <button aria-label={t("search.close")} onClick={onClose} type="button">
             <XIcon size={18} />
           </button>
         </div>
@@ -512,11 +572,11 @@ function RepositorySearchDialog({
           {normalizedQuery === "" ? (
             <div className="repository-search-empty">
               <SearchIcon size={24} />
-              <p>Search by repository name, description, language, or topic.</p>
+              <p>{t("search.prompt")}</p>
             </div>
           ) : currentSearchState.status === "loading" || currentSearchState.status === "idle" ? (
             <div className="repository-search-empty" role="status">
-              <p>Searching repositories…</p>
+              <p>{t("search.searching")}</p>
             </div>
           ) : currentSearchState.status === "error" ? (
             <div className="repository-search-empty" role="alert">
@@ -524,14 +584,17 @@ function RepositorySearchDialog({
             </div>
           ) : visibleResults.length === 0 ? (
             <div className="repository-search-empty">
-              <p>No repositories found for “{normalizedQuery}”.</p>
+              <p>{t("search.none", { query: normalizedQuery })}</p>
             </div>
           ) : (
             <>
               <p className="repository-search-count">
                 {totalResults > SEARCH_RESULT_LIMIT
-                  ? `Showing ${SEARCH_RESULT_LIMIT} of ${formatCompactNumber(totalResults)} results`
-                  : `${formatCompactNumber(totalResults)} results`}
+                  ? t("search.showing", {
+                    visible: SEARCH_RESULT_LIMIT,
+                    total: formatCompactNumber(totalResults, locale),
+                  })
+                  : t("search.resultCount", { count: formatCompactNumber(totalResults, locale) })}
               </p>
               <ol id="repository-search-results" className="repository-search-results">
                 {visibleResults.map((repository, index) => {
@@ -559,15 +622,12 @@ function RepositorySearchDialog({
                         <span className="repository-search-rank">#{repository.rank}</span>
                         <span className="repository-search-copy">
                           <strong>{repository.full_name}</strong>
-                          <span>{repository.description ?? "No description"}</span>
+                          <span>{repository.description ?? t("repository.noDescription")}</span>
                           <small>
-                            {repository.language ?? "Unknown language"}
-                            <span><StarIcon size={12} />{formatCompactNumber(stars)}</span>
+                            {repository.language ?? t("repository.unknownLanguage")}
+                            <span><StarIcon size={12} />{formatCompactNumber(stars, locale)}</span>
                           </small>
                         </span>
-                        {isRead ? (
-                          <span className="repository-search-read"><CheckIcon size={13} />Read</span>
-                        ) : null}
                       </a>
                     </li>
                   );
@@ -578,21 +638,23 @@ function RepositorySearchDialog({
         </div>
 
         <div className="repository-search-footer" aria-hidden="true">
-          <span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span>
-          <span><kbd>Enter</kbd> Open</span>
-          <span><kbd>Esc</kbd> Close</span>
+          <span><kbd>↑</kbd><kbd>↓</kbd> {t("search.navigate")}</span>
+          <span><kbd>Enter</kbd> {t("search.open")}</span>
+          <span><kbd>Esc</kbd> {t("search.closeHint")}</span>
         </div>
       </div>
     </dialog>
   );
 }
 
-function formatStarGain(series: RepositoryStarSeries): string {
+function formatStarGain(series: RepositoryStarSeries, locale: Locale = "en"): string {
   if (series.points.length < 2) {
-    return "Tracking started";
+    return translate(locale, "repository.trackingStarted");
   }
   const gain = series.points[series.points.length - 1].stars - series.points[0].stars;
-  return `${gain > 0 ? "+" : ""}${formatCompactNumber(gain)} since tracked`;
+  return translate(locale, "repository.gainedSinceTracked", {
+    gain: `${gain > 0 ? "+" : ""}${formatCompactNumber(gain, locale)}`,
+  });
 }
 
 function resolveRepositorySeries(
@@ -609,21 +671,23 @@ function resolveRepositorySeries(
   return series;
 }
 
-export function formatObservedLeadDuration(hours: number): string {
+export function formatObservedLeadDuration(hours: number, locale: Locale = "en"): string {
   if (!Number.isFinite(hours) || hours < 0) {
     throw new RangeError("Observed lead hours must be a finite non-negative number");
   }
   if (hours < 1) {
-    return "<1h";
+    return locale === "ko" ? "1시간 미만" : "<1h";
   }
   if (hours < 24) {
-    return `${Math.round(hours)}h`;
+    return locale === "ko" ? `${Math.round(hours)}시간` : `${Math.round(hours)}h`;
   }
   const roundedDays = Math.round(hours / 24 * 10) / 10;
-  return `${roundedDays.toLocaleString("en-US", { maximumFractionDigits: 1 })}d`;
+  const formattedDays = roundedDays.toLocaleString(localeTag(locale), { maximumFractionDigits: 1 });
+  return locale === "ko" ? `${formattedDays}일` : `${formattedDays}d`;
 }
 
 export function DiscoveryEvidenceBadge({ evidence }: { evidence: DiscoveryEvidence }) {
+  const { locale, t } = useI18n();
   if (evidence.outcome !== "verified") {
     return null;
   }
@@ -633,13 +697,13 @@ export function DiscoveryEvidenceBadge({ evidence }: { evidence: DiscoveryEviden
   if (evidence.coverage !== "complete") {
     throw new TypeError("Verified discovery evidence requires complete coverage");
   }
-  const lead = formatObservedLeadDuration(evidence.lead_hours);
+  const lead = formatObservedLeadDuration(evidence.lead_hours, locale);
   return (
     <span
       className="discovery-evidence-badge"
-      title={`Radar first observed this repository ${lead} before Radar first observed it in GitHub Trending Daily`}
+      title={t("repository.observedBeforeDailyTitle", { lead })}
     >
-      <ClockIcon size={11} />Observed {lead} before Daily
+      <ClockIcon size={11} />{t("repository.observedBeforeDaily", { lead })}
     </span>
   );
 }
@@ -651,20 +715,21 @@ function RepositoryStarGrowth({
   repositoryName: string;
   state: StarSeriesState;
 }) {
+  const { locale, t } = useI18n();
   if (state.status === "loading") {
-    return <span className="repository-growth repository-growth-status">Loading history</span>;
+    return <span className="repository-growth repository-growth-status">{t("repository.loadingHistory")}</span>;
   }
   if (state.status === "error") {
-    return <span className="repository-growth repository-growth-status" title={state.message}>History failed</span>;
+    return <span className="repository-growth repository-growth-status" title={state.message}>{t("repository.historyFailed")}</span>;
   }
   const series = resolveRepositorySeries(repositoryName, state);
   if (series === null || series.points.length < 2) {
-    return <span className="repository-growth repository-growth-status">Tracking started</span>;
+    return <span className="repository-growth repository-growth-status">{t("repository.trackingStarted")}</span>;
   }
   const first = series.points[0];
   const latest = series.points[series.points.length - 1];
   const gain = latest.stars - first.stars;
-  const label = formatStarGain(series);
+  const label = formatStarGain(series, locale);
   const sparkline = buildSparklinePoints(series.points, 108, 44, 4);
   const latestCoordinate = sparkline.split(" ").at(-1);
   if (latestCoordinate === undefined) {
@@ -682,7 +747,7 @@ function RepositoryStarGrowth({
         role="img"
         viewBox="0 0 108 44"
       >
-        <title>{`${formatCapturedAt(first.captured_at)}: ${first.stars} stars; ${formatCapturedAt(latest.captured_at)}: ${latest.stars} stars; change ${gain}`}</title>
+        <title>{`${formatCapturedAt(first.captured_at, locale)}: ${first.stars} stars; ${formatCapturedAt(latest.captured_at, locale)}: ${latest.stars} stars; change ${gain}`}</title>
         <line className="star-sparkline-baseline" x1="4" x2="104" y1="40" y2="40" />
         <polyline
           className="star-sparkline-line"
@@ -712,6 +777,7 @@ function RankingRow({
   isRead: boolean;
   onRead: (fullName: string) => void;
 }) {
+  const { locale, t } = useI18n();
   const language = repository.language ?? "-";
   const stars = requireDisplayValue(repository.metrics.stars, "metrics.stars", repository.full_name);
   const series = resolveRepositorySeries(repository.full_name, starSeries);
@@ -725,7 +791,7 @@ function RankingRow({
         className="ranking-row-content"
         style={{ "--row-index": rowIndex } as CSSProperties}
       >
-        <span className="rank-number" aria-label={`Rank ${displayRank}`}>
+        <span className="rank-number" aria-label={t("repository.rank", { rank: displayRank })}>
           {displayRank}
         </span>
         <RepositoryCardThumbnail repository={repository} />
@@ -741,14 +807,13 @@ function RankingRow({
               <RepoIcon size={16} />
               <span>{repository.full_name}</span>
             </a>
-            {isRead ? <span className="repository-read-label"><CheckIcon size={12} />Read</span> : null}
             <DiscoveryEvidenceBadge evidence={repository.discovery_evidence} />
             {phase === null ? null : (
               <span
                 className={`trend-phase trend-phase-${phase}`}
-                title={intelligence?.reasons.join(", ") || phaseLabels[phase]}
+                title={intelligence?.reasons.join(", ") || phaseLabel(phase, locale)}
               >
-                {phaseLabels[phase]}
+                {phaseLabel(phase, locale)}
                 {rankingView === "momentum" || viewScore === null ? null : ` ${Math.round(viewScore)}`}
               </span>
             )}
@@ -756,18 +821,18 @@ function RankingRow({
           <p>{repository.description}</p>
           <div className="mobile-meta">
             <span>{language}</span>
-            <span className="mobile-stars"><StarIcon size={12} />{formatCompactNumber(stars)}</span>
+            <span className="mobile-stars"><StarIcon size={12} />{formatCompactNumber(stars, locale)}</span>
             <span className="mobile-star-growth">
               {starSeries.status === "loading"
-                ? "Loading history"
+                ? t("repository.loadingHistory")
                 : starSeries.status === "error"
-                  ? "History failed"
-                  : series === null ? "Tracking started" : formatStarGain(series)}
+                  ? t("repository.historyFailed")
+                  : series === null ? t("repository.trackingStarted") : formatStarGain(series, locale)}
             </span>
           </div>
         </div>
         <span className="cell language">{language}</span>
-        <span className="cell stars">{formatCompactNumber(stars)}</span>
+        <span className="cell stars">{formatCompactNumber(stars, locale)}</span>
         <RepositoryStarGrowth repositoryName={repository.full_name} state={starSeries} />
       </div>
     </li>
@@ -783,16 +848,17 @@ function Pagination({
   totalPages: number;
   onPageChange: (page: number) => void;
 }) {
+  const { t } = useI18n();
   const visiblePages = getVisiblePages(currentPage, totalPages);
 
   return (
-    <nav className="pagination" aria-label="Ranking pages">
+    <nav className="pagination" aria-label={t("pagination.label")}>
       {currentPage === 1 ? (
         <span className="page-link page-arrow page-disabled" aria-disabled="true">
           <ChevronLeftIcon size={16} />
         </span>
       ) : (
-        <button className="page-link page-arrow" onClick={() => onPageChange(currentPage - 1)} type="button" aria-label="Previous page">
+        <button className="page-link page-arrow" onClick={() => onPageChange(currentPage - 1)} type="button" aria-label={t("pagination.previous")}>
           <ChevronLeftIcon size={16} />
         </button>
       )}
@@ -814,7 +880,7 @@ function Pagination({
           <ChevronRightIcon size={16} />
         </span>
       ) : (
-        <button className="page-link page-arrow" onClick={() => onPageChange(currentPage + 1)} type="button" aria-label="Next page">
+        <button className="page-link page-arrow" onClick={() => onPageChange(currentPage + 1)} type="button" aria-label={t("pagination.next")}>
           <ChevronRightIcon size={16} />
         </button>
       )}
@@ -861,6 +927,7 @@ function FilterPanel({
   topicOptions: readonly RepositoryFilterOption[];
   onChange: (filters: RepositoryFilters) => void;
 }) {
+  const { t } = useI18n();
   const [topicSearch, setTopicSearch] = useState("");
   const normalizedSearch = topicSearch.trim().toLocaleLowerCase("en-US");
   const matchingTopics = topicOptions.filter((option) => (
@@ -881,9 +948,9 @@ function FilterPanel({
     <div className="filter-panel">
       <section className="filter-group" aria-labelledby={`${idPrefix}-language-filter-title`}>
         <div className="filter-group-heading">
-          <h3 id={`${idPrefix}-language-filter-title`}>Language</h3>
+          <h3 id={`${idPrefix}-language-filter-title`}>{t("filters.language")}</h3>
           {filters.language === null ? null : (
-            <button type="button" onClick={() => onChange({ ...filters, language: null })}>Clear</button>
+            <button type="button" onClick={() => onChange({ ...filters, language: null })}>{t("filters.clear")}</button>
           )}
         </div>
         <div className="filter-options filter-options-language">
@@ -900,13 +967,13 @@ function FilterPanel({
 
       <section className="filter-group" aria-labelledby={`${idPrefix}-topic-filter-title`}>
         <div className="filter-group-heading">
-          <h3 id={`${idPrefix}-topic-filter-title`}>Topics</h3>
+          <h3 id={`${idPrefix}-topic-filter-title`}>{t("filters.topics")}</h3>
           {filters.topic === null ? null : (
-            <button type="button" onClick={() => onChange({ ...filters, topic: null })}>Clear</button>
+            <button type="button" onClick={() => onChange({ ...filters, topic: null })}>{t("filters.clear")}</button>
           )}
         </div>
         <label className="topic-search">
-          <span>Search topics</span>
+          <span>{t("filters.searchTopics")}</span>
           <span className="topic-search-field">
             <SearchIcon size={14} />
             <input
@@ -928,9 +995,9 @@ function FilterPanel({
           ))}
         </div>
         {visibleTopics.length === 0 ? (
-          <p className="filter-options-empty">No topics found</p>
+          <p className="filter-options-empty">{t("filters.noTopics")}</p>
         ) : normalizedSearch === "" && matchingTopics.length > DEFAULT_TOPIC_LIMIT ? (
-          <p className="filter-options-note">Showing top {DEFAULT_TOPIC_LIMIT}. Search indexed topics.</p>
+          <p className="filter-options-note">{t("filters.topTopics", { count: DEFAULT_TOPIC_LIMIT })}</p>
         ) : null}
       </section>
 
@@ -940,7 +1007,7 @@ function FilterPanel({
           type="button"
           onClick={() => onChange({ language: null, topic: null })}
         >
-          Clear all filters
+          {t("filters.clearAll")}
         </button>
       )}
     </div>
@@ -962,15 +1029,16 @@ function DesktopFilters({
   onChange: (filters: RepositoryFilters) => void;
   onToggle: () => void;
 }) {
+  const { t } = useI18n();
   const count = activeFilterCount(filters);
   return (
-    <aside className={`filter-sidebar ${collapsed ? "filter-sidebar-collapsed" : ""}`} aria-label="Repository filters">
+    <aside className={`filter-sidebar ${collapsed ? "filter-sidebar-collapsed" : ""}`} aria-label={t("filters.repositoryFilters")}>
       <div className="filter-sidebar-heading">
         {collapsed ? null : (
-          <span><FilterIcon size={16} />Filters {count === 0 ? null : <strong>{count}</strong>}</span>
+          <span><FilterIcon size={16} />{t("filters.label")} {count === 0 ? null : <strong>{count}</strong>}</span>
         )}
         <button
-          aria-label={collapsed ? "Expand filters" : "Collapse filters"}
+          aria-label={collapsed ? t("filters.expand") : t("filters.collapse")}
           className="filter-sidebar-toggle"
           onClick={onToggle}
           type="button"
@@ -1006,6 +1074,7 @@ function MobileFilterDialog({
   onChange: (filters: RepositoryFilters) => void;
   onClose: () => void;
 }) {
+  const { t } = useI18n();
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -1040,9 +1109,9 @@ function MobileFilterDialog({
         <div className="mobile-filter-heading">
           <div>
             <FilterIcon size={17} />
-            <h2 id="mobile-filter-title">Filters</h2>
+            <h2 id="mobile-filter-title">{t("filters.label")}</h2>
           </div>
-          <button aria-label="Close filters" onClick={onClose} type="button"><XIcon size={18} /></button>
+          <button aria-label={t("filters.close")} onClick={onClose} type="button"><XIcon size={18} /></button>
         </div>
         <FilterPanel
           idPrefix="mobile"
@@ -1051,7 +1120,7 @@ function MobileFilterDialog({
           topicOptions={topicOptions}
           onChange={onChange}
         />
-        <button className="mobile-filter-done" onClick={onClose} type="button">Show results</button>
+        <button className="mobile-filter-done" onClick={onClose} type="button">{t("filters.showResults")}</button>
       </div>
     </dialog>
   );
@@ -1077,6 +1146,7 @@ function Timeline({
   selectedId: string;
   onSelect: (snapshotId: string) => void;
 }) {
+  const { locale, t } = useI18n();
   const selectedIndex = requireSelectedSnapshotIndex(snapshots, selectedId);
   const [previewIndex, setPreviewIndex] = useState(selectedIndex);
   const previewSnapshot = snapshots[previewIndex];
@@ -1108,9 +1178,11 @@ function Timeline({
       <div className="timeline-heading">
         <div className="timeline-title">
           <HistoryIcon size={14} />
-          <h2 id="timeline-title">History</h2>
+          <h2 id="timeline-title">{t("timeline.title")}</h2>
         </div>
-        <span className="timeline-count">{snapshots.length} snapshots</span>
+        <span className="timeline-count">{snapshots.length === 1
+          ? t("timeline.snapshot")
+          : t("timeline.snapshots", { count: snapshots.length })}</span>
       </div>
       <div
         className="timeline-scrubber"
@@ -1118,7 +1190,7 @@ function Timeline({
       >
         <div className="timeline-tooltip" aria-hidden="true">
           <time dateTime={previewSnapshot.captured_at}>
-            {formatCapturedAt(previewSnapshot.captured_at)}
+            {formatCapturedAt(previewSnapshot.captured_at, locale)}
           </time>
         </div>
         {snapshots.length === 1 ? (
@@ -1127,7 +1199,7 @@ function Timeline({
           </div>
         ) : (
           <Slider.Root
-            aria-label="Historical ranking snapshot"
+            aria-label={t("timeline.slider")}
             className="timeline-slider"
             min={0}
             max={snapshots.length - 1}
@@ -1149,16 +1221,16 @@ function Timeline({
               </span>
             </Slider.Track>
             <Slider.Thumb
-              aria-label="Historical ranking snapshot"
-              aria-valuetext={formatCapturedAt(previewSnapshot.captured_at)}
+              aria-label={t("timeline.slider")}
+              aria-valuetext={formatCapturedAt(previewSnapshot.captured_at, locale)}
               className="timeline-thumb"
             />
           </Slider.Root>
         )}
       </div>
       <div className="timeline-boundaries" aria-hidden="true">
-        <span>{timelineDateFormatter.format(new Date(snapshots[0].captured_at))}</span>
-        <span>Latest · {timelineDateFormatter.format(new Date(snapshots[snapshots.length - 1].captured_at))}</span>
+        <span>{formatTimelineDate(snapshots[0].captured_at, locale)}</span>
+        <span>{t("timeline.latest", { date: formatTimelineDate(snapshots[snapshots.length - 1].captured_at, locale) })}</span>
       </div>
     </section>
   );
@@ -1173,6 +1245,7 @@ function MethodologyDialog({
   trackRecord: TrackRecord;
   onClose: () => void;
 }) {
+  const { locale, t } = useI18n();
   const dialogRef = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
@@ -1207,15 +1280,111 @@ function MethodologyDialog({
       <div className="methodology-panel">
         <header className="methodology-heading">
           <div>
-            <span className="methodology-eyebrow">Transparent methodology</span>
-            <h2 id="methodology-title">How ranking and discovery evidence work</h2>
+            <span className="methodology-eyebrow">{locale === "ko" ? "투명한 계산 방식" : "Transparent methodology"}</span>
+            <h2 id="methodology-title">{t("trackRecord.methodology")}</h2>
           </div>
-          <button aria-label="Close methodology" onClick={onClose} type="button">
+          <button aria-label={locale === "ko" ? "계산 방식 닫기" : "Close methodology"} onClick={onClose} type="button">
             <XIcon size={18} />
           </button>
         </header>
 
         <div className="methodology-body">
+          {locale === "ko" ? (
+            <>
+              <section>
+                <h3>검증된 사전 발굴</h3>
+                <p>
+                  GitHub Trending Daily를 주 검증 기준으로 사용하고 Weekly와 Monthly 진입은 별도로 기록합니다.
+                  수집 주기가 2시간이므로 선행시간은 Radar의 최초 관측과 Trending 최초 관측 사이의 간격이며,
+                  GitHub가 저장소를 추가한 정확한 시각을 뜻하지 않습니다.
+                </p>
+                <p>
+                  후보는 공식 Trending, 새로 생성되거나 최근 푸시된 저장소를 찾는 GitHub Search,
+                  GH Archive 활동과 기존 관측 풀에서 가져옵니다. 최초 관측 출처가 Search 또는 GH Archive로
+                  입증된 저장소만 사전 발굴 검증 대상에 포함합니다.
+                </p>
+                <ul>
+                  <li><strong>검증됨:</strong> Daily 밖에서 먼저 관측한 뒤 Daily에서 관측된 경우입니다.</li>
+                  <li><strong>평가 중:</strong> 아직 14일 평가 기간 안에 있습니다.</li>
+                  <li><strong>미진입:</strong> 수집 공백 없이 14일이 지났지만 Daily에서 관측되지 않았습니다.</li>
+                  <li><strong>판단 불가:</strong> 수집 공백으로 완전한 평가를 할 수 없습니다.</li>
+                  <li><strong>이미 트렌딩:</strong> 최초 관측 시점부터 Daily에 있었습니다.</li>
+                  <li><strong>과거 데이터:</strong> 출처를 입증할 수 없어 검증 결과에서 제외합니다.</li>
+                </ul>
+                <p>
+                  7일·14일 진입률은 해당 기간이 충분히 지난 발굴 사례 중 공식 Trending 수집 범위가 완전한
+                  사례만 계산합니다. 평가 중, 이미 트렌딩, 과거 데이터와 수집 공백 사례는 분모에서 제외합니다.
+                </p>
+              </section>
+
+              <section>
+                <div className="methodology-section-title">
+                  <h3>모멘텀</h3>
+                  <code>baseline-v1</code>
+                </div>
+                <p>각 요소를 더해 점수를 계산하며, 실제로 관측한 성장 속도에 가장 큰 가중치를 둡니다.</p>
+                <dl className="methodology-weights">
+                  <div><dt>일일 관측 스타 증가</dt><dd>log1p(value) × 55</dd></div>
+                  <div><dt>전체 기간 스타 속도</dt><dd>log1p(stars ÷ age days) × 28</dd></div>
+                  <div><dt>스타</dt><dd>log1p(value) × 5</dd></div>
+                  <div><dt>포크</dt><dd>log1p(value) × 2</dd></div>
+                  <div><dt>열린 이슈</dt><dd>log1p(value) × 0.5</dd></div>
+                  <div><dt>최근 푸시</dt><dd>max(0, 14 − push age days)</dd></div>
+                  <div><dt>최초 관측</dt><dd>12</dd></div>
+                  <div><dt>공식 Trending 신호</dt><dd>0</dd></div>
+                </dl>
+              </section>
+
+              <section>
+                <div className="methodology-section-title">
+                  <h3>급부상과 현재 열기</h3>
+                  <code>trend-intelligence-v3-shadow</code>
+                </div>
+                <p>확인 가능한 구성요소의 동일 가중 평균에 100을 곱합니다. 누락된 값은 0으로 처리하지 않고 계산에서 제외합니다.</p>
+                <div className="methodology-models">
+                  <div>
+                    <h4>급부상</h4>
+                    <p>같은 언어·생성 시기·스타 규모의 비교군 안에서 성장과 가속도가 얼마나 이례적인지 백분위로 계산합니다.</p>
+                    <ul>
+                      <li>상대 성장: 스타 증가량 ÷ 이전 스타를 24시간 기준으로 환산합니다.</li>
+                      <li>스타 가속: 시간당 6시간 증가율과 24시간 증가율, 또는 1시간과 6시간 증가율을 비교합니다.</li>
+                      <li>참여자 가속: 고유 참여자의 단기·장기 변화율을 비교합니다.</li>
+                      <li>자연 유입 폭: 선택한 이벤트 구간의 고유 참여자 수입니다.</li>
+                    </ul>
+                  </div>
+                  <div>
+                    <h4>현재 열기</h4>
+                    <p>전체 저장소에서 스타 속도, 고유 참여자, 활동 종류와 단기 지속성을 비교해 지금의 관심도를 계산합니다.</p>
+                    <ul>
+                      <li>스타 속도: 선택한 구간의 스타 증가량을 24시간 기준으로 환산합니다.</li>
+                      <li>자연 유입 폭: 선택한 이벤트 구간의 고유 참여자 수입니다.</li>
+                      <li>다양성: Watch, Fork, PR·Issue·Comment, Push·Release 중 활성 범주의 비율입니다.</li>
+                      <li>지속성: 단기 참여자를 장기 구간 기준으로 환산한 비율이며 최대 1입니다.</li>
+                    </ul>
+                  </div>
+                </div>
+              </section>
+
+              <section>
+                <h3>관측 구간, 신뢰도와 한계</h3>
+                <p>
+                  스타와 이벤트 근거는 완전하게 수집된 가장 긴 구간을 24h → 6h → 1h 순서로 사용합니다.
+                  v3는 실제 스타 증가가 있어야 하며, 4시간보다 오래된 이벤트는 제외하고 급부상 계산에는
+                  최소 8개의 비교 가능한 저장소가 필요합니다.
+                </p>
+                <p>
+                  모멘텀 신뢰도는 스타 관측 구간과 저장소 지표의 완전성에 따라 달라집니다. v3는 이벤트 범위와
+                  비교군 크기도 반영하며, 높은 신뢰도에는 20개 이상의 비교군, 완전한 1h·6h·24h 스타 구간,
+                  24시간 이벤트 구간과 이전 72시간 참여자 근거가 필요합니다.
+                </p>
+                <p>
+                  새 후보는 14일간 유지하며 이후에는 최근 7일 스타 증가 또는 30일 내 푸시가 있어야 계속 추적합니다.
+                  Search 페이지네이션, API 가용성, 수집 공백, 삭제된 저장소와 GitHub Trending 출력 변화로 범위가 제한될 수 있습니다.
+                </p>
+              </section>
+            </>
+          ) : (
+            <>
           <section>
             <h3>Verified early discovery</h3>
             <p>
@@ -1322,10 +1491,12 @@ function MethodologyDialog({
               deleted repositories, and GitHub&apos;s changing Trending output can limit coverage.
             </p>
           </section>
+            </>
+          )}
 
           <footer className="methodology-meta">
-            <span>Evidence schema {trackRecord.schema_version}</span>
-            <span>Generated {formatCapturedAt(trackRecord.generated_at)}</span>
+            <span>{locale === "ko" ? "근거 스키마" : "Evidence schema"} {trackRecord.schema_version}</span>
+            <span>{locale === "ko" ? "생성" : "Generated"} {formatCapturedAt(trackRecord.generated_at, locale)}</span>
           </footer>
         </div>
       </div>
@@ -1353,15 +1524,15 @@ function TrackRecordMetric({
   );
 }
 
-function conversionMetric(conversion: TrackRecordConversion): {
+function conversionMetric(conversion: TrackRecordConversion, locale: Locale = "en"): {
   value: string;
   detail: string;
   collecting: boolean;
 } {
   if (conversion.eligible === 0) {
     return {
-      value: "Collecting evidence",
-      detail: "No eligible discoveries yet",
+      value: translate(locale, "trackRecord.collecting"),
+      detail: translate(locale, "trackRecord.noEligible"),
       collecting: true,
     };
   }
@@ -1369,22 +1540,31 @@ function conversionMetric(conversion: TrackRecordConversion): {
     throw new TypeError("Eligible conversion evidence requires a rate");
   }
   return {
-    value: percentageFormatter.format(conversion.rate),
-    detail: `${conversion.converted} of ${conversion.eligible} eligible discoveries`,
+    value: new Intl.NumberFormat(localeTag(locale), {
+      style: "percent",
+      maximumFractionDigits: 0,
+    }).format(conversion.rate),
+    detail: translate(locale, "trackRecord.eligible", {
+      converted: conversion.converted,
+      eligible: conversion.eligible,
+    }),
     collecting: false,
   };
 }
 
 export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }) {
+  const { locale, t } = useI18n();
   const [isMethodologyOpen, setIsMethodologyOpen] = useState(false);
-  const sevenDay = conversionMetric(trackRecord.conversion_7d);
-  const fourteenDay = conversionMetric(trackRecord.conversion_14d);
+  const sevenDay = conversionMetric(trackRecord.conversion_7d, locale);
+  const fourteenDay = conversionMetric(trackRecord.conversion_14d, locale);
   const verifiedReady = trackRecord.verified_count > 0;
   const medianLead = trackRecord.median_lead_hours;
   const medianReady = verifiedReady && medianLead !== null;
   const evidenceStart = trackRecord.evidence_started_at === null
-    ? "Evidence window is not established"
-    : `Evidence since ${evidenceDateFormatter.format(new Date(trackRecord.evidence_started_at))}`;
+    ? t("trackRecord.evidencePending")
+    : t("trackRecord.evidenceSince", {
+      date: formatEvidenceDate(trackRecord.evidence_started_at, locale),
+    });
 
   return (
     <section className="track-record" aria-labelledby="track-record-title">
@@ -1392,8 +1572,8 @@ export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }
         <div className="track-record-title">
           <TelescopeIcon size={17} />
           <div>
-            <h2 id="track-record-title">Track Record</h2>
-            <p>Observed before official GitHub Trending</p>
+            <h2 id="track-record-title">{t("trackRecord.title")}</h2>
+            <p>{t("trackRecord.subtitle")}</p>
           </div>
         </div>
         <div className="track-record-heading-meta">
@@ -1402,9 +1582,9 @@ export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }
             aria-controls="ranking-methodology-dialog"
             aria-expanded={isMethodologyOpen}
             aria-haspopup="dialog"
-            aria-label="How ranking and discovery evidence work"
+            aria-label={t("trackRecord.methodology")}
             onClick={() => setIsMethodologyOpen(true)}
-            title="How ranking and discovery evidence work"
+            title={t("trackRecord.methodology")}
             type="button"
           >
             <QuestionIcon size={16} />
@@ -1416,31 +1596,33 @@ export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }
         <div className="track-record-metrics">
           <TrackRecordMetric
             collecting={!verifiedReady}
-            label="Verified early"
-            value={verifiedReady ? numberFormatter.format(trackRecord.verified_count) : "Collecting evidence"}
+            label={t("trackRecord.verifiedEarly")}
+            value={verifiedReady
+              ? new Intl.NumberFormat(localeTag(locale)).format(trackRecord.verified_count)
+              : t("trackRecord.collecting")}
             detail={verifiedReady
-              ? `${trackRecord.period_hits.daily} Daily · ${trackRecord.period_hits.weekly} Weekly · ${trackRecord.period_hits.monthly} Monthly`
-              : "Legacy and unproven observations are excluded"}
+              ? t("trackRecord.periods", trackRecord.period_hits)
+              : t("trackRecord.excluded")}
           />
           <TrackRecordMetric
             collecting={!medianReady}
-            label="Median observed lead"
+            label={t("trackRecord.medianLead")}
             value={medianReady
-              ? formatObservedLeadDuration(medianLead)
-              : "Collecting evidence"}
-            detail={medianReady ? "Observation interval, not exact entry time" : "Waiting for verified Daily entries"}
+              ? formatObservedLeadDuration(medianLead, locale)
+              : t("trackRecord.collecting")}
+            detail={medianReady ? t("trackRecord.interval") : t("trackRecord.waiting")}
           />
-          <TrackRecordMetric label="7-day follow-through" {...sevenDay} />
-          <TrackRecordMetric label="14-day follow-through" {...fourteenDay} />
+          <TrackRecordMetric label={t("trackRecord.follow7")} {...sevenDay} />
+          <TrackRecordMetric label={t("trackRecord.follow14")} {...fourteenDay} />
         </div>
 
         <div className="track-record-recent">
           <div className="track-record-recent-heading">
             <GraphIcon size={14} />
-            <h3>Recent verified</h3>
+            <h3>{t("trackRecord.recent")}</h3>
           </div>
           {trackRecord.recent_hits.length === 0 ? (
-            <p className="track-record-empty">Verified outcomes will appear as evidence matures.</p>
+            <p className="track-record-empty">{t("trackRecord.recentEmpty")}</p>
           ) : (
             <ol>
               {trackRecord.recent_hits.map((hit) => (
@@ -1454,7 +1636,10 @@ export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }
                     <span>{hit.full_name}</span>
                   </a>
                   <span>
-                    Observed {formatObservedLeadDuration(hit.lead_hours)} before Daily · Daily #{hit.first_trending_rank}
+                    {t("trackRecord.recentHit", {
+                      lead: formatObservedLeadDuration(hit.lead_hours, locale),
+                      rank: hit.first_trending_rank,
+                    })}
                   </span>
                 </li>
               ))}
@@ -1479,13 +1664,14 @@ export function SiteNavigation({
   currentPath: AppPath;
   onNavigate: (event: MouseEvent<HTMLAnchorElement>, path: AppPath) => void;
 }) {
+  const { t } = useI18n();
   const links: Array<{ path: AppPath; label: string }> = [
-    { path: "/", label: "Rankings" },
-    { path: "/archive", label: "Archive" },
-    { path: "/track-record", label: "Track Record" },
+    { path: "/", label: t("nav.rankings") },
+    { path: "/archive", label: t("nav.archive") },
+    { path: "/track-record", label: t("nav.trackRecord") },
   ];
   return (
-    <nav aria-label="Primary" className="site-navigation">
+    <nav aria-label={t("nav.primary")} className="site-navigation">
       <div className="site-navigation-inner">
         {links.map((link) => (
           <a
@@ -1503,13 +1689,12 @@ export function SiteNavigation({
 }
 
 function TrackRecordPage({ trackRecord }: { trackRecord: TrackRecord }) {
+  const { t } = useI18n();
   return (
     <main className="page-container standalone-page track-record-page">
       <section className="standalone-page-intro" aria-labelledby="track-record-page-title">
-        <h1 id="track-record-page-title">Track Record</h1>
-        <p>
-          Verifiable outcomes for repositories observed before they appeared in GitHub Trending Daily.
-        </p>
+        <h1 id="track-record-page-title">{t("trackRecord.title")}</h1>
+        <p>{t("trackRecord.pageDescription")}</p>
       </section>
       <TrackRecordSection trackRecord={trackRecord} />
     </main>
@@ -1527,6 +1712,7 @@ function ArchiveRow({
   onRead: (fullName: string) => void;
   onOpenSnapshot: (event: MouseEvent<HTMLAnchorElement>, snapshotId: string) => void;
 }) {
+  const { locale, t } = useI18n();
   const stars = requireDisplayValue(repository.metrics.stars, "metrics.stars", repository.full_name);
   return (
     <li className={`archive-row ${isRead ? "archive-row-read" : ""}`}>
@@ -1543,23 +1729,22 @@ function ArchiveRow({
             <RepoIcon size={14} />
             {repository.full_name}
           </a>
-          {isRead ? <span className="repository-read-label"><CheckIcon size={12} />Read</span> : null}
         </div>
-        <p>{repository.description ?? "No description"}</p>
+        <p>{repository.description ?? t("repository.noDescription")}</p>
         <span className="archive-mobile-meta">
-          {repository.language ?? "Unknown language"} · {formatCompactNumber(stars)} stars · last rank #{repository.rank}
+          {repository.language ?? t("repository.unknownLanguage")} · {formatCompactNumber(stars, locale)} {t("ranking.column.stars")} · {t("archive.lastRank", { rank: repository.rank })}
         </span>
       </div>
       <span className="archive-stat">{repository.language ?? "—"}</span>
-      <span className="archive-stat"><StarIcon size={12} />{formatCompactNumber(stars)}</span>
+      <span className="archive-stat"><StarIcon size={12} />{formatCompactNumber(stars, locale)}</span>
       <span className="archive-stat">#{repository.rank}</span>
       <span className="archive-last-observed">
-        <time dateTime={repository.last_observed_at}>{formatCapturedAt(repository.last_observed_at)}</time>
+        <time dateTime={repository.last_observed_at}>{formatCapturedAt(repository.last_observed_at, locale)}</time>
         <a
           href={`/?page=1&snapshot=${encodeURIComponent(repository.last_snapshot_id)}`}
           onClick={(event) => onOpenSnapshot(event, repository.last_snapshot_id)}
         >
-          View snapshot
+          {t("archive.viewSnapshot")}
         </a>
       </span>
     </li>
@@ -1579,6 +1764,7 @@ function ArchivePage({
   onNavigate: (href: string, mode: RankingNavigationMode) => void;
   onOpenSnapshot: (event: MouseEvent<HTMLAnchorElement>, snapshotId: string) => void;
 }) {
+  const { t } = useI18n();
   const parameters = new URLSearchParams(locationSearch);
   const page = requestedPage(locationSearch);
   const query = parameters.get("query")?.trim() ?? "";
@@ -1632,55 +1818,55 @@ function ArchivePage({
   return (
     <main className="page-container standalone-page archive-page">
       <section className="standalone-page-intro" aria-labelledby="archive-page-title">
-        <h1 id="archive-page-title">Archive</h1>
-        <p>
-          Previously observed repositories absent from the latest collection. Their original ranking
-          snapshots remain available in History, and rediscovered repositories return to Rankings automatically.
-        </p>
+        <h1 id="archive-page-title">{t("archive.title")}</h1>
+        <p>{t("archive.description")}</p>
       </section>
 
       <section aria-busy={isLoading} className={`archive-board ${isLoading ? "archive-board-loading" : ""}`}>
         <div className="archive-board-heading">
           <div>
-            <h2>Inactive observations</h2>
-            <p>Last-known repository data, ordered by most recent observation.</p>
+            <h2>{t("archive.inactive")}</h2>
+            <p>{t("archive.inactiveDescription")}</p>
           </div>
           <span className="result-count">
             {archive === null
-              ? "Loading"
+              ? t("archive.loading")
               : query === ""
-                ? `${archive.archive_count} repositories`
-                : `${archive.matching_count} of ${archive.archive_count} repositories`}
+                ? t("ranking.repositories", { count: archive.archive_count })
+                : t("ranking.filteredRepositories", {
+                  matching: archive.matching_count,
+                  total: archive.archive_count,
+                })}
           </span>
         </div>
         <form className="archive-search" onSubmit={submitSearch} role="search">
-          <label htmlFor="archive-search-input">Search archive</label>
+          <label htmlFor="archive-search-input">{t("archive.searchLabel")}</label>
           <div>
             <SearchIcon size={16} />
             <input
               id="archive-search-input"
               maxLength={200}
-              placeholder="Repository, language, or topic"
+              placeholder={t("archive.searchPlaceholder")}
               type="search"
               value={queryInput}
               onChange={(event) => setQueryInput(event.target.value)}
             />
-            <button type="submit">Search</button>
+            <button type="submit">{t("header.search")}</button>
           </div>
         </form>
         <div className="archive-column-heading" aria-hidden="true">
-          <span>Card</span><span>Repository</span><span>Language</span><span>Stars</span><span>Last rank</span><span>Last observed</span>
+          <span>{t("ranking.column.card")}</span><span>{t("ranking.column.repository")}</span><span>{t("ranking.column.language")}</span><span>{t("ranking.column.stars")}</span><span>{t("archive.column.lastRank")}</span><span>{t("archive.column.lastObserved")}</span>
         </div>
         {archiveError !== null ? (
           <p className="archive-status" role="alert">{archiveError}</p>
         ) : archive === null ? (
-          <div className="archive-status" role="status">Loading archived repositories…</div>
+          <div className="archive-status" role="status">{t("archive.loadingRepositories")}</div>
         ) : archive.repositories.length === 0 ? (
           <div className="archive-empty-state">
-            <h3>{query === "" ? "Archive is empty" : `No results for “${query}”`}</h3>
+            <h3>{query === "" ? t("archive.empty") : t("archive.noResults", { query })}</h3>
             <p>{query === ""
-              ? "Repositories appear here only after leaving the latest collection."
-              : "Try a repository name, language, or topic."}</p>
+              ? t("archive.emptyDescription")
+              : t("archive.noResultsDescription")}</p>
           </div>
         ) : (
           <ol className="archive-list">
@@ -1732,6 +1918,7 @@ function RankingPage({
   locationSearch: string;
   onNavigate: (href: string, mode: RankingNavigationMode) => void;
 }) {
+  const { locale, t } = useI18n();
   const filters = parseRepositoryFilters(locationSearch);
   const rankingView = parseRankingView(locationSearch);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
@@ -1747,7 +1934,7 @@ function RankingPage({
   const repositories = selectedSnapshot.repositories;
   const starSeries = useRepositoryStarSeries(selectedSnapshot.id, repositories);
   const filterCount = activeFilterCount(filters);
-  const viewCopy = rankingViewCopy(rankingView);
+  const viewCopy = rankingViewCopy(rankingView, locale);
   const intelligenceAvailable = selectedSnapshot.intelligence_available;
 
   function changeFilters(nextFilters: RepositoryFilters) {
@@ -1780,12 +1967,12 @@ function RankingPage({
   return (
     <main className="page-container">
       <section className="page-intro" aria-labelledby="page-title">
-        <h1 id="page-title">GitHub Momentum</h1>
+        <h1 id="page-title">{t("ranking.title")}</h1>
         <p className="last-updated">
           <HistoryIcon size={14} />
           <span>
-            Last updated <time dateTime={selectedSnapshot.captured_at}>
-              {formatCapturedAt(selectedSnapshot.captured_at)}
+            {t("ranking.lastUpdated")} <time dateTime={selectedSnapshot.captured_at}>
+              {formatCapturedAt(selectedSnapshot.captured_at, locale)}
             </time>
           </span>
         </p>
@@ -1808,39 +1995,42 @@ function RankingPage({
             type="button"
           >
             <FilterIcon size={16} />
-            Filters
+            {t("filters.label")}
             {filterCount === 0 ? null : <strong>{filterCount}</strong>}
           </button>
           <section
             aria-busy={isSnapshotLoading}
             className={`ranking-board ${isSnapshotLoading ? "ranking-board-loading" : ""}`}
-            aria-label="Repository ranking"
+            aria-label={t("ranking.label")}
           >
         <div className="board-heading">
           <div className="board-title">
             <RepoIcon size={18} />
             <div>
               <h2>{viewCopy.title}</h2>
-              <p>{sourceLabel(selectedSnapshot.source)}</p>
+              <p>{sourceLabel(selectedSnapshot.source, locale)}</p>
             </div>
           </div>
           <div className="board-status">
             {isSnapshotLoading ? (
               <span className="snapshot-loading" role="status">
-                <span className="snapshot-loading-spinner" />Updating snapshot
+                <span className="snapshot-loading-spinner" />{t("ranking.updating")}
               </span>
             ) : null}
             <span className="result-count">
               {rankingView === "momentum"
                 ? filterCount === 0
-                  ? `${selectedSnapshot.repository_count} repositories`
-                  : `${selectedSnapshot.matching_count} of ${selectedSnapshot.repository_count} repositories`
-                : `${selectedSnapshot.matching_count} scored repositories`}
+                  ? t("ranking.repositories", { count: selectedSnapshot.repository_count })
+                  : t("ranking.filteredRepositories", {
+                    matching: selectedSnapshot.matching_count,
+                    total: selectedSnapshot.repository_count,
+                  })
+                : t("ranking.scoredRepositories", { count: selectedSnapshot.matching_count })}
             </span>
           </div>
         </div>
 
-        <div className="ranking-view-tabs" role="tablist" aria-label="Ranking model">
+        <div className="ranking-view-tabs" role="tablist" aria-label={t("ranking.model")}>
           <button
             aria-describedby="ranking-view-description"
             aria-selected={rankingView === "momentum"}
@@ -1848,7 +2038,7 @@ function RankingPage({
             onClick={() => changeRankingView("momentum")}
             role="tab"
             type="button"
-          >Momentum</button>
+          >{t("ranking.momentum")}</button>
           <button
             aria-describedby="ranking-view-description"
             aria-selected={rankingView === "breakout"}
@@ -1857,7 +2047,7 @@ function RankingPage({
             onClick={() => changeRankingView("breakout")}
             role="tab"
             type="button"
-          >Breakout</button>
+          >{t("ranking.breakout")}</button>
           <button
             aria-describedby="ranking-view-description"
             aria-selected={rankingView === "current"}
@@ -1866,7 +2056,7 @@ function RankingPage({
             onClick={() => changeRankingView("current")}
             role="tab"
             type="button"
-          >Current heat</button>
+          >{t("ranking.currentHeat")}</button>
         </div>
 
         <div
@@ -1882,7 +2072,7 @@ function RankingPage({
             onClick={() => setIsMethodologyOpen(true)}
             type="button"
           >
-            <QuestionIcon size={14} />How scoring works
+            <QuestionIcon size={14} />{t("ranking.howScoringWorks")}
           </button>
         </div>
 
@@ -1891,25 +2081,25 @@ function RankingPage({
         )}
 
         <div className="column-heading" aria-hidden="true">
-          <span>Rank</span>
-          <span>Card</span>
-          <span>Repository</span>
-          <span>Language</span>
-          <span className="stars-heading"><StarIcon size={12} />Stars</span>
-          <span>Stars gained</span>
+          <span>{t("ranking.column.rank")}</span>
+          <span>{t("ranking.column.card")}</span>
+          <span>{t("ranking.column.repository")}</span>
+          <span>{t("ranking.column.language")}</span>
+          <span className="stars-heading"><StarIcon size={12} />{t("ranking.column.stars")}</span>
+          <span>{t("ranking.column.gained")}</span>
         </div>
 
         {repositories.length === 0 ? (
           <div className="filter-empty-state">
             <h3>{rankingView === "momentum"
-              ? "No repositories match these filters"
-              : "Trend evidence is not ready for this view"}</h3>
+              ? t("ranking.emptyFiltered")
+              : t("ranking.emptyEvidence")}</h3>
             <p>{rankingView === "momentum"
-              ? "Try another language or topic."
-              : "Repositories remain unranked until fresh GitHub events and peer history are available."}</p>
+              ? t("ranking.tryFilters")
+              : t("ranking.waitEvidence")}</p>
             {filterCount === 0 ? null : (
               <button type="button" onClick={() => changeFilters({ language: null, topic: null })}>
-                Clear filters
+                {t("ranking.clearFilters")}
               </button>
             )}
           </div>
@@ -1964,13 +2154,14 @@ function RankingPage({
 }
 
 export function InitialLoadingState() {
+  const { t } = useI18n();
   return (
     <main
       aria-busy="true"
-      aria-label="Loading repository rankings"
+      aria-label={t("loading.rankings")}
       className="page-container initial-loading-state"
     >
-      <span className="visually-hidden" role="status">Loading repository rankings</span>
+      <span className="visually-hidden" role="status">{t("loading.rankings")}</span>
       <section aria-hidden="true" className="loading-skeleton-intro">
         <span className="loading-skeleton-block loading-skeleton-title" />
         <span className="loading-skeleton-block loading-skeleton-meta" />
@@ -2017,12 +2208,66 @@ export function InitialLoadingState() {
   );
 }
 
+export function FooterTrafficBadge({ state }: { state: FooterTrafficState }) {
+  const { locale, t } = useI18n();
+  const label = state.status === "loading"
+    ? t("footer.todayLoading")
+    : state.status === "unavailable"
+      ? t("footer.todayUnavailable")
+      : state.visits === 1
+        ? t("footer.todayVisit")
+        : t("footer.todayVisits", {
+          count: new Intl.NumberFormat(locale === "ko" ? "ko-KR" : "en-US").format(state.visits),
+        });
+  return (
+    <span
+      aria-live="polite"
+      className={`footer-traffic footer-traffic-${state.status}`}
+    >
+      <PeopleIcon aria-hidden="true" size={14} />
+      {label}
+    </span>
+  );
+}
+
 export function SiteFooter() {
+  const { t } = useI18n();
+  const [traffic, setTraffic] = useState<FooterTrafficState>({ status: "loading" });
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function loadTraffic() {
+      try {
+        const response = await fetch("/api/traffic", {
+          headers: { Accept: "application/json" },
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`Traffic request failed with status ${response.status}`);
+        }
+        const result = parsePublicTrafficResponse(await response.json());
+        setTraffic({ status: "ready", visits: result.visits });
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.error(error);
+          setTraffic({ status: "unavailable" });
+        }
+      }
+    }
+
+    void loadTraffic();
+    return () => controller.abort();
+  }, []);
+
   return (
     <footer className="site-footer">
       <div className="footer-inner">
-        <span className="footer-owner">Changroro</span>
-        <nav aria-label="Creator links" className="footer-links">
+        <div className="footer-meta">
+          <span className="footer-owner">Changroro</span>
+          <FooterTrafficBadge state={traffic} />
+        </div>
+        <nav aria-label={t("footer.links")} className="footer-links">
           <a href="https://github.com/Changroro" rel="noreferrer" target="_blank">
             <MarkGithubIcon size={16} />
             github.com/Changroro
@@ -2037,7 +2282,14 @@ export function SiteFooter() {
   );
 }
 
-export default function App() {
+function AppContent({
+  locale,
+  onLocaleChange,
+}: {
+  locale: Locale;
+  onLocaleChange: (locale: Locale) => void;
+}) {
+  const { t } = useI18n();
   const [snapshots, setSnapshots] = useState<RankingSnapshotMetadata[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedSnapshot, setSelectedSnapshot] = useState<RankingPageResponse | null>(null);
@@ -2245,22 +2497,23 @@ export default function App() {
           <a
             className="brand"
             href="/"
-            aria-label="AI Trend Radar home"
+            aria-label={t("header.home")}
             onClick={navigateHome}
           >
             <MarkGithubIcon size={30} />
             <span>AI Trend Radar</span>
           </a>
           <div className="header-actions">
+            <LanguageSwitcher locale={locale} onChange={onLocaleChange} />
             <button
-              aria-label="Search repositories"
+              aria-label={t("header.searchRepositories")}
               className="header-search-button"
               disabled={selectedSnapshot === null}
               onClick={() => setIsSearchOpen(true)}
               type="button"
             >
               <SearchIcon size={18} />
-              <span>Search</span>
+              <span>{t("header.search")}</span>
             </button>
             <ThemeButton />
           </div>
@@ -2271,7 +2524,7 @@ export default function App() {
       {error !== null && selectedSnapshot === null ? (
         <main className="page-container">
           <section className="status-panel" role="alert">
-            <h1>History unavailable</h1>
+            <h1>{t("status.historyUnavailable")}</h1>
             <p>{error}</p>
           </section>
         </main>
@@ -2313,5 +2566,30 @@ export default function App() {
       )}
       <SiteFooter />
     </div>
+  );
+}
+
+export default function App() {
+  const [locale, setLocale] = useState<Locale>(() => resolveInitialLocale(
+    localStorage.getItem(LOCALE_STORAGE_KEY),
+    navigator.languages,
+  ));
+
+  useEffect(() => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+    document.documentElement.lang = locale;
+    document.title = locale === "ko" ? "AI Trend Radar · GitHub 트렌드 랭킹" : "AI Trend Radar · GitHub trend rankings";
+    const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
+    if (description !== null) {
+      description.content = locale === "ko"
+        ? "GitHub 저장소의 성장 신호와 실제 관측 데이터를 비교하는 AI Trend Radar 랭킹입니다."
+        : "AI Trend Radar ranks GitHub repositories using observed growth, activity, and transparent momentum signals.";
+    }
+  }, [locale]);
+
+  return (
+    <I18nProvider locale={locale}>
+      <AppContent locale={locale} onLocaleChange={setLocale} />
+    </I18nProvider>
   );
 }

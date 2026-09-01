@@ -6,6 +6,7 @@ import {
   formatCompactNumber,
   formatObservedLeadDuration,
   InitialLoadingState,
+  FooterTrafficBadge,
   rankingViewCopy,
   resolveAppPath,
   SiteNavigation,
@@ -13,6 +14,7 @@ import {
   TrackRecordSection,
 } from "./App";
 import type { DiscoveryEvidence, TrackRecord } from "./lib/discovery-track-record";
+import { I18nProvider } from "./lib/i18n";
 
 describe("ranking view guidance", () => {
   it("explains each ranking model in plain language", () => {
@@ -45,6 +47,18 @@ describe("application navigation", () => {
 
     expect(markup).toContain('aria-current="page" href="/archive"');
     expect(markup).toContain("Track Record");
+  });
+
+  it("renders Korean navigation through the shared i18n provider", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider locale="ko">
+        <SiteNavigation currentPath="/archive" onNavigate={() => undefined} />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain("랭킹");
+    expect(markup).toContain("아카이브");
+    expect(markup).toContain("발굴 성과");
   });
 });
 
@@ -79,6 +93,19 @@ describe("SiteFooter", () => {
     expect(markup).toContain('href="https://github.com/Changroro"');
     expect(markup).toContain('href="mailto:chbae624@gmail.com"');
   });
+
+  it("renders localized public visit badges without exposing analytics details", () => {
+    const english = renderToStaticMarkup(<FooterTrafficBadge state={{ status: "ready", visits: 15 }} />);
+    const korean = renderToStaticMarkup(
+      <I18nProvider locale="ko">
+        <FooterTrafficBadge state={{ status: "ready", visits: 15 }} />
+      </I18nProvider>,
+    );
+
+    expect(english).toContain("Today · 15 visits");
+    expect(korean).toContain("오늘 · 방문 15회");
+    expect(english).not.toContain("Cloudflare");
+  });
 });
 
 describe("TrackRecordSection", () => {
@@ -90,6 +117,18 @@ describe("TrackRecordSection", () => {
     expect(markup).not.toContain("0%");
     expect(markup).toContain('aria-haspopup="dialog"');
     expect(markup).toContain('aria-controls="ranking-methodology-dialog"');
+  });
+
+  it("localizes evidence collection states in Korean", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider locale="ko">
+        <TrackRecordSection trackRecord={emptyTrackRecord()} />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain("발굴 성과");
+    expect(markup.match(/근거 수집 중/g)).toHaveLength(4);
+    expect(markup).not.toContain("Collecting evidence");
   });
 
   it("renders verified outcomes, recent repositories, and methodology details", () => {

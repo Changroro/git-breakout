@@ -2,6 +2,10 @@ import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { loadRepositoryCard } from "./card-cache.ts";
+import {
+  CloudflareTrafficAnalytics,
+  type CloudflareTrafficConfig,
+} from "./cloudflare-traffic.ts";
 import { PublicHistoryApi } from "./public-history.ts";
 import type { RankingView } from "../src/lib/repository-filters.ts";
 
@@ -22,6 +26,7 @@ export type WebServerConfig = {
   cacheDirectory: string;
   internalApiUrl: string;
   staticDirectory: string;
+  trafficAnalytics: CloudflareTrafficConfig;
 };
 
 type WebServerDependencies = {
@@ -186,7 +191,7 @@ function serveStatic(
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader(
     "Cache-Control",
-    ["/", "/archive", "/track-record", "/theme-init.js"].includes(pathname)
+    ["/", "/archive", "/track-record", "/theme-init.js", "/locale-init.js"].includes(pathname)
       ? "no-cache"
       : "public, max-age=31536000, immutable",
   );
@@ -216,6 +221,9 @@ export function createWebServer(
     baseUrl: config.internalApiUrl,
     fetchImplementation,
   });
+  const trafficAnalytics = new CloudflareTrafficAnalytics(config.trafficAnalytics, {
+    fetchImplementation,
+  });
   const cardCacheDirectory = resolve(config.cacheDirectory, "repository-cards");
 
   const server = createServer(async (request, response) => {
@@ -242,6 +250,24 @@ export function createWebServer(
         sendJson(response, 200, await historyApi.readTimeline());
       } catch (error) {
         sendJson(response, 502, { error: errorMessage(error) });
+      }
+      return;
+    }
+    if (requestUrl.pathname === "/api/traffic") {
+      if (request.method !== "GET") {
+        rejectMethod(response, "GET");
+        return;
+      }
+      try {
+        sendJson(
+          response,
+          200,
+          await trafficAnalytics.readDailyTraffic(),
+          "public, max-age=300",
+        );
+      } catch (error) {
+        process.stderr.write(`Traffic analytics failed: ${errorMessage(error)}\n`);
+        sendJson(response, 503, { error: "Traffic statistics are unavailable" });
       }
       return;
     }

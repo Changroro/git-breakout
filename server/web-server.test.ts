@@ -6,6 +6,11 @@ import { createWebServer } from "./web-server.ts";
 
 const snapshotId = "11111111-1111-4111-8111-111111111111";
 const servers: ReturnType<typeof createWebServer>[] = [];
+const trafficAnalytics = {
+  apiToken: "test-token",
+  hostname: "github-trend-radar.imbch.dev",
+  zoneId: "0123456789abcdef0123456789abcdef",
+};
 
 function testDirectories(): { cacheDirectory: string; staticDirectory: string } {
   const root = mkdtempSync(join(tmpdir(), "trend-radar-web-"));
@@ -13,6 +18,17 @@ function testDirectories(): { cacheDirectory: string; staticDirectory: string } 
   mkdirSync(staticDirectory);
   writeFileSync(join(staticDirectory, "index.html"), "<main>Trend Radar</main>");
   return { cacheDirectory: join(root, "cache"), staticDirectory };
+}
+
+function successfulTrafficResponse(visits: number): Response {
+  return new Response(JSON.stringify({
+    data: {
+      viewer: {
+        zones: [{ traffic: [{ sum: { visits } }] }],
+      },
+    },
+    errors: null,
+  }), { headers: { "Content-Type": "application/json" } });
 }
 
 async function listen(server: ReturnType<typeof createWebServer>): Promise<string> {
@@ -43,6 +59,7 @@ describe("createWebServer", () => {
     const server = createWebServer({
       ...testDirectories(),
       internalApiUrl: "http://rest:3000",
+      trafficAnalytics,
     }, { fetchImplementation });
     const baseUrl = await listen(server);
 
@@ -60,6 +77,28 @@ describe("createWebServer", () => {
     await expect(fetch(`${baseUrl}/health`).then((response) => response.json())).resolves.toEqual({
       status: "ok",
     });
+  });
+
+  it("serves cached public traffic without exposing Cloudflare credentials", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(successfulTrafficResponse(15));
+    const server = createWebServer({
+      ...testDirectories(),
+      internalApiUrl: "http://rest:3000",
+      trafficAnalytics,
+    }, { fetchImplementation });
+    const baseUrl = await listen(server);
+
+    const response = await fetch(`${baseUrl}/api/traffic`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("public, max-age=300");
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      schema_version: "1.0",
+      time_zone: "Asia/Seoul",
+      visits: 15,
+    });
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+    expect(JSON.stringify(payload)).not.toContain("test-token");
   });
 
   it("does not cache mutable ranking pages and serves bounded search results", async () => {
@@ -128,6 +167,7 @@ describe("createWebServer", () => {
     const server = createWebServer({
       ...testDirectories(),
       internalApiUrl: "http://rest:3000",
+      trafficAnalytics,
     }, { fetchImplementation });
     const baseUrl = await listen(server);
 
@@ -182,6 +222,7 @@ describe("createWebServer", () => {
     const server = createWebServer({
       ...testDirectories(),
       internalApiUrl: "http://rest:3000",
+      trafficAnalytics,
     }, { fetchImplementation });
     const baseUrl = await listen(server);
 
@@ -213,6 +254,7 @@ describe("createWebServer", () => {
     const server = createWebServer({
       ...testDirectories(),
       internalApiUrl: "http://rest:3000",
+      trafficAnalytics,
     });
     const baseUrl = await listen(server);
 

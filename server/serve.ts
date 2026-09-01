@@ -22,6 +22,11 @@ const server = createWebServer({
   cacheDirectory: resolve(requireEnvironment("TREND_RADAR_WEB_CACHE_DIR")),
   internalApiUrl: requireEnvironment("TREND_RADAR_INTERNAL_API_URL"),
   staticDirectory: resolve(requireEnvironment("TREND_RADAR_STATIC_DIR")),
+  trafficAnalytics: {
+    apiToken: requireEnvironment("CLOUDFLARE_ANALYTICS_TOKEN"),
+    hostname: requireEnvironment("TREND_RADAR_PUBLIC_HOST"),
+    zoneId: requireEnvironment("CLOUDFLARE_ZONE_ID"),
+  },
 });
 
 server.listen(port, "0.0.0.0", () => {
