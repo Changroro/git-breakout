@@ -8,7 +8,10 @@ import {
   type RepositorySearchResponse,
   type TimelineResponse,
 } from "../src/lib/history.ts";
-import type { RankingView } from "../src/lib/repository-filters.ts";
+import type {
+  GitHubTrendingPeriod,
+  RankingView,
+} from "../src/lib/repository-filters.ts";
 import { parseSnapshotTimeline } from "./remote-history.ts";
 import {
   parseStarSeriesResponse,
@@ -126,6 +129,7 @@ export class PublicHistoryApi {
     language,
     topic,
     view,
+    period,
   }: {
     snapshotId: string;
     page: number;
@@ -133,6 +137,7 @@ export class PublicHistoryApi {
     language: string | null;
     topic: string | null;
     view: RankingView;
+    period: GitHubTrendingPeriod | null;
   }): Promise<RankingPageResponse> {
     if (!Number.isInteger(page) || page < 1) {
       throw new RangeError("Ranking page must be a positive integer");
@@ -147,6 +152,7 @@ export class PublicHistoryApi {
       p_language: language,
       p_topic: topic,
       p_view: view,
+      p_period: period,
     }));
   }
 

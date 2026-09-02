@@ -7,7 +7,10 @@ import {
   type CloudflareTrafficConfig,
 } from "./cloudflare-traffic.ts";
 import { PublicHistoryApi } from "./public-history.ts";
-import type { RankingView } from "../src/lib/repository-filters.ts";
+import type {
+  GitHubTrendingPeriod,
+  RankingView,
+} from "../src/lib/repository-filters.ts";
 
 const MAX_PROXY_BODY_BYTES = 32 * 1024 * 1024;
 const PROXY_TIMEOUT_MS = 60_000;
@@ -84,10 +87,27 @@ function requirePositiveIntegerParameter(
 
 function requireRankingView(requestUrl: URL): RankingView {
   const view = requestUrl.searchParams.get("view");
-  if (view === "momentum" || view === "breakout" || view === "current") {
+  if (view === "momentum" || view === "breakout" || view === "current" || view === "github") {
     return view;
   }
-  throw new TypeError("view must be momentum, breakout, or current");
+  throw new TypeError("view must be breakout, momentum, current, or github");
+}
+
+function requireGitHubTrendingPeriod(
+  requestUrl: URL,
+  view: RankingView,
+): GitHubTrendingPeriod | null {
+  const period = requestUrl.searchParams.get("period");
+  if (view !== "github") {
+    if (period !== null) {
+      throw new TypeError("period is only valid for the github view");
+    }
+    return null;
+  }
+  if (period === "daily" || period === "weekly" || period === "monthly") {
+    return period;
+  }
+  throw new TypeError("period must be daily, weekly, or monthly for the github view");
 }
 
 async function readRequestBody(request: IncomingMessage): Promise<Buffer | undefined> {
@@ -303,13 +323,15 @@ export function createWebServer(
         if (snapshotId === null) {
           throw new TypeError("snapshot is required");
         }
+        const view = requireRankingView(requestUrl);
         const ranking = await historyApi.readRankingPage({
           snapshotId,
           page: requirePositiveIntegerParameter(requestUrl, "page", 1_000_000),
           pageSize: requirePositiveIntegerParameter(requestUrl, "page_size", 100),
           language: requestUrl.searchParams.get("language"),
           topic: requestUrl.searchParams.get("topic"),
-          view: requireRankingView(requestUrl),
+          view,
+          period: requireGitHubTrendingPeriod(requestUrl, view),
         });
         sendJson(response, 200, ranking, "no-store");
       } catch (error) {

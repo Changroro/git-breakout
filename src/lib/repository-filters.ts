@@ -3,7 +3,9 @@ export type RepositoryFilters = {
   topic: string | null;
 };
 
-export type RankingView = "momentum" | "breakout" | "current";
+export type RankingView = "breakout" | "momentum" | "current" | "github";
+export type GitHubTrendingPeriod = "daily" | "weekly" | "monthly";
+export const GITHUB_TRENDING_PERIODS = ["daily", "weekly", "monthly"] as const;
 
 export type RepositoryFilterOption = {
   value: string;
@@ -96,16 +98,24 @@ export function parseRepositoryFilters(search: string): RepositoryFilters {
 
 export function parseRankingView(search: string): RankingView {
   const value = new URLSearchParams(search).get("view");
-  if (value === null || value === "momentum") return "momentum";
-  if (value === "breakout" || value === "current") return value;
+  if (value === null || value === "breakout") return "breakout";
+  if (value === "momentum" || value === "current" || value === "github") return value;
   throw new TypeError(`Unknown ranking view ${value}`);
+}
+
+export function parseGitHubTrendingPeriod(search: string): GitHubTrendingPeriod {
+  const value = new URLSearchParams(search).get("period");
+  if (value === null || value === "daily") return "daily";
+  if (value === "weekly" || value === "monthly") return value;
+  throw new TypeError(`Unknown GitHub Trending period ${value}`);
 }
 
 export function buildRankingHref(
   page: number,
   snapshotId: string,
   filters: RepositoryFilters,
-  view: RankingView = "momentum",
+  view: RankingView = "breakout",
+  period: GitHubTrendingPeriod = "daily",
 ): string {
   if (!Number.isInteger(page) || page < 1) {
     throw new RangeError("page must be a positive integer");
@@ -115,8 +125,11 @@ export function buildRankingHref(
   }
 
   const parameters = new URLSearchParams({ page: String(page), snapshot: snapshotId });
-  if (view !== "momentum") {
+  if (view !== "breakout") {
     parameters.set("view", view);
+  }
+  if (view === "github") {
+    parameters.set("period", period);
   }
   const language = normalizeFilterValue(filters.language);
   const topic = normalizeFilterValue(filters.topic);

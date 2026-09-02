@@ -172,7 +172,7 @@ describe("createWebServer", () => {
     const baseUrl = await listen(server);
 
     const ranking = await fetch(
-      `${baseUrl}/api/ranking?snapshot=${snapshotId}&page=1&page_size=10&view=momentum`,
+      `${baseUrl}/api/ranking?snapshot=${snapshotId}&page=1&page_size=10&view=github&period=weekly`,
     );
     expect(ranking.status).toBe(200);
     expect(ranking.headers.get("cache-control")).toBe("no-store");

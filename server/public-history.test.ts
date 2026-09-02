@@ -123,6 +123,7 @@ describe("PublicHistoryApi", () => {
       language: "typescript",
       topic: "ai",
       view: "breakout",
+      period: null,
     })).resolves.toMatchObject({ page: 2, matching_count: 42 });
     expect(fetchImplementation).toHaveBeenCalledWith(
       "http://rest:3000/rpc/snapshot_page",
@@ -134,6 +135,7 @@ describe("PublicHistoryApi", () => {
           p_language: "typescript",
           p_topic: "ai",
           p_view: "breakout",
+          p_period: null,
         }),
       }),
     );

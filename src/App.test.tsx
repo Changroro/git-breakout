@@ -8,6 +8,7 @@ import {
   HeaderTrafficBadge,
   InitialLoadingState,
   LanguageSwitcher,
+  RANKING_VIEW_ORDER,
   rankingViewCopy,
   RepositoryThumbnailFallback,
   resolveAppPath,
@@ -19,10 +20,15 @@ import type { DiscoveryEvidence, TrackRecord } from "./lib/discovery-track-recor
 import { I18nProvider } from "./lib/i18n";
 
 describe("ranking view guidance", () => {
+  it("orders the ranking views around discovery first", () => {
+    expect(RANKING_VIEW_ORDER).toEqual(["breakout", "momentum", "current", "github"]);
+  });
+
   it("explains each ranking model in plain language", () => {
     expect(rankingViewCopy("momentum").description).toContain("Durable overall strength");
     expect(rankingViewCopy("breakout").description).toContain("Peer-relative acceleration");
     expect(rankingViewCopy("current").description).toContain("Absolute attention now");
+    expect(rankingViewCopy("github").description).toContain("GitHub Trending rank");
   });
 
   it("formats compact values with locale-neutral English units", () => {

@@ -45,8 +45,11 @@ import {
 } from "./lib/pagination";
 import {
   buildRankingHref,
+  GITHUB_TRENDING_PERIODS,
+  parseGitHubTrendingPeriod,
   parseRankingView,
   parseRepositoryFilters,
+  type GitHubTrendingPeriod,
   type RankingView,
   type RepositoryFilterOption,
   type RepositoryFilters,
@@ -91,6 +94,19 @@ const SEARCH_TOPIC_LIMIT = 40;
 const SEARCH_RESULT_LIMIT = 10;
 const READ_REPOSITORIES_STORAGE_KEY = "github-trend-radar:read-repositories";
 const LOCALE_STORAGE_KEY = "github-trend-radar:locale";
+
+export const RANKING_VIEW_ORDER = ["breakout", "momentum", "current", "github"] as const;
+const RANKING_VIEW_LABEL_KEYS = {
+  breakout: "ranking.breakout",
+  momentum: "ranking.momentum",
+  current: "ranking.currentHeat",
+  github: "ranking.githubTrending",
+} as const;
+const GITHUB_TRENDING_PERIOD_LABEL_KEYS = {
+  daily: "ranking.githubDaily",
+  weekly: "ranking.githubWeekly",
+  monthly: "ranking.githubMonthly",
+} as const;
 
 type Theme = "light" | "dark";
 export type AppPath = "/" | "/archive" | "/track-record";
@@ -301,6 +317,7 @@ function phaseLabel(phase: Exclude<TrendPhase, "insufficient_data">, locale: Loc
 
 function repositoryViewScore(repository: RankedRepository, view: RankingView): number | null {
   if (view === "momentum") return repository.momentum.score;
+  if (view === "github") return null;
   const intelligence = trendIntelligenceFor(repository);
   if (intelligence === null) return null;
   return view === "breakout"
@@ -322,6 +339,12 @@ export function rankingViewCopy(
     return {
       title: translate(locale, "ranking.currentTitle"),
       description: translate(locale, "ranking.currentDescription"),
+    };
+  }
+  if (view === "github") {
+    return {
+      title: translate(locale, "ranking.githubTitle"),
+      description: translate(locale, "ranking.githubDescription"),
     };
   }
   return {
@@ -835,7 +858,7 @@ function RankingRow({
               <span>{repository.full_name}</span>
             </a>
             <DiscoveryEvidenceBadge evidence={repository.discovery_evidence} />
-            {phase === null ? null : (
+            {rankingView === "github" || phase === null ? null : (
               <span
                 className={`trend-phase trend-phase-${phase}`}
                 title={intelligence?.reasons.join(", ") || phaseLabel(phase, locale)}
@@ -1393,6 +1416,17 @@ function MethodologyDialog({
               </section>
 
               <section>
+                <div className="methodology-section-title">
+                  <h3>GitHub 트렌딩</h3>
+                  <code>직접 순위</code>
+                </div>
+                <p>
+                  별도 점수를 계산하지 않고 수집 당시 GitHub 트렌딩 페이지의 순위를 기간별로 보여줍니다.
+                  일간·주간·월간 순위는 서로 섞지 않습니다.
+                </p>
+              </section>
+
+              <section>
                 <h3>관측 구간, 신뢰도와 한계</h3>
                 <p>
                   스타와 이벤트 근거는 빠짐없이 수집된 가장 긴 구간을 24시간 → 6시간 → 1시간 순서로 사용합니다.
@@ -1497,6 +1531,17 @@ function MethodologyDialog({
                 </ul>
               </div>
             </div>
+          </section>
+
+          <section>
+            <div className="methodology-section-title">
+              <h3>GitHub Trending</h3>
+              <code>direct rank</code>
+            </div>
+            <p>
+              This view uses the GitHub Trending rank observed at collection time without applying
+              another score. Daily, Weekly, and Monthly ranks remain separate.
+            </p>
           </section>
 
           <section>
@@ -1948,6 +1993,7 @@ function RankingPage({
   const { locale, t } = useI18n();
   const filters = parseRepositoryFilters(locationSearch);
   const rankingView = parseRankingView(locationSearch);
+  const trendingPeriod = parseGitHubTrendingPeriod(locationSearch);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
   const [isMethodologyOpen, setIsMethodologyOpen] = useState(false);
@@ -1966,17 +2012,24 @@ function RankingPage({
 
   function changeFilters(nextFilters: RepositoryFilters) {
     onNavigate(
-      buildRankingHref(1, selectedSnapshot.id, nextFilters, rankingView),
+      buildRankingHref(1, selectedSnapshot.id, nextFilters, rankingView, trendingPeriod),
       "replace",
     );
   }
 
   function changeRankingView(nextView: RankingView) {
-    if (nextView !== "momentum" && !intelligenceAvailable) {
+    if ((nextView === "breakout" || nextView === "current") && !intelligenceAvailable) {
       throw new Error(`Trend intelligence is unavailable for snapshot ${selectedSnapshot.id}`);
     }
     onNavigate(
-      buildRankingHref(1, selectedSnapshot.id, filters, nextView),
+      buildRankingHref(1, selectedSnapshot.id, filters, nextView, trendingPeriod),
+      "replace",
+    );
+  }
+
+  function changeTrendingPeriod(nextPeriod: GitHubTrendingPeriod) {
+    onNavigate(
+      buildRankingHref(1, selectedSnapshot.id, filters, "github", nextPeriod),
       "replace",
     );
   }
@@ -1986,7 +2039,7 @@ function RankingPage({
       throw new RangeError(`Page ${nextPage} must be within the ranking page range`);
     }
     onNavigate(
-      buildRankingHref(nextPage, selectedSnapshot.id, filters, rankingView),
+      buildRankingHref(nextPage, selectedSnapshot.id, filters, rankingView, trendingPeriod),
       "push",
     );
   }
@@ -2052,38 +2105,26 @@ function RankingPage({
                     matching: selectedSnapshot.matching_count,
                     total: selectedSnapshot.repository_count,
                   })
-                : t("ranking.scoredRepositories", { count: selectedSnapshot.matching_count })}
+                : rankingView === "github"
+                  ? t("ranking.trendingRepositories", { count: selectedSnapshot.matching_count })
+                  : t("ranking.scoredRepositories", { count: selectedSnapshot.matching_count })}
             </span>
           </div>
         </div>
 
         <div className="ranking-view-tabs" role="tablist" aria-label={t("ranking.model")}>
-          <button
-            aria-describedby="ranking-view-description"
-            aria-selected={rankingView === "momentum"}
-            className={rankingView === "momentum" ? "ranking-view-active" : ""}
-            onClick={() => changeRankingView("momentum")}
-            role="tab"
-            type="button"
-          >{t("ranking.momentum")}</button>
-          <button
-            aria-describedby="ranking-view-description"
-            aria-selected={rankingView === "breakout"}
-            className={rankingView === "breakout" ? "ranking-view-active" : ""}
-            disabled={!intelligenceAvailable}
-            onClick={() => changeRankingView("breakout")}
-            role="tab"
-            type="button"
-          >{t("ranking.breakout")}</button>
-          <button
-            aria-describedby="ranking-view-description"
-            aria-selected={rankingView === "current"}
-            className={rankingView === "current" ? "ranking-view-active" : ""}
-            disabled={!intelligenceAvailable}
-            onClick={() => changeRankingView("current")}
-            role="tab"
-            type="button"
-          >{t("ranking.currentHeat")}</button>
+          {RANKING_VIEW_ORDER.map((view) => (
+            <button
+              aria-describedby="ranking-view-description"
+              aria-selected={rankingView === view}
+              className={rankingView === view ? "ranking-view-active" : ""}
+              disabled={(view === "breakout" || view === "current") && !intelligenceAvailable}
+              key={view}
+              onClick={() => changeRankingView(view)}
+              role="tab"
+              type="button"
+            >{t(RANKING_VIEW_LABEL_KEYS[view])}</button>
+          ))}
         </div>
 
         <div
@@ -2091,16 +2132,29 @@ function RankingPage({
           className="ranking-view-description"
           id="ranking-view-description"
         >
-          <p>{viewCopy.description}</p>
+          {rankingView === "github" ? (
+            <div className="trending-period-tabs" role="group" aria-label={t("ranking.githubPeriod")}>
+              {GITHUB_TRENDING_PERIODS.map((period) => (
+                <button
+                  aria-pressed={trendingPeriod === period}
+                  className={trendingPeriod === period ? "trending-period-active" : ""}
+                  key={period}
+                  onClick={() => changeTrendingPeriod(period)}
+                  type="button"
+                >{t(GITHUB_TRENDING_PERIOD_LABEL_KEYS[period])}</button>
+              ))}
+            </div>
+          ) : null}
+          <p className="visually-hidden">{viewCopy.description}</p>
           <button
+            aria-label={t("ranking.viewInformation", { view: viewCopy.title })}
             aria-controls="ranking-methodology-dialog"
             aria-expanded={isMethodologyOpen}
             aria-haspopup="dialog"
             onClick={() => setIsMethodologyOpen(true)}
             type="button"
-          >
-            <QuestionIcon size={14} />{t("ranking.howScoringWorks")}
-          </button>
+            title={viewCopy.description}
+          ><QuestionIcon size={14} /></button>
         </div>
 
         {snapshotError === null ? null : (
@@ -2118,12 +2172,16 @@ function RankingPage({
 
         {repositories.length === 0 ? (
           <div className="filter-empty-state">
-            <h3>{rankingView === "momentum"
-              ? t("ranking.emptyFiltered")
-              : t("ranking.emptyEvidence")}</h3>
-            <p>{rankingView === "momentum"
-              ? t("ranking.tryFilters")
-              : t("ranking.waitEvidence")}</p>
+            <h3>{rankingView === "github"
+              ? t("ranking.emptyTrending")
+              : rankingView === "momentum"
+                ? t("ranking.emptyFiltered")
+                : t("ranking.emptyEvidence")}</h3>
+            <p>{rankingView === "github"
+              ? t("ranking.tryTrendingPeriod")
+              : rankingView === "momentum"
+                ? t("ranking.tryFilters")
+                : t("ranking.waitEvidence")}</p>
             {filterCount === 0 ? null : (
               <button type="button" onClick={() => changeFilters({ language: null, topic: null })}>
                 {t("ranking.clearFilters")}
@@ -2134,12 +2192,18 @@ function RankingPage({
           <ol
             className="ranking-list"
             start={start + 1}
-            key={`${selectedSnapshot.id}-${rankingView}-${currentPage}-${filters.language ?? "all"}-${filters.topic ?? "all"}`}
+            key={`${selectedSnapshot.id}-${rankingView}-${trendingPeriod}-${currentPage}-${filters.language ?? "all"}-${filters.topic ?? "all"}`}
           >
             {repositories.map((repository, rowIndex) => (
               <RankingRow
                 repository={repository}
-                displayRank={start + rowIndex + 1}
+                displayRank={rankingView === "github"
+                  ? requireDisplayValue(
+                    repository.official_ranks[trendingPeriod],
+                    `official_ranks.${trendingPeriod}`,
+                    repository.full_name,
+                  )
+                  : start + rowIndex + 1}
                 rankingView={rankingView}
                 rowIndex={rowIndex}
                 starSeries={starSeries}
@@ -2213,6 +2277,7 @@ export function InitialLoadingState() {
             <span className="loading-skeleton-block loading-skeleton-count" />
           </div>
           <div className="loading-skeleton-tabs">
+            <span className="loading-skeleton-block" />
             <span className="loading-skeleton-block" />
             <span className="loading-skeleton-block" />
             <span className="loading-skeleton-block" />
@@ -2397,6 +2462,9 @@ function AppContent({
           ? parseRepositoryFilters(rankingLocationSearch)
           : { language: null, topic: null };
         const view = isRankingPage ? parseRankingView(rankingLocationSearch) : "momentum";
+        const period = isRankingPage && view === "github"
+          ? parseGitHubTrendingPeriod(rankingLocationSearch)
+          : null;
         const page = isRankingPage ? requestedPage(rankingLocationSearch) : 1;
         const parameters = new URLSearchParams({
           snapshot: snapshotId,
@@ -2404,6 +2472,7 @@ function AppContent({
           page_size: String(PAGE_SIZE),
           view,
         });
+        if (period !== null) parameters.set("period", period);
         if (filters.language !== null) parameters.set("language", filters.language);
         if (filters.topic !== null) parameters.set("topic", filters.topic);
         const response = await fetch(`/api/ranking?${parameters.toString()}`, {
@@ -2451,7 +2520,7 @@ function AppContent({
       1,
       latestSnapshot.id,
       { language: null, topic: null },
-      "momentum",
+      "breakout",
     );
     window.history.pushState(null, "", `/${rankingHref}`);
     setLocationPath("/");
@@ -2488,6 +2557,7 @@ function AppContent({
         snapshotId,
         parseRepositoryFilters(locationSearch),
         parseRankingView(locationSearch),
+        parseGitHubTrendingPeriod(locationSearch),
       ),
       "replace",
     );
@@ -2503,7 +2573,7 @@ function AppContent({
       1,
       snapshotId,
       { language: null, topic: null },
-      "momentum",
+      "breakout",
     );
     window.history.pushState(null, "", `/${href}`);
     setLocationPath("/");

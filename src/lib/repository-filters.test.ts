@@ -3,6 +3,7 @@ import {
   buildRepositoryFilterOptions,
   buildRankingHref,
   filterRepositories,
+  parseGitHubTrendingPeriod,
   parseRankingView,
   parseRepositoryFilters,
 } from "./repository-filters";
@@ -55,13 +56,27 @@ describe("repository filters", () => {
     expect(buildRankingHref(2, "snapshot-1", {
       language: null,
       topic: null,
-    }, "breakout")).toBe("?page=2&snapshot=snapshot-1&view=breakout");
+    }, "momentum")).toBe("?page=2&snapshot=snapshot-1&view=momentum");
+    expect(buildRankingHref(1, "snapshot-1", {
+      language: null,
+      topic: null,
+    }, "github", "weekly")).toBe("?page=1&snapshot=snapshot-1&view=github&period=weekly");
   });
 
   it("parses an explicit ranking view", () => {
     expect(parseRankingView("?view=current")).toBe("current");
     expect(parseRankingView("?view=breakout")).toBe("breakout");
-    expect(parseRankingView("?page=2")).toBe("momentum");
+    expect(parseRankingView("?view=github")).toBe("github");
+    expect(parseRankingView("?page=2")).toBe("breakout");
     expect(() => parseRankingView("?view=unknown")).toThrow("Unknown ranking view");
+  });
+
+  it("defaults GitHub Trending to Daily and validates explicit periods", () => {
+    expect(parseGitHubTrendingPeriod("?view=github")).toBe("daily");
+    expect(parseGitHubTrendingPeriod("?view=github&period=weekly")).toBe("weekly");
+    expect(parseGitHubTrendingPeriod("?view=github&period=monthly")).toBe("monthly");
+    expect(() => parseGitHubTrendingPeriod("?view=github&period=yearly")).toThrow(
+      "Unknown GitHub Trending period",
+    );
   });
 });
