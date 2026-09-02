@@ -13,6 +13,7 @@ import {
   RepositoryThumbnailFallback,
   resolveRankingRenderSearch,
   resolveAppPath,
+  shouldFallbackToMomentum,
   SiteNavigation,
   SiteFooter,
   TrackRecordSection,
@@ -56,6 +57,27 @@ describe("application navigation", () => {
     expect(resolveAppPath("/track-record")).toBe("/track-record");
     expect(() => resolveAppPath("/unknown")).toThrow("Unknown application path");
     expect(buildArchiveHref(2, " rust ")).toBe("?page=2&query=rust");
+  });
+
+  it("falls back from an empty latest Breakout view only without filters", () => {
+    expect(shouldFallbackToMomentum({
+      isLatestSnapshot: true,
+      view: "breakout",
+      filters: { language: null, topic: null },
+      matchingCount: 0,
+    })).toBe(true);
+    expect(shouldFallbackToMomentum({
+      isLatestSnapshot: false,
+      view: "breakout",
+      filters: { language: null, topic: null },
+      matchingCount: 0,
+    })).toBe(false);
+    expect(shouldFallbackToMomentum({
+      isLatestSnapshot: true,
+      view: "breakout",
+      filters: { language: "rust", topic: null },
+      matchingCount: 0,
+    })).toBe(false);
   });
 
   it("marks the current primary destination", () => {

@@ -147,6 +147,24 @@ export function resolveRankingRenderSearch(
   return loadedSearch;
 }
 
+export function shouldFallbackToMomentum({
+  isLatestSnapshot,
+  view,
+  filters,
+  matchingCount,
+}: {
+  isLatestSnapshot: boolean;
+  view: RankingView;
+  filters: RepositoryFilters;
+  matchingCount: number;
+}): boolean {
+  return isLatestSnapshot
+    && view === "breakout"
+    && filters.language === null
+    && filters.topic === null
+    && matchingCount === 0;
+}
+
 export function buildArchiveHref(page: number, query: string): string {
   if (!Number.isInteger(page) || page < 1) {
     throw new RangeError("Archive page must be a positive integer");
@@ -2528,6 +2546,18 @@ function AppContent({
         if (snapshot.id !== snapshotId) {
           throw new Error(`Snapshot response ${snapshot.id} does not match ${snapshotId}`);
         }
+        if (shouldFallbackToMomentum({
+          isLatestSnapshot: snapshots?.at(-1)?.id === snapshotId,
+          view,
+          filters,
+          matchingCount: snapshot.matching_count,
+        })) {
+          navigate(
+            buildRankingHref(1, snapshotId, filters, "momentum"),
+            "replace",
+          );
+          return;
+        }
         setSelectedSnapshot(snapshot);
         setSelectedSnapshotSearch(loadedSearch);
       } catch (caughtError) {
@@ -2543,7 +2573,7 @@ function AppContent({
 
     void loadSnapshot();
     return () => controller.abort();
-  }, [locationPath, rankingLocationSearch, selectedId]);
+  }, [locationPath, rankingLocationSearch, selectedId, snapshots]);
 
   function navigate(href: string, mode: RankingNavigationMode) {
     navigateRankingHref(window.history, href, mode);
