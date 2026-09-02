@@ -28,6 +28,7 @@ describe("ranking view guidance", () => {
   it("explains each ranking model in plain language", () => {
     expect(rankingViewCopy("momentum").description).toContain("Durable overall strength");
     expect(rankingViewCopy("breakout").description).toContain("first observed below 10k stars");
+    expect(rankingViewCopy("breakout").description).toContain("at least two hours");
     expect(rankingViewCopy("current").description).toContain("Absolute attention now");
     expect(rankingViewCopy("github").description).toContain("GitHub Trending rank");
   });

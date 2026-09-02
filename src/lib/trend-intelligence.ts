@@ -9,7 +9,6 @@ export const BREAKOUT_BASELINE_DAYS = 7;
 export const BREAKOUT_SCORE_THRESHOLD = 70;
 export const BREAKOUT_PROVISIONAL_FRACTION = 0.1;
 
-const MIN_BREAKOUT_STAR_WINDOW_HOURS = 6;
 const BREAKOUT_COHORT_KEY = "emerging:global";
 
 export type TrendPhase =
@@ -125,6 +124,7 @@ type FeatureRow = {
   starEvidenceWindowHours: 1 | 6 | 24 | null;
   eventEvidenceWindowHours: 1 | 6 | 24 | null;
   starVelocity: number | null;
+  breakoutStarVelocity: number | null;
   relativeGrowth: number | null;
   selfRelativeGrowth: number | null;
   starAcceleration: number | null;
@@ -341,6 +341,12 @@ function featureRow(
   const priorStars = stars === null || selectedStarEvidence === null
     ? null
     : Math.max(stars - selectedStarEvidence.delta, 1);
+  const selectedBreakoutEvidence = (selectedStarEvidence?.hours ?? 0) >= 6
+    ? selectedStarEvidence
+    : null;
+  const breakoutStarVelocity = selectedBreakoutEvidence === null
+    ? repository.observedStarsPerDay
+    : selectedBreakoutEvidence.delta * 24 / selectedBreakoutEvidence.hours;
   const baselineCapturedAt = history?.baseline_captured_at === null
     || history?.baseline_captured_at === undefined
     ? null
@@ -401,9 +407,14 @@ function featureRow(
     starVelocity: selectedStarEvidence === null
       ? null
       : selectedStarEvidence.delta * 24 / selectedStarEvidence.hours,
-    relativeGrowth: selectedStarEvidence === null || priorStars === null
+    breakoutStarVelocity,
+    relativeGrowth: stars === null || breakoutStarVelocity === null
       ? null
-      : selectedStarEvidence.delta / priorStars * 24 / selectedStarEvidence.hours,
+      : selectedBreakoutEvidence === null
+        ? breakoutStarVelocity / Math.max(stars, 1)
+        : priorStars === null
+          ? null
+          : selectedBreakoutEvidence.delta / priorStars * 24 / selectedBreakoutEvidence.hours,
     selfRelativeGrowth: delta24 === null || previousDailyGrowth === null
       ? null
       : delta24 / Math.max(previousDailyGrowth, 1),
@@ -513,12 +524,11 @@ export function rankTrendIntelligence(
   );
   const breakoutPool = rows.filter((row) =>
     row.emergingEligible
-    && (row.starEvidenceWindowHours ?? 0) >= MIN_BREAKOUT_STAR_WINDOW_HOURS
-    && row.starVelocity !== null
-    && row.starVelocity > 0
+    && row.breakoutStarVelocity !== null
+    && row.breakoutStarVelocity > 0
     && row.relativeGrowth !== null
   );
-  const breakoutStarVelocities = known(breakoutPool.map((row) => row.starVelocity));
+  const breakoutStarVelocities = known(breakoutPool.map((row) => row.breakoutStarVelocity));
   const breakoutRelativeGrowth = known(breakoutPool.map((row) => row.relativeGrowth));
   const breakoutSelfRelativeGrowth = known(breakoutPool.map((row) => row.selfRelativeGrowth));
   const breakoutStarAccelerations = known(breakoutPool.map((row) => row.starAcceleration));
@@ -533,7 +543,7 @@ export function rankTrendIntelligence(
     const canCompare = breakoutPool.length >= 2;
     const components: ScoreComponents = {
       star_velocity: canCompare
-        ? percentile(row.starVelocity as number, breakoutStarVelocities)
+        ? percentile(row.breakoutStarVelocity as number, breakoutStarVelocities)
         : null,
       peer_relative_growth: canCompare
         ? percentile(row.relativeGrowth as number, breakoutRelativeGrowth)

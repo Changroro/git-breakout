@@ -1411,6 +1411,8 @@ function MethodologyDialog({
                     <p>
                       처음 관측했을 때 스타가 1만 개 미만이고 당시 공식 Trending에 없었으며, 이전 수집 시점까지
                       Trending 진입 이력이 없는 저장소만 계산합니다. 실제 스타 증가가 최소 6시간 동안 관측되어야 합니다.
+                      수집 공백으로 정확한 6시간 구간을 만들 수 없을 때는 2시간 이상 떨어진 두 관측값으로 계산한
+                      일일 환산 속도를 저신뢰도 근거로 사용합니다.
                     </p>
                     <ul>
                       <li>스타 속도: 선택한 구간의 증가량을 24시간 기준으로 환산해 전체 신규 후보와 비교합니다.</li>
@@ -1448,7 +1450,7 @@ function MethodologyDialog({
                 <h3>관측 구간, 신뢰도와 한계</h3>
                 <p>
                   현재 관심도는 빠짐없이 수집된 가장 긴 구간을 24시간 → 6시간 → 1시간 순서로 사용합니다.
-                  6시간 데이터만 있는 초기 후보는 계산 점수 상위 10%만 보여줍니다. 24시간 데이터가 쌓이면
+                  6시간 구간이나 2시간 이상 실제 관측 속도가 있는 초기 후보는 계산 점수 상위 10%만 보여줍니다. 24시간 데이터가 쌓이면
                   70점 이상인 저장소를 비율 제한 없이 보여줍니다. 7일 기준점이나 GitHub 이벤트가 없으면 신뢰도는
                   낮아지지만 후보에서 바로 제외되지는 않습니다. 4시간보다 오래된 이벤트는 이벤트 지표 계산에서 제외합니다.
                 </p>
@@ -1527,7 +1529,8 @@ function MethodologyDialog({
                 <p>
                   A repository is eligible only when it was first observed below 10k stars, was not
                   already on official Trending, and has no prior Trending episode. At least six hours
-                  of observed star growth is required.
+                  of observed star growth is required. During a collection gap, a daily rate calculated
+                  from observations at least two hours apart supplies temporary low-confidence evidence.
                 </p>
                 <ul>
                   <li>Star velocity: selected star growth normalized to 24 hours across all emerging candidates.</li>
@@ -1568,7 +1571,8 @@ function MethodologyDialog({
             <h3>Windows, confidence, and limits</h3>
             <p>
               Current Heat uses the longest complete window in the order 24h → 6h → 1h. Breakout shows
-              only the top 10% while candidates have six-hour evidence; once 24-hour evidence exists,
+              only the top 10% while candidates have a six-hour window or an observed rate spanning at
+              least two hours; once 24-hour evidence exists,
               every repository scoring at least 70 is shown. A missing seven-day baseline or GitHub event
               lowers confidence instead of removing the candidate. Event evidence older than four hours is excluded.
             </p>
