@@ -25,3 +25,9 @@ psql \
   --username "$POSTGRES_USER" \
   --dbname "$POSTGRES_DB" \
   --file /opt/trend-radar/migrations/008_archive_page.sql
+
+psql \
+  --set=ON_ERROR_STOP=1 \
+  --username "$POSTGRES_USER" \
+  --dbname "$POSTGRES_DB" \
+  --file /opt/trend-radar/migrations/009_github_trending_page.sql

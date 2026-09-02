@@ -6,6 +6,7 @@ import type {
 import {
   buildRepositoryFilterOptions,
   filterRepositories,
+  type GitHubTrendingPeriod,
   type RankingView,
   type RepositoryFilters,
 } from "../src/lib/repository-filters.ts";
@@ -33,10 +34,26 @@ function repositoriesForView(
   snapshot: RankingSnapshot,
   filters: RepositoryFilters,
   view: RankingView,
+  period: GitHubTrendingPeriod | null,
 ) {
   const filtered = filterRepositories(snapshot.repositories, filters);
   if (view === "momentum") {
     return filtered;
+  }
+  if (view === "github") {
+    if (period === null) {
+      throw new TypeError("GitHub Trending period is required");
+    }
+    return filtered
+      .flatMap((repository) => {
+        const rank = repository.official_ranks[period];
+        return rank === null ? [] : [{ repository, rank }];
+      })
+      .sort((left, right) => (
+        left.rank - right.rank
+        || left.repository.full_name.localeCompare(right.repository.full_name)
+      ))
+      .map(({ repository }) => repository);
   }
   const scoreFor = view === "breakout"
     ? (repository: typeof filtered[number]) => trendIntelligenceFor(repository)?.breakout.score ?? null
@@ -72,12 +89,14 @@ export function buildLocalRankingPage({
   pageSize,
   filters,
   view,
+  period,
 }: {
   snapshot: RankingSnapshot;
   page: number;
   pageSize: number;
   filters: RepositoryFilters;
   view: RankingView;
+  period: GitHubTrendingPeriod | null;
 }): RankingPageResponse {
   if (!Number.isInteger(page) || page < 1) {
     throw new RangeError("Ranking page must be a positive integer");
@@ -85,7 +104,10 @@ export function buildLocalRankingPage({
   if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
     throw new RangeError("Ranking page size must be between 1 and 100");
   }
-  const candidates = repositoriesForView(snapshot, filters, view);
+  if (view !== "github" && period !== null) {
+    throw new TypeError("GitHub Trending period is only valid for the GitHub view");
+  }
+  const candidates = repositoriesForView(snapshot, filters, view, period);
   const normalizedPage = Math.min(page, Math.max(1, Math.ceil(candidates.length / pageSize)));
   const facets = buildRepositoryFilterOptions(snapshot.repositories);
   const start = (normalizedPage - 1) * pageSize;

@@ -3,7 +3,10 @@ import type { Connect, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { loadRepositoryCard } from "./card-cache.ts";
 import { HistoryDatabase } from "./history.ts";
 import { buildLocalRankingPage, buildLocalRepositorySearch } from "./local-ranking.ts";
-import { parseRankingView } from "../src/lib/repository-filters.ts";
+import {
+  parseGitHubTrendingPeriod,
+  parseRankingView,
+} from "../src/lib/repository-filters.ts";
 
 function requirePositiveInteger(requestUrl: URL, name: string, maximum: number): number {
   const value = requestUrl.searchParams.get(name);
@@ -109,6 +112,7 @@ function attachHistoryApi(
         response.end(JSON.stringify({ error: `Snapshot ${snapshotId} does not exist` }));
         return;
       }
+      const view = parseRankingView(requestUrl.search);
       response.statusCode = 200;
       response.end(JSON.stringify(buildLocalRankingPage({
         snapshot,
@@ -118,7 +122,8 @@ function attachHistoryApi(
           language: requestUrl.searchParams.get("language"),
           topic: requestUrl.searchParams.get("topic"),
         },
-        view: parseRankingView(requestUrl.search),
+        view,
+        period: view === "github" ? parseGitHubTrendingPeriod(requestUrl.search) : null,
       })));
     } catch (error) {
       response.statusCode = error instanceof TypeError || error instanceof RangeError ? 400 : 500;

@@ -21,6 +21,7 @@ services:
       - ./db/migrations/006_operational_hardening.sql:/opt/trend-radar/migrations/006_operational_hardening.sql:ro
       - ./db/migrations/007_discovery_track_record.sql:/opt/trend-radar/migrations/007_discovery_track_record.sql:ro
       - ./db/migrations/008_archive_page.sql:/opt/trend-radar/migrations/008_archive_page.sql:ro
+      - ./db/migrations/009_github_trending_page.sql:/opt/trend-radar/migrations/009_github_trending_page.sql:ro
     networks:
       - internal
 

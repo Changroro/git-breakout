@@ -21,6 +21,7 @@ describe("local ranking API", () => {
       pageSize: 3,
       filters: { language: "typescript", topic: null },
       view: "momentum",
+      period: null,
     });
 
     expect(result.page).toBe(Math.ceil(result.matching_count / 3));
@@ -30,6 +31,24 @@ describe("local ranking API", () => {
     expect(result.repositories.every(
       (repository) => repository.discovery_evidence.outcome === "legacy",
     )).toBe(true);
+  });
+
+  it("sorts GitHub Trending by the selected official period", () => {
+    const result = buildLocalRankingPage({
+      snapshot: snapshot(),
+      page: 1,
+      pageSize: 3,
+      filters: { language: null, topic: null },
+      view: "github",
+      period: "weekly",
+    });
+
+    expect(result.matching_count).toBe(20);
+    expect(result.repositories.map((repository) => repository.full_name)).toEqual([
+      "anthropics/claude-code",
+      "modelcontextprotocol/servers",
+      "openai/codex",
+    ]);
   });
 
   it("returns bounded repository search results", () => {
