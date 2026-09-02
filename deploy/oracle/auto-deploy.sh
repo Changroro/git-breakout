@@ -6,7 +6,7 @@ set -euo pipefail
 
 compose_file="$TREND_RADAR_REPO/deploy/oracle/docker-compose.yml"
 env_file="$TREND_RADAR_REPO/deploy/oracle/.env"
-migration_file="$TREND_RADAR_REPO/deploy/oracle/db/migrations/010_emerging_breakout_context.sql"
+migration_file="$TREND_RADAR_REPO/deploy/oracle/db/migrations/011_set_based_event_signals.sql"
 deployed_file="$TREND_RADAR_STATE_DIR/deployed-revision"
 
 exec 9>/run/lock/github-trend-radar-deploy.lock
