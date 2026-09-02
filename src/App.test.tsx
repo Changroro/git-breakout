@@ -27,7 +27,7 @@ describe("ranking view guidance", () => {
 
   it("explains each ranking model in plain language", () => {
     expect(rankingViewCopy("momentum").description).toContain("Durable overall strength");
-    expect(rankingViewCopy("breakout").description).toContain("Peer-relative acceleration");
+    expect(rankingViewCopy("breakout").description).toContain("Emerging-only acceleration");
     expect(rankingViewCopy("current").description).toContain("Absolute attention now");
     expect(rankingViewCopy("github").description).toContain("GitHub Trending rank");
   });
@@ -198,7 +198,7 @@ describe("TrackRecordSection", () => {
     expect(markup).toContain("log1p(value) × 55");
     expect(markup).toContain("Official Trending signal");
     expect(markup).toContain("24h → 6h → 1h");
-    expect(markup).toContain("trend-intelligence-v3-shadow");
+    expect(markup).toContain("trend-intelligence-v4-shadow");
   });
 });
 

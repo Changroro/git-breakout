@@ -65,6 +65,15 @@ try {
     rankedRepositories,
     eventSignals,
     capturedAt,
+    context.repositories.map((repository) => ({
+      full_name: repository.fullName,
+      first_observed_at: repository.firstSeenAt,
+      first_observed_stars: repository.firstObservedStars,
+      first_observation_was_trending: repository.firstObservationWasTrending,
+      official_trending_episode_count: repository.officialTrendingEpisodeCount,
+      baseline_captured_at: repository.growthComparisonCapturedAt,
+      baseline_stars: repository.growthComparisonStars,
+    })),
   );
   await historyApi.completeCollection({
     runId,

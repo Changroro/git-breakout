@@ -16,6 +16,10 @@ type CollectionContext = {
   intervalMinutes: number;
   retentionPolicy: RetentionPolicy;
   repositories: Array<RepositoryRetentionCandidate & {
+    firstObservedStars: number;
+    firstObservationWasTrending: boolean;
+    officialTrendingEpisodeCount: number;
+    growthComparisonCapturedAt: string | null;
     observations: StarObservation[];
   }>;
 };
@@ -251,12 +255,45 @@ export function parseCollectionContext(value: unknown): CollectionContext {
         ),
       };
     });
+    const firstObservedStars = requireNonNegativeInteger(
+      repository.first_observed_stars,
+      `repositories[${repositoryIndex}].first_observed_stars`,
+    );
+    const firstObservationWasTrending = requireBoolean(
+      repository.first_observation_was_trending,
+      `repositories[${repositoryIndex}].first_observation_was_trending`,
+    );
+    const officialTrendingEpisodeCount = requireNonNegativeInteger(
+      repository.official_trending_episode_count,
+      `repositories[${repositoryIndex}].official_trending_episode_count`,
+    );
+    const growthComparisonCapturedAt = repository.growth_comparison_captured_at === null
+      ? null
+      : requireTimestamp(
+        repository.growth_comparison_captured_at,
+        `repositories[${repositoryIndex}].growth_comparison_captured_at`,
+      );
+    const growthComparisonStars = repository.growth_comparison_stars === null
+      ? null
+      : requireNonNegativeInteger(
+        repository.growth_comparison_stars,
+        `repositories[${repositoryIndex}].growth_comparison_stars`,
+      );
+    if (firstObservationWasTrending && officialTrendingEpisodeCount === 0) {
+      throw new RangeError(`repositories[${repositoryIndex}] has inconsistent Trending evidence`);
+    }
+    if ((growthComparisonCapturedAt === null) !== (growthComparisonStars === null)) {
+      throw new TypeError(`repositories[${repositoryIndex}] has incomplete growth comparison`);
+    }
     return {
       fullName,
       firstSeenAt: requireTimestamp(
         repository.first_seen_at,
         `repositories[${repositoryIndex}].first_seen_at`,
       ),
+      firstObservedStars,
+      firstObservationWasTrending,
+      officialTrendingEpisodeCount,
       latestCapturedAt: requireTimestamp(
         repository.latest_captured_at,
         `repositories[${repositoryIndex}].latest_captured_at`,
@@ -275,12 +312,8 @@ export function parseCollectionContext(value: unknown): CollectionContext {
         repository.latest_stars,
         `repositories[${repositoryIndex}].latest_stars`,
       ),
-      growthComparisonStars: repository.growth_comparison_stars === null
-        ? null
-        : requireNonNegativeInteger(
-          repository.growth_comparison_stars,
-          `repositories[${repositoryIndex}].growth_comparison_stars`,
-        ),
+      growthComparisonStars,
+      growthComparisonCapturedAt,
       observations,
     };
   });

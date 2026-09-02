@@ -55,7 +55,7 @@ Every point on the timeline is a persisted ranking snapshot. Selecting a point r
 - **Two-hour observations**: derives 1-hour, 6-hour, and 24-hour star deltas from persisted measurements.
 - **Momentum score**: combines observed growth, age-adjusted star velocity, size, forks, open issues, and recent pushes.
 - **Confidence levels**: a first observation is not treated as real growth and is stored with `low` confidence.
-- **Shadow Breakout ranking**: compares peer-relative growth, star and actor acceleration, and attention breadth within language, age, and star-size cohorts.
+- **Shadow Breakout ranking**: limits eligibility to repositories first observed below 10k stars with no prior GitHub Trending history, then compares growth against their own seven-day baseline and similar peers.
 - **Shadow Current Heat ranking**: separates current attention using absolute star velocity, unique actors, activity diversity, and persistence.
 - **Evidence states**: zero observed star growth, stale events, or undersized cohorts produce `insufficient_data` with explicit missing evidence instead of an estimated score.
 
@@ -100,7 +100,7 @@ score = log1p(observedStarsPerDay) × 55
 
 ### Trend Intelligence v3 shadow model
 
-The collector persists optional `Breakout` and `Current heat` views without replacing the default ranking. `Breakout` uses percentiles within matching language, repository-age, and star-size cohorts. `Current heat` uses current star velocity and unique-actor breadth across the candidate pool. Star and event evidence use the longest fully covered 24-hour, 6-hour, or 1-hour window and persist that window length with the score. Event-only noise without observed star growth, cohorts below eight repositories, and event evidence older than four hours remain unscored.
+The collector persists optional `Breakout` and `Current heat` views without replacing the default ranking. `Breakout` is limited to repositories first observed below 10k stars, outside official Trending at first observation, and with no prior Trending episode. It requires complete 24-hour star growth and a self baseline at least seven days old, then combines self acceleration with percentiles inside matching language, repository-age, and star-size cohorts. `Current heat` uses current star velocity and unique-actor breadth across the candidate pool. Emerging cohorts below eight repositories and event evidence older than four hours remain unscored.
 
 Public events also expand discovery. Repositories with high unique-actor breadth, activity diversity, and event volume over the last 24 hours join the existing candidate pool before GitHub API validation. Aggregated events expire after 168 hours while ranking snapshots remain intact.
 

@@ -1402,14 +1402,18 @@ function MethodologyDialog({
               <section>
                 <div className="methodology-section-title">
                   <h3>급부상과 현재 관심도</h3>
-                  <code>trend-intelligence-v3-shadow</code>
+                  <code>trend-intelligence-v4-shadow</code>
                 </div>
                 <p>확인 가능한 구성요소의 동일 가중 평균에 100을 곱합니다. 누락된 값은 0으로 처리하지 않고 계산에서 제외합니다.</p>
                 <div className="methodology-models">
                   <div>
                     <h4>급부상</h4>
-                    <p>언어·생성 시기·스타 규모가 비슷한 저장소와 비교해 성장 속도와 가속도가 얼마나 두드러지는지 백분위로 계산합니다.</p>
+                    <p>
+                      처음 관측했을 때 스타가 1만 개 미만이고 당시 공식 Trending에 없었으며, 이전 수집 시점까지
+                      Trending 진입 이력이 없는 저장소만 계산합니다. 최소 7일 전 기준점도 있어야 합니다.
+                    </p>
                     <ul>
+                      <li>자기 성장 가속: 최근 24시간 증가량을 그전 약 7일간의 일평균 증가량과 비교합니다.</li>
                       <li>상대 성장: 스타 증가량 ÷ 이전 스타를 24시간 기준으로 환산합니다.</li>
                       <li>스타 가속: 시간당 6시간 증가율과 24시간 증가율, 또는 1시간과 6시간 증가율을 비교합니다.</li>
                       <li>참여자 가속: 고유 참여자의 단기·장기 변화율을 비교합니다.</li>
@@ -1443,12 +1447,12 @@ function MethodologyDialog({
               <section>
                 <h3>관측 구간, 신뢰도와 한계</h3>
                 <p>
-                  스타와 이벤트 근거는 빠짐없이 수집된 가장 긴 구간을 24시간 → 6시간 → 1시간 순서로 사용합니다.
-                  v3는 실제 스타 증가가 있어야 하며, 4시간보다 오래된 이벤트는 제외하고 급부상 계산에는
-                  최소 8개의 비교 가능한 저장소가 필요합니다.
+                  현재 관심도는 빠짐없이 수집된 가장 긴 구간을 24시간 → 6시간 → 1시간 순서로 사용합니다.
+                  v4 급부상은 완전한 24시간 스타 증가, 최소 7일 전 자기 기준점, 8개 이상의 신규 저장소
+                  비교군이 모두 있어야 계산합니다. 4시간보다 오래된 이벤트는 두 지표에서 제외합니다.
                 </p>
                 <p>
-                  모멘텀 신뢰도는 스타 관측 구간과 저장소 지표의 완전성에 따라 달라집니다. v3는 이벤트 범위와
+                  모멘텀 신뢰도는 스타 관측 구간과 저장소 지표의 완전성에 따라 달라집니다. v4는 이벤트 범위와
                   비교군 크기도 반영하며, 높은 신뢰도에는 20개 이상의 비교군, 완전한 1h·6h·24h 스타 구간,
                   24시간 이벤트 구간과 이전 72시간 참여자 근거가 필요합니다.
                 </p>
@@ -1510,7 +1514,7 @@ function MethodologyDialog({
           <section>
             <div className="methodology-section-title">
               <h3>Breakout and Current Heat</h3>
-              <code>trend-intelligence-v3-shadow</code>
+              <code>trend-intelligence-v4-shadow</code>
             </div>
             <p>
               Each score is 100 times the equal-weight mean of its known components. Missing
@@ -1520,11 +1524,12 @@ function MethodologyDialog({
               <div>
                 <h4>Breakout</h4>
                 <p>
-                  Peer-relative star growth, star acceleration, actor acceleration, and unique-actor
-                  breadth are converted to percentiles inside the same language, age, and star-size
-                  cohort.
+                  A repository is eligible only when it was first observed below 10k stars, was not
+                  already on official Trending, has no prior Trending episode, and has a baseline
+                  observation from at least seven days earlier.
                 </p>
                 <ul>
+                  <li>Self acceleration: current 24h growth ÷ the preceding roughly seven-day daily average.</li>
                   <li>Relative growth: star delta ÷ prior stars, normalized to 24 hours.</li>
                   <li>Star acceleration: 6h/hour − 24h/hour, or 1h − 6h/hour.</li>
                   <li>Actor acceleration: the same short-versus-long rate change for unique actors.</li>
@@ -1561,13 +1566,13 @@ function MethodologyDialog({
           <section>
             <h3>Windows, confidence, and limits</h3>
             <p>
-              Star and event evidence use the longest complete window in the order 24h → 6h → 1h.
-              v3 requires positive observed star growth, rejects events older than four hours, and
-              requires at least eight comparable repositories for Breakout.
+              Current Heat uses the longest complete window in the order 24h → 6h → 1h. v4 Breakout
+              requires complete 24h star growth, a self baseline at least seven days old, and at least
+              eight eligible emerging repositories. Both reject events older than four hours.
             </p>
             <p>
               Momentum confidence depends on observed star windows and repository metric
-              completeness. v3 confidence also depends on event coverage and cohort size; high
+              completeness. v4 confidence also depends on event coverage and cohort size; high
               confidence requires a cohort of at least 20, complete 1h/6h/24h star windows, a 24h
               event window, and prior 72h actor evidence.
             </p>
