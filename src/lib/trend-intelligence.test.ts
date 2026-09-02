@@ -10,9 +10,10 @@ import {
 const CAPTURED_AT = "2026-08-28T12:00:00.000Z";
 
 function repository(index: number, options: {
-  delta6: number;
+  delta6: number | null;
   delta24: number | null;
   stars?: number;
+  observedStarsPerDay?: number | null;
 }): RankedRepository {
   const stars = options.stars ?? 1_000 + index * 10;
   return {
@@ -32,7 +33,9 @@ function repository(index: number, options: {
       stars_delta_6h: options.delta6,
       stars_delta_24h: options.delta24,
     },
-    observedStarsPerDay: options.delta24 ?? options.delta6 * 4,
+    observedStarsPerDay: options.observedStarsPerDay
+      ?? options.delta24
+      ?? (options.delta6 === null ? null : options.delta6 * 4),
     firstObservation: false,
     rank: index + 1,
     momentum: {
@@ -225,6 +228,31 @@ describe("rankTrendIntelligence", () => {
     expect(ranked[0].trend_intelligence.missing_evidence).toContain("star_window_24h");
     expect(ranked[0].trend_intelligence.missing_evidence).toContain("emerging_baseline_7d");
     expect(ranked[0].trend_intelligence.missing_evidence).toContain("github_events");
+  });
+
+  it("uses observed velocity while fixed growth windows recover", () => {
+    const repositories = Array.from({ length: 20 }, (_, index) => repository(index, {
+      delta6: null,
+      delta24: null,
+      observedStarsPerDay: 10 + index,
+    }));
+
+    const ranked = rankTrendIntelligence(
+      repositories,
+      [],
+      CAPTURED_AT,
+      breakoutHistories(20),
+    );
+    const surfaced = ranked.filter((item) => item.trend_intelligence.breakout.score !== null);
+
+    expect(surfaced).toHaveLength(2);
+    expect(surfaced.map((item) => item.full_name)).toEqual([
+      "owner/repository-18",
+      "owner/repository-19",
+    ]);
+    expect(surfaced.every((item) => item.trend_intelligence.star_evidence_window_hours === null)).toBe(true);
+    expect(surfaced.every((item) => item.trend_intelligence.confidence === "low")).toBe(true);
+    expect(ranked[0].trend_intelligence.missing_evidence).toContain("star_growth_window");
   });
 
   it("surfaces every mature breakout candidate above the spark threshold", () => {
