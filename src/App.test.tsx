@@ -11,6 +11,7 @@ import {
   RANKING_VIEW_ORDER,
   rankingViewCopy,
   RepositoryThumbnailFallback,
+  resolveRankingRenderSearch,
   resolveAppPath,
   SiteNavigation,
   SiteFooter,
@@ -40,6 +41,14 @@ describe("ranking view guidance", () => {
 });
 
 describe("application navigation", () => {
+  it("keeps the loaded ranking query while another view is loading", () => {
+    expect(resolveRankingRenderSearch(
+      "?page=1&snapshot=latest&view=github&period=daily",
+      "?page=1&snapshot=latest",
+      true,
+    )).toBe("?page=1&snapshot=latest");
+  });
+
   it("uses bookmarkable paths for rankings, archive, and track record", () => {
     expect(resolveAppPath("/")).toBe("/");
     expect(resolveAppPath("/archive")).toBe("/archive");

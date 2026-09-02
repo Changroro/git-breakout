@@ -133,6 +133,20 @@ export function resolveAppPath(pathname: string): AppPath {
   throw new TypeError(`Unknown application path ${pathname}`);
 }
 
+export function resolveRankingRenderSearch(
+  requestedSearch: string,
+  loadedSearch: string | null,
+  hasLoadedSnapshot: boolean,
+): string {
+  if (!hasLoadedSnapshot) {
+    return requestedSearch;
+  }
+  if (loadedSearch === null) {
+    throw new Error("Loaded ranking snapshot query is unavailable");
+  }
+  return loadedSearch;
+}
+
 export function buildArchiveHref(page: number, query: string): string {
   if (!Number.isInteger(page) || page < 1) {
     throw new RangeError("Archive page must be a positive integer");
@@ -2361,6 +2375,7 @@ function AppContent({
   const [snapshots, setSnapshots] = useState<RankingSnapshotMetadata[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedSnapshot, setSelectedSnapshot] = useState<RankingPageResponse | null>(null);
+  const [selectedSnapshotSearch, setSelectedSnapshotSearch] = useState<string | null>(null);
   const [isSnapshotLoading, setIsSnapshotLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [traffic, setTraffic] = useState<TrafficState>({ status: "loading" });
@@ -2466,6 +2481,14 @@ function AppContent({
           ? parseGitHubTrendingPeriod(rankingLocationSearch)
           : null;
         const page = isRankingPage ? requestedPage(rankingLocationSearch) : 1;
+        const loadedSearch = isRankingPage
+          ? rankingLocationSearch
+          : buildRankingHref(
+            1,
+            snapshotId,
+            { language: null, topic: null },
+            "momentum",
+          );
         const parameters = new URLSearchParams({
           snapshot: snapshotId,
           page: String(page),
@@ -2487,6 +2510,7 @@ function AppContent({
           throw new Error(`Snapshot response ${snapshot.id} does not match ${snapshotId}`);
         }
         setSelectedSnapshot(snapshot);
+        setSelectedSnapshotSearch(loadedSearch);
       } catch (caughtError) {
         if (!controller.signal.aborted) {
           setError(caughtError instanceof Error ? caughtError.message : "Unknown snapshot error");
@@ -2590,6 +2614,12 @@ function AppContent({
     setReadRepositories(nextReadRepositories);
   }
 
+  const rankingRenderSearch = resolveRankingRenderSearch(
+    locationSearch,
+    selectedSnapshotSearch,
+    selectedSnapshot !== null,
+  );
+
   return (
     <div className="app-shell">
       <header className="site-header">
@@ -2640,7 +2670,7 @@ function AppContent({
           readRepositories={readRepositories}
           onSelect={selectSnapshot}
           onRead={markRepositoryRead}
-          locationSearch={locationSearch}
+          locationSearch={rankingRenderSearch}
           onNavigate={navigate}
         />
       ) : locationPath === "/archive" ? (
