@@ -1402,7 +1402,7 @@ function MethodologyDialog({
               <section>
                 <div className="methodology-section-title">
                   <h3>급부상과 현재 관심도</h3>
-                  <code>trend-intelligence-v4-shadow</code>
+                  <code>trend-intelligence-v5-shadow</code>
                 </div>
                 <p>확인 가능한 구성요소의 동일 가중 평균에 100을 곱합니다. 누락된 값은 0으로 처리하지 않고 계산에서 제외합니다.</p>
                 <div className="methodology-models">
@@ -1410,14 +1410,14 @@ function MethodologyDialog({
                     <h4>급부상</h4>
                     <p>
                       처음 관측했을 때 스타가 1만 개 미만이고 당시 공식 Trending에 없었으며, 이전 수집 시점까지
-                      Trending 진입 이력이 없는 저장소만 계산합니다. 최소 7일 전 기준점도 있어야 합니다.
+                      Trending 진입 이력이 없는 저장소만 계산합니다. 실제 스타 증가가 최소 6시간 동안 관측되어야 합니다.
                     </p>
                     <ul>
-                      <li>자기 성장 가속: 최근 24시간 증가량을 그전 약 7일간의 일평균 증가량과 비교합니다.</li>
-                      <li>상대 성장: 스타 증가량 ÷ 이전 스타를 24시간 기준으로 환산합니다.</li>
+                      <li>스타 속도: 선택한 구간의 증가량을 24시간 기준으로 환산해 전체 신규 후보와 비교합니다.</li>
+                      <li>상대 성장: 스타 증가량을 직전 스타 수로 나눈 뒤 24시간 기준으로 환산합니다.</li>
+                      <li>자기 성장 가속: 7일 기준점이 있으면 최근 24시간 증가량과 이전 일평균 증가량을 비교합니다.</li>
                       <li>스타 가속: 시간당 6시간 증가율과 24시간 증가율, 또는 1시간과 6시간 증가율을 비교합니다.</li>
-                      <li>참여자 가속: 고유 참여자의 단기·장기 변화율을 비교합니다.</li>
-                      <li>참여 폭: 선택한 이벤트 구간의 고유 참여자 수입니다.</li>
+                      <li>참여자 가속과 참여 폭: 최신 GitHub 이벤트가 있으면 고유 참여자의 변화와 규모를 점수에 반영합니다.</li>
                     </ul>
                   </div>
                   <div>
@@ -1448,13 +1448,14 @@ function MethodologyDialog({
                 <h3>관측 구간, 신뢰도와 한계</h3>
                 <p>
                   현재 관심도는 빠짐없이 수집된 가장 긴 구간을 24시간 → 6시간 → 1시간 순서로 사용합니다.
-                  v4 급부상은 완전한 24시간 스타 증가, 최소 7일 전 자기 기준점, 8개 이상의 신규 저장소
-                  비교군이 모두 있어야 계산합니다. 4시간보다 오래된 이벤트는 두 지표에서 제외합니다.
+                  6시간 데이터만 있는 초기 후보는 계산 점수 상위 10%만 보여줍니다. 24시간 데이터가 쌓이면
+                  70점 이상인 저장소를 비율 제한 없이 보여줍니다. 7일 기준점이나 GitHub 이벤트가 없으면 신뢰도는
+                  낮아지지만 후보에서 바로 제외되지는 않습니다. 4시간보다 오래된 이벤트는 이벤트 지표 계산에서 제외합니다.
                 </p>
                 <p>
-                  모멘텀 신뢰도는 스타 관측 구간과 저장소 지표의 완전성에 따라 달라집니다. v4는 이벤트 범위와
-                  비교군 크기도 반영하며, 높은 신뢰도에는 20개 이상의 비교군, 완전한 1h·6h·24h 스타 구간,
-                  24시간 이벤트 구간과 이전 72시간 참여자 근거가 필요합니다.
+                  모멘텀 신뢰도는 스타 관측 구간과 저장소 지표가 얼마나 완전한지에 따라 달라집니다. v5의 신뢰도는
+                  24시간 스타 증가, 7일 자기 기준점, 이벤트 범위도 함께 반영합니다. 높은 신뢰도를 받으려면
+                  1시간·6시간·24시간 스타 구간과 24시간 이벤트 구간, 이전 72시간 참여자 근거가 모두 있어야 합니다.
                 </p>
                 <p>
                   새 후보는 14일간 유지하며 이후에는 최근 7일 스타 증가 또는 30일 내 푸시가 있어야 계속 추적합니다.
@@ -1514,7 +1515,7 @@ function MethodologyDialog({
           <section>
             <div className="methodology-section-title">
               <h3>Breakout and Current Heat</h3>
-              <code>trend-intelligence-v4-shadow</code>
+              <code>trend-intelligence-v5-shadow</code>
             </div>
             <p>
               Each score is 100 times the equal-weight mean of its known components. Missing
@@ -1525,15 +1526,15 @@ function MethodologyDialog({
                 <h4>Breakout</h4>
                 <p>
                   A repository is eligible only when it was first observed below 10k stars, was not
-                  already on official Trending, has no prior Trending episode, and has a baseline
-                  observation from at least seven days earlier.
+                  already on official Trending, and has no prior Trending episode. At least six hours
+                  of observed star growth is required.
                 </p>
                 <ul>
-                  <li>Self acceleration: current 24h growth ÷ the preceding roughly seven-day daily average.</li>
+                  <li>Star velocity: selected star growth normalized to 24 hours across all emerging candidates.</li>
                   <li>Relative growth: star delta ÷ prior stars, normalized to 24 hours.</li>
+                  <li>Self acceleration: when available, current 24h growth ÷ the preceding roughly seven-day daily average.</li>
                   <li>Star acceleration: 6h/hour − 24h/hour, or 1h − 6h/hour.</li>
-                  <li>Actor acceleration: the same short-versus-long rate change for unique actors.</li>
-                  <li>Organic breadth: unique actors in the selected event window.</li>
+                  <li>Actor acceleration and organic breadth: optional evidence from fresh GitHub events.</li>
                 </ul>
               </div>
               <div>
@@ -1566,15 +1567,16 @@ function MethodologyDialog({
           <section>
             <h3>Windows, confidence, and limits</h3>
             <p>
-              Current Heat uses the longest complete window in the order 24h → 6h → 1h. v4 Breakout
-              requires complete 24h star growth, a self baseline at least seven days old, and at least
-              eight eligible emerging repositories. Both reject events older than four hours.
+              Current Heat uses the longest complete window in the order 24h → 6h → 1h. Breakout shows
+              only the top 10% while candidates have six-hour evidence; once 24-hour evidence exists,
+              every repository scoring at least 70 is shown. A missing seven-day baseline or GitHub event
+              lowers confidence instead of removing the candidate. Event evidence older than four hours is excluded.
             </p>
             <p>
               Momentum confidence depends on observed star windows and repository metric
-              completeness. v4 confidence also depends on event coverage and cohort size; high
-              confidence requires a cohort of at least 20, complete 1h/6h/24h star windows, a 24h
-              event window, and prior 72h actor evidence.
+              completeness. v5 confidence also considers 24-hour star growth, a seven-day self baseline,
+              and event coverage. High confidence requires complete 1h/6h/24h star windows, a 24h event
+              window, and prior 72h actor evidence.
             </p>
             <p>
               Candidate retention gives new discoveries 14 days, then requires seven-day star
@@ -2195,17 +2197,25 @@ function RankingPage({
               ? t("ranking.emptyTrending")
               : rankingView === "momentum"
                 ? t("ranking.emptyFiltered")
-                : t("ranking.emptyEvidence")}</h3>
+                : rankingView === "breakout"
+                  ? t("ranking.emptyBreakout")
+                  : t("ranking.emptyEvidence")}</h3>
             <p>{rankingView === "github"
               ? t("ranking.tryTrendingPeriod")
               : rankingView === "momentum"
                 ? t("ranking.tryFilters")
-                : t("ranking.waitEvidence")}</p>
-            {filterCount === 0 ? null : (
+                : rankingView === "breakout"
+                  ? t("ranking.waitBreakout")
+                  : t("ranking.waitEvidence")}</p>
+            {filterCount > 0 ? (
               <button type="button" onClick={() => changeFilters({ language: null, topic: null })}>
                 {t("ranking.clearFilters")}
               </button>
-            )}
+            ) : rankingView === "breakout" ? (
+              <button type="button" onClick={() => changeRankingView("momentum")}>
+                {t("ranking.viewMomentum")}
+              </button>
+            ) : null}
           </div>
         ) : (
           <ol

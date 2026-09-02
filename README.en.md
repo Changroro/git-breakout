@@ -98,13 +98,13 @@ score = log1p(observedStarsPerDay) × 55
 - Trending ranks affect discovery and reason labels but do not directly add score in this version.
 - Ties are resolved by `owner/repository` name for deterministic output.
 
-### Trend Intelligence v3 shadow model
+### Trend Intelligence v5 shadow model
 
-The collector persists optional `Breakout` and `Current heat` views without replacing the default ranking. `Breakout` is limited to repositories first observed below 10k stars, outside official Trending at first observation, and with no prior Trending episode. It requires complete 24-hour star growth and a self baseline at least seven days old, then combines self acceleration with percentiles inside matching language, repository-age, and star-size cohorts. `Current heat` uses current star velocity and unique-actor breadth across the candidate pool. Emerging cohorts below eight repositories and event evidence older than four hours remain unscored.
+The collector persists optional `Breakout` and `Current heat` views without replacing the default ranking. `Breakout` is limited to repositories first observed below 10k stars, outside official Trending at first observation, and with no prior Trending episode. It requires at least six hours of observed star growth. Six-hour candidates are limited to the top 10% of calculated scores; after 24-hour evidence exists, every repository scoring at least 70 is shown. A seven-day self baseline and GitHub events strengthen the score and confidence but are not required. `Current heat` uses current star velocity and unique-actor breadth across the candidate pool.
 
 Public events also expand discovery. Repositories with high unique-actor breadth, activity diversity, and event volume over the last 24 hours join the existing candidate pool before GitHub API validation. Aggregated events expire after 168 hours while ranking snapshots remain intact.
 
-The base model and comparison research are documented in [Trend Intelligence v2 research and design](docs/research/trend-intelligence-v2.md); v3 adds the positive observed-star-growth gate.
+The base model and comparison research are documented in [Trend Intelligence v2 research and design](docs/research/trend-intelligence-v2.md). v5 excludes established repositories, then applies separate visibility rules to early six-hour and mature 24-hour candidates.
 
 ```text
 Trending + Search + retained pool
@@ -224,7 +224,7 @@ sudo systemctl enable --now github-trend-radar-collector.timer
 
 - This is a personal project with the public web app, API, and scheduled collector operating.
 - Star charts use only snapshots collected directly by this project, with no external data service.
-- Trend Intelligence v3 remains in shadow mode; the verified `baseline-v1` stays the default ranking.
+- Trend Intelligence v5 remains in shadow mode; the verified `baseline-v1` stays the default ranking.
 - This project is not affiliated with GitHub and remains subject to GitHub's trademarks and service terms.
 - The source repository is private and does not grant redistribution rights.
 
@@ -234,7 +234,7 @@ sudo systemctl enable --now github-trend-radar-collector.timer
 - [x] On-demand PostgREST snapshot reads from the public web UI
 - [x] Daily remote database backups, weekly restore drills, and indefinite snapshot retention
 - [x] First-party observed star growth charts without an external data service
-- [ ] Accuracy view comparing v3 predictions with actual outcomes after 24 and 72 hours
+- [ ] Accuracy view comparing v5 predictions with actual outcomes after 24 and 72 hours
 
 ---
 
