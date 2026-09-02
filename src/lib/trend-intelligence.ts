@@ -3,10 +3,14 @@ import type { Confidence, RankedRepository } from "./ranking.js";
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 
-export const MIN_TREND_COHORT_SIZE = 8;
 export const MAX_EVENT_SIGNAL_AGE_HOURS = 4;
 export const BREAKOUT_INITIAL_STAR_LIMIT = 10_000;
 export const BREAKOUT_BASELINE_DAYS = 7;
+export const BREAKOUT_SCORE_THRESHOLD = 70;
+export const BREAKOUT_PROVISIONAL_FRACTION = 0.1;
+
+const MIN_BREAKOUT_STAR_WINDOW_HOURS = 6;
+const BREAKOUT_COHORT_KEY = "emerging:global";
 
 export type TrendPhase =
   | "spark"
@@ -74,7 +78,8 @@ export type TrendIntelligence = {
   score_version:
     | "trend-intelligence-v2-shadow"
     | "trend-intelligence-v3-shadow"
-    | "trend-intelligence-v4-shadow";
+    | "trend-intelligence-v4-shadow"
+    | "trend-intelligence-v5-shadow";
   phase: TrendPhase;
   confidence: Confidence;
   star_evidence_window_hours: 1 | 6 | 24 | null;
@@ -105,6 +110,7 @@ export function trendIntelligenceFor(repository: RankedRepository): TrendIntelli
       "trend-intelligence-v2-shadow",
       "trend-intelligence-v3-shadow",
       "trend-intelligence-v4-shadow",
+      "trend-intelligence-v5-shadow",
     ].includes(String(value.score_version))
   ) {
     throw new TypeError(`Repository ${repository.full_name} has invalid trend intelligence`);
@@ -114,7 +120,6 @@ export function trendIntelligenceFor(repository: RankedRepository): TrendIntelli
 
 type FeatureRow = {
   repository: RankedRepository;
-  cohortKey: string;
   eventSignals: RepositoryEventSignals | null;
   missingEvidence: string[];
   starEvidenceWindowHours: 1 | 6 | 24 | null;
@@ -204,30 +209,6 @@ function validateWindow(window: TrendWindowSignals, field: string): void {
 
 function rounded(value: number): number {
   return Math.round((value + Number.EPSILON) * 10_000) / 10_000;
-}
-
-function starBand(stars: number): string {
-  if (stars < 100) return "lt100";
-  if (stars < 1_000) return "100-999";
-  if (stars < 10_000) return "1k-9k";
-  if (stars < 100_000) return "10k-99k";
-  return "gte100k";
-}
-
-function ageBand(createdAt: string, capturedAt: number): string {
-  const ageDays = Math.max(0, (capturedAt - parseTimestamp(createdAt, "created_at")) / 86_400_000);
-  if (ageDays < 30) return "lt30d";
-  if (ageDays < 90) return "30-89d";
-  if (ageDays < 365) return "90-364d";
-  return "gte365d";
-}
-
-function cohortKey(repository: RankedRepository, capturedAt: number): string {
-  if (repository.created_at === null || repository.metrics.stars === null) {
-    return "unavailable";
-  }
-  const language = repository.language?.trim().toLocaleLowerCase("en-US") || "unknown";
-  return `${language}:${ageBand(repository.created_at, capturedAt)}:${starBand(repository.metrics.stars)}`;
 }
 
 function percentile(value: number, population: readonly number[]): number {
@@ -323,7 +304,6 @@ function featureRow(
       || baselineCapturedAt > capturedAt - BREAKOUT_BASELINE_DAYS * DAY_MS
     ) {
       missingEvidence.push("emerging_baseline_7d");
-      emergingEligible = false;
     }
   }
 
@@ -414,7 +394,6 @@ function featureRow(
 
   return {
     repository,
-    cohortKey: cohortKey(repository, capturedAt),
     eventSignals: freshSignals,
     missingEvidence,
     starEvidenceWindowHours: selectedStarEvidence?.hours ?? null,
@@ -457,24 +436,27 @@ function phaseFor(
   currentScore: number | null,
   breakoutScore: number | null,
   starAcceleration: number | null,
-  confidence: Confidence,
 ): TrendPhase {
-  if (currentScore === null) return "insufficient_data";
   if (breakoutScore !== null && breakoutScore >= 85 && (starAcceleration ?? 0) > 0) return "breakout";
-  if (breakoutScore !== null && breakoutScore >= 70 && confidence !== "high") return "spark";
+  if (breakoutScore !== null && breakoutScore >= BREAKOUT_SCORE_THRESHOLD) return "spark";
+  if (currentScore === null) return "insufficient_data";
   if (currentScore >= 85) return "hot";
   if (currentScore >= 55 && (starAcceleration ?? 0) < 0) return "cooling";
   return "steady";
 }
 
-function confidenceFor(row: FeatureRow, cohortSize: number): Confidence {
-  if (row.eventSignals === null || cohortSize < MIN_TREND_COHORT_SIZE) return "low";
+function confidenceFor(row: FeatureRow, candidatePoolSize: number): Confidence {
+  if (
+    row.eventSignals === null
+    || row.starEvidenceWindowHours !== 24
+    || row.selfRelativeGrowth === null
+  ) return "low";
   if ((row.eventEvidenceWindowHours ?? 0) < 6) return "low";
   const hasAllStarWindows = row.repository.growth.stars_delta_1h !== null
     && row.repository.growth.stars_delta_6h !== null
     && row.repository.growth.stars_delta_24h !== null;
   if (
-    cohortSize >= 20
+    candidatePoolSize >= 20
     && row.starEvidenceWindowHours === 24
     && hasAllStarWindows
     && row.eventEvidenceWindowHours === 24
@@ -526,31 +508,80 @@ export function rankTrendIntelligence(
     historiesByName.get(repository.full_name.toLocaleLowerCase("en-US")) ?? null,
     capturedTimestamp,
   ));
-  const cohorts = new Map<string, FeatureRow[]>();
-  rows.forEach((row) => {
-    const cohort = cohorts.get(row.cohortKey) ?? [];
-    cohort.push(row);
-    cohorts.set(row.cohortKey, cohort);
-  });
   const globallyScoreable = rows.filter((row) =>
     row.starVelocity !== null && row.starVelocity > 0 && row.organicBreadth !== null
   );
+  const breakoutPool = rows.filter((row) =>
+    row.emergingEligible
+    && (row.starEvidenceWindowHours ?? 0) >= MIN_BREAKOUT_STAR_WINDOW_HOURS
+    && row.starVelocity !== null
+    && row.starVelocity > 0
+    && row.relativeGrowth !== null
+  );
+  const breakoutStarVelocities = known(breakoutPool.map((row) => row.starVelocity));
+  const breakoutRelativeGrowth = known(breakoutPool.map((row) => row.relativeGrowth));
+  const breakoutSelfRelativeGrowth = known(breakoutPool.map((row) => row.selfRelativeGrowth));
+  const breakoutStarAccelerations = known(breakoutPool.map((row) => row.starAcceleration));
+  const breakoutActorAccelerations = known(breakoutPool.map((row) => row.actorAcceleration));
+  const breakoutOrganicBreadth = known(breakoutPool.map((row) => row.organicBreadth));
+  const breakoutCalculations = new Map<string, {
+    components: ScoreComponents;
+    score: number | null;
+  }>();
+
+  breakoutPool.forEach((row) => {
+    const canCompare = breakoutPool.length >= 2;
+    const components: ScoreComponents = {
+      star_velocity: canCompare
+        ? percentile(row.starVelocity as number, breakoutStarVelocities)
+        : null,
+      peer_relative_growth: canCompare
+        ? percentile(row.relativeGrowth as number, breakoutRelativeGrowth)
+        : null,
+      self_relative_growth: row.selfRelativeGrowth !== null && breakoutSelfRelativeGrowth.length >= 2
+        ? percentile(row.selfRelativeGrowth, breakoutSelfRelativeGrowth)
+        : null,
+      star_acceleration: row.starAcceleration !== null && breakoutStarAccelerations.length >= 2
+        ? percentile(row.starAcceleration, breakoutStarAccelerations)
+        : null,
+      actor_acceleration: row.actorAcceleration !== null && breakoutActorAccelerations.length >= 2
+        ? percentile(row.actorAcceleration, breakoutActorAccelerations)
+        : null,
+      organic_breadth: row.organicBreadth !== null && breakoutOrganicBreadth.length >= 2
+        ? percentile(row.organicBreadth, breakoutOrganicBreadth)
+        : null,
+      event_diversity: null,
+      persistence: null,
+    };
+    breakoutCalculations.set(row.repository.full_name, {
+      components,
+      score: scoreFrom(known(Object.values(components))),
+    });
+  });
+
+  const provisionalLimit = Math.ceil(
+    breakoutPool.filter((row) => row.repository.growth.stars_delta_24h === null).length
+      * BREAKOUT_PROVISIONAL_FRACTION,
+  );
+  const surfacedProvisional = new Set(
+    breakoutPool
+      .filter((row) => row.repository.growth.stars_delta_24h === null)
+      .map((row) => ({
+        fullName: row.repository.full_name,
+        score: breakoutCalculations.get(row.repository.full_name)?.score ?? null,
+      }))
+      .filter((row): row is { fullName: string; score: number } => row.score !== null)
+      .sort((left, right) => (
+        right.score - left.score
+        || left.fullName.localeCompare(right.fullName)
+      ))
+      .slice(0, provisionalLimit)
+      .map((row) => row.fullName),
+  );
 
   return rows.map((row) => {
-    const cohort = cohorts.get(row.cohortKey) ?? [];
-    const cohortScoreable = cohort.filter((candidate) =>
-      candidate.emergingEligible
-      && candidate.relativeGrowth !== null
-      && candidate.selfRelativeGrowth !== null
-      && candidate.organicBreadth !== null
-    );
-    const cohortAccelerations = known(cohortScoreable.map((candidate) => candidate.starAcceleration));
-    const cohortActorAccelerations = known(cohortScoreable.map((candidate) => candidate.actorAcceleration));
-    const confidence = confidenceFor(row, cohortScoreable.length);
+    const confidence = confidenceFor(row, breakoutPool.length);
     const missingEvidence = [...row.missingEvidence];
-    if (row.emergingEligible && cohortScoreable.length < MIN_TREND_COHORT_SIZE) {
-      missingEvidence.push("peer_cohort");
-    }
 
     const canScoreCurrent = row.starVelocity !== null
       && row.starVelocity > 0
@@ -571,44 +602,25 @@ export function rankTrendIntelligence(
       event_diversity: canScoreCurrent ? row.eventDiversity : null,
       persistence: canScoreCurrent ? row.persistence : null,
     };
-    const canScoreBreakout = cohortScoreable.length >= MIN_TREND_COHORT_SIZE
-      && row.emergingEligible
-      && row.relativeGrowth !== null
-      && row.selfRelativeGrowth !== null
-      && row.repository.growth.stars_delta_24h !== null
-      && row.starVelocity !== null
-      && row.starVelocity > 0
-      && row.organicBreadth !== null;
-    const breakoutComponents: ScoreComponents = {
+    const calculation = breakoutCalculations.get(row.repository.full_name);
+    const breakoutComponents: ScoreComponents = calculation?.components ?? {
       star_velocity: null,
-      peer_relative_growth: canScoreBreakout
-        ? percentile(row.relativeGrowth as number, known(cohortScoreable.map((item) => item.relativeGrowth)))
-        : null,
-      self_relative_growth: canScoreBreakout
-        ? percentile(
-          row.selfRelativeGrowth as number,
-          known(cohortScoreable.map((item) => item.selfRelativeGrowth)),
-        )
-        : null,
-      star_acceleration: canScoreBreakout
-        && row.starAcceleration !== null
-        && cohortAccelerations.length >= 2
-        ? percentile(row.starAcceleration, cohortAccelerations)
-        : null,
-      actor_acceleration: canScoreBreakout
-        && row.actorAcceleration !== null
-        && cohortActorAccelerations.length >= 2
-        ? percentile(row.actorAcceleration, cohortActorAccelerations)
-        : null,
-      organic_breadth: canScoreBreakout
-        ? percentile(row.organicBreadth as number, known(cohortScoreable.map((item) => item.organicBreadth)))
-        : null,
+      peer_relative_growth: null,
+      self_relative_growth: null,
+      star_acceleration: null,
+      actor_acceleration: null,
+      organic_breadth: null,
       event_diversity: null,
       persistence: null,
     };
     const currentScore = scoreFrom(known(Object.values(currentComponents)));
-    const breakoutScore = scoreFrom(known(Object.values(breakoutComponents)));
-    const phase = phaseFor(currentScore, breakoutScore, row.starAcceleration, confidence);
+    const calculatedBreakoutScore = calculation?.score ?? null;
+    const breakoutScore = calculatedBreakoutScore !== null && (
+      row.repository.growth.stars_delta_24h !== null
+        ? calculatedBreakoutScore >= BREAKOUT_SCORE_THRESHOLD
+        : surfacedProvisional.has(row.repository.full_name)
+    ) ? calculatedBreakoutScore : null;
+    const phase = phaseFor(currentScore, breakoutScore, row.starAcceleration);
     const reasons = reasonList(currentComponents, breakoutComponents);
 
     return {
@@ -626,14 +638,14 @@ export function rankTrendIntelligence(
         components: { ...row.repository.momentum.components },
       },
       trend_intelligence: {
-        score_version: "trend-intelligence-v4-shadow",
+        score_version: "trend-intelligence-v5-shadow",
         phase,
         confidence,
         star_evidence_window_hours: row.starEvidenceWindowHours,
         event_evidence_window_hours: row.eventEvidenceWindowHours,
         current_heat: { score: currentScore, components: currentComponents },
         breakout: { score: breakoutScore, components: breakoutComponents },
-        cohort: { key: row.cohortKey, size: cohortScoreable.length },
+        cohort: { key: BREAKOUT_COHORT_KEY, size: breakoutPool.length },
         event_data_captured_at: row.eventSignals?.captured_at ?? null,
         missing_evidence: [...new Set(missingEvidence)],
         reasons,

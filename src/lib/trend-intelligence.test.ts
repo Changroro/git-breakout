@@ -160,7 +160,7 @@ describe("rankTrendIntelligence", () => {
     expect(ranked[11].trend_intelligence.missing_evidence).toContain("emerging_prior_trending");
   });
 
-  it("requires a prior seven-day baseline for breakout scoring", () => {
+  it("uses a seven-day baseline as optional breakout evidence", () => {
     const repositories = Array.from({ length: 10 }, (_, index) => repository(index, {
       delta6: 20 + index,
       delta24: 40 + index,
@@ -174,7 +174,7 @@ describe("rankTrendIntelligence", () => {
 
     const ranked = rankTrendIntelligence(repositories, signals, CAPTURED_AT, histories);
 
-    expect(ranked[9].trend_intelligence.breakout.score).toBeNull();
+    expect(ranked[9].trend_intelligence.breakout.score).not.toBeNull();
     expect(ranked[9].trend_intelligence.breakout.components.self_relative_growth).toBeNull();
     expect(ranked[9].trend_intelligence.missing_evidence).toContain("emerging_baseline_7d");
   });
@@ -201,27 +201,50 @@ describe("rankTrendIntelligence", () => {
     expect(ranked[0].trend_intelligence.missing_evidence).toContain("emerging_history");
   });
 
-  it("keeps current heat during warm-up without inventing a breakout score", () => {
-    const repositories = Array.from({ length: 10 }, (_, index) => repository(index, {
+  it("limits six-hour breakout candidates to the top ten percent", () => {
+    const repositories = Array.from({ length: 20 }, (_, index) => repository(index, {
       delta6: 5 + index,
       delta24: null,
     }));
-    const signals = Array.from({ length: 10 }, (_, index) => eventSignals(index, {
-      h6: 10 + index,
-      h24: 30 + index,
-      coverage: { h1: true, h6: false, h24: false, h72: false },
+    const histories = breakoutHistories(20).map((history) => ({
+      ...history,
+      baseline_captured_at: null,
+      baseline_stars: null,
     }));
 
-    const ranked = rankTrendIntelligence(repositories, signals, CAPTURED_AT, breakoutHistories(10));
+    const ranked = rankTrendIntelligence(repositories, [], CAPTURED_AT, histories);
+    const surfaced = ranked.filter((item) => item.trend_intelligence.breakout.score !== null);
 
     expect(ranked[0].trend_intelligence.star_evidence_window_hours).toBe(6);
-    expect(ranked[0].trend_intelligence.event_evidence_window_hours).toBe(1);
-    expect(ranked[0].trend_intelligence.current_heat.score).not.toBeNull();
-    expect(ranked[0].trend_intelligence.breakout.score).toBeNull();
-    expect(ranked[0].trend_intelligence.breakout.components.star_acceleration).toBeNull();
-    expect(ranked[0].trend_intelligence.breakout.components.actor_acceleration).toBeNull();
+    expect(surfaced).toHaveLength(2);
+    expect(surfaced.map((item) => item.full_name)).toEqual([
+      "owner/repository-18",
+      "owner/repository-19",
+    ]);
+    expect(surfaced.every((item) => item.trend_intelligence.confidence === "low")).toBe(true);
     expect(ranked[0].trend_intelligence.missing_evidence).toContain("star_window_24h");
-    expect(ranked[0].trend_intelligence.missing_evidence).toContain("event_window_24h");
+    expect(ranked[0].trend_intelligence.missing_evidence).toContain("emerging_baseline_7d");
+    expect(ranked[0].trend_intelligence.missing_evidence).toContain("github_events");
+  });
+
+  it("surfaces every mature breakout candidate above the spark threshold", () => {
+    const repositories = Array.from({ length: 20 }, (_, index) => repository(index, {
+      delta6: 10 + index * 3,
+      delta24: 20 + index * 5,
+    }));
+
+    const ranked = rankTrendIntelligence(
+      repositories,
+      [],
+      CAPTURED_AT,
+      breakoutHistories(20),
+    );
+    const surfaced = ranked.filter((item) => item.trend_intelligence.breakout.score !== null);
+
+    expect(surfaced.length).toBeGreaterThan(2);
+    expect(surfaced.every((item) => (
+      (item.trend_intelligence.breakout.score ?? 0) >= 70
+    ))).toBe(true);
   });
 
   it("surfaces a peer-cohort breakout without changing baseline rank", () => {
@@ -245,7 +268,7 @@ describe("rankTrendIntelligence", () => {
     expect(breakout.cohort.size).toBe(10);
   });
 
-  it("marks missing event evidence unavailable instead of inventing a score", () => {
+  it("keeps star-only breakout evidence explicit when GitHub events are missing", () => {
     const repositories = Array.from({ length: 10 }, (_, index) => repository(index, {
       delta6: 5 + index,
       delta24: 20 + index,
@@ -253,9 +276,9 @@ describe("rankTrendIntelligence", () => {
 
     const ranked = rankTrendIntelligence(repositories, [], CAPTURED_AT, breakoutHistories(10));
 
-    expect(ranked[0].trend_intelligence.breakout.score).toBeNull();
+    expect(ranked[9].trend_intelligence.breakout.score).not.toBeNull();
     expect(ranked[0].trend_intelligence.current_heat.score).toBeNull();
-    expect(ranked[0].trend_intelligence.phase).toBe("insufficient_data");
+    expect(ranked[9].trend_intelligence.phase).not.toBe("insufficient_data");
     expect(ranked[0].trend_intelligence.confidence).toBe("low");
     expect(ranked[0].trend_intelligence.missing_evidence).toContain("github_events");
   });
@@ -286,7 +309,7 @@ describe("rankTrendIntelligence", () => {
       breakoutHistories(10),
     );
 
-    expect(ranked[0].trend_intelligence.score_version).toBe("trend-intelligence-v4-shadow");
+    expect(ranked[0].trend_intelligence.score_version).toBe("trend-intelligence-v5-shadow");
     const historical = structuredClone(ranked[0]);
     historical.trend_intelligence.score_version = "trend-intelligence-v2-shadow";
     expect(trendIntelligenceFor(historical)?.score_version).toBe("trend-intelligence-v2-shadow");

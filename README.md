@@ -98,13 +98,13 @@ score = log1p(observedStarsPerDay) × 55
 - GitHub Trending 순위는 후보 발견과 이유 표시에 사용하며, 현재 버전에서는 점수에 직접 더하지 않는다.
 - 동점이면 `owner/repository` 이름 순으로 정렬해 결과를 결정적으로 유지한다.
 
-### Trend Intelligence v3 섀도 모델
+### Trend Intelligence v5 섀도 모델
 
-기본 정렬을 교체하지 않은 채 `Breakout`과 `Current heat` 보기를 함께 저장한다. `Breakout`은 최초 관측 Star가 1만 개 미만이고 최초 관측 당시 공식 Trending에 없었으며 이전 Trending 진입 이력이 없는 저장소만 계산한다. 완전한 최근 24시간 Star 증가와 최소 7일 전 자기 기준점이 필요하고, 자기 성장 가속과 같은 언어·나이·Star 규모 cohort 안의 백분위를 함께 사용한다. `Current heat`는 전체 후보군의 현재 Star 속도와 고유 actor 폭을 사용한다. 8개 미만의 신규 저장소 cohort와 4시간보다 오래된 이벤트는 점수를 만들지 않는다.
+기본 정렬을 교체하지 않은 채 `Breakout`과 `Current heat` 보기를 함께 저장한다. `Breakout`은 최초 관측 Star가 1만 개 미만이고 최초 관측 당시 공식 Trending에 없었으며 이전 Trending 진입 이력이 없는 저장소만 계산한다. 최소 6시간의 실제 Star 증가가 필요하다. 6시간 후보는 전체 신규 후보 중 계산 점수 상위 10%만 보여주고, 24시간 데이터가 생긴 뒤에는 70점 이상을 모두 보여준다. 7일 자기 기준점과 GitHub 이벤트는 점수와 신뢰도를 보강하지만 필수 조건은 아니다. `Current heat`는 전체 후보군의 현재 Star 속도와 고유 actor 폭을 사용한다.
 
 공개 이벤트는 후보 발굴에도 사용한다. 최근 24시간 고유 actor 수, 활동 종류, 이벤트 수가 높은 저장소를 기존 후보군에 더한 뒤 GitHub API로 현재 상태를 검증한다. 이벤트 집계는 168시간만 보관하며 랭킹 스냅샷은 그대로 남는다.
 
-비교 조사와 기본 산식은 [Trend Intelligence v2 연구 및 설계](docs/research/trend-intelligence-v2.md)에 정리했고, v3는 실제 Star 증가 조건을 추가한다.
+비교 조사와 기본 산식은 [Trend Intelligence v2 연구 및 설계](docs/research/trend-intelligence-v2.md)에 정리했다. v5는 유명 저장소를 제외한 뒤 6시간 초기 후보와 24시간 성숙 후보를 서로 다른 노출 기준으로 평가한다.
 
 ```text
 Trending + Search + retained pool
@@ -224,7 +224,7 @@ sudo systemctl enable --now github-trend-radar-collector.timer
 
 - 개인 프로젝트이며 공개 웹, API, 예약 수집기를 운영 중이다.
 - Star 그래프는 외부 서비스 없이 이 프로젝트가 직접 수집한 스냅샷만 사용한다.
-- Trend Intelligence v3는 섀도 단계이며 기본 정렬은 검증된 `baseline-v1`을 유지한다.
+- Trend Intelligence v5는 섀도 단계이며 기본 정렬은 검증된 `baseline-v1`을 유지한다.
 - GitHub 공식 제품이 아니며 GitHub의 상표와 이용 조건을 따른다.
 - 소스 저장소는 비공개이며 재배포 라이선스를 제공하지 않는다.
 
@@ -234,7 +234,7 @@ sudo systemctl enable --now github-trend-radar-collector.timer
 - [x] 공개 웹 UI에서 선택한 PostgREST 스냅샷 온디맨드 조회
 - [x] 원격 DB 일일 백업·주간 복구 검증과 스냅샷 영구 보존 정책
 - [x] 외부 서비스 의존 없는 자체 관측 Star 성장 그래프
-- [ ] v3 예측과 24·72시간 후 실제 결과를 비교하는 Accuracy 화면
+- [ ] v5 예측과 24·72시간 후 실제 결과를 비교하는 Accuracy 화면
 
 ---
 
