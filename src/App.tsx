@@ -385,6 +385,39 @@ export function rankingViewCopy(
   };
 }
 
+export function RankingViewHeading({
+  title,
+  description,
+  buttonLabel,
+  isMethodologyOpen,
+  onOpenMethodology,
+}: {
+  title: string;
+  description: string;
+  buttonLabel: string;
+  isMethodologyOpen: boolean;
+  onOpenMethodology: () => void;
+}) {
+  return (
+    <>
+      <div className="board-title-heading">
+        <h2>{title}</h2>
+        <button
+          aria-label={buttonLabel}
+          aria-controls="ranking-methodology-dialog"
+          aria-expanded={isMethodologyOpen}
+          aria-haspopup="dialog"
+          className="ranking-view-info-button"
+          onClick={onOpenMethodology}
+          type="button"
+          title={description}
+        ><QuestionIcon size={14} /></button>
+      </div>
+      <p className="visually-hidden" id="ranking-view-description">{description}</p>
+    </>
+  );
+}
+
 function useRepositoryStarSeries(
   snapshotId: string,
   repositories: readonly RankedRepository[],
@@ -2130,7 +2163,13 @@ function RankingPage({
           <div className="board-title">
             <RepoIcon size={18} />
             <div>
-              <h2>{viewCopy.title}</h2>
+              <RankingViewHeading
+                buttonLabel={t("ranking.viewInformation", { view: viewCopy.title })}
+                description={viewCopy.description}
+                isMethodologyOpen={isMethodologyOpen}
+                onOpenMethodology={() => setIsMethodologyOpen(true)}
+                title={viewCopy.title}
+              />
               <p>{sourceLabel(selectedSnapshot.source, locale)}</p>
             </div>
           </div>
@@ -2170,12 +2209,8 @@ function RankingPage({
           ))}
         </div>
 
-        <div
-          aria-live="polite"
-          className="ranking-view-description"
-          id="ranking-view-description"
-        >
-          {rankingView === "github" ? (
+        {rankingView === "github" ? (
+          <div className="ranking-view-options">
             <div className="trending-period-tabs" role="group" aria-label={t("ranking.githubPeriod")}>
               {GITHUB_TRENDING_PERIODS.map((period) => (
                 <button
@@ -2187,18 +2222,8 @@ function RankingPage({
                 >{t(GITHUB_TRENDING_PERIOD_LABEL_KEYS[period])}</button>
               ))}
             </div>
-          ) : null}
-          <p className="visually-hidden">{viewCopy.description}</p>
-          <button
-            aria-label={t("ranking.viewInformation", { view: viewCopy.title })}
-            aria-controls="ranking-methodology-dialog"
-            aria-expanded={isMethodologyOpen}
-            aria-haspopup="dialog"
-            onClick={() => setIsMethodologyOpen(true)}
-            type="button"
-            title={viewCopy.description}
-          ><QuestionIcon size={14} /></button>
-        </div>
+          </div>
+        ) : null}
 
         {snapshotError === null ? null : (
           <p className="snapshot-error" role="alert">{snapshotError}</p>

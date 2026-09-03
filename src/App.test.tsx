@@ -9,6 +9,7 @@ import {
   InitialLoadingState,
   LanguageSwitcher,
   RANKING_VIEW_ORDER,
+  RankingViewHeading,
   rankingViewCopy,
   RepositoryThumbnailFallback,
   resolveRankingRenderSearch,
@@ -39,6 +40,23 @@ describe("ranking view guidance", () => {
     expect(formatCompactNumber(35_000)).toBe("35k");
     expect(formatCompactNumber(1_200_000)).toBe("1.2m");
     expect(() => formatCompactNumber(Number.NaN)).toThrow("must be finite");
+  });
+
+  it("keeps the methodology trigger in the heading without an empty description row", () => {
+    const markup = renderToStaticMarkup(
+      <RankingViewHeading
+        buttonLabel="About Breakout signals"
+        description="Breakout methodology"
+        isMethodologyOpen={false}
+        onOpenMethodology={() => undefined}
+        title="Breakout signals"
+      />,
+    );
+
+    expect(markup).toContain('<div class="board-title-heading"><h2>Breakout signals</h2><button');
+    expect(markup).toContain('class="ranking-view-info-button"');
+    expect(markup).toContain('id="ranking-view-description">Breakout methodology</p>');
+    expect(markup).not.toContain('class="ranking-view-description"');
   });
 });
 

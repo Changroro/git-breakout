@@ -1842,6 +1842,35 @@ h1 {
   gap: 10px;
 }
 
+.board-title-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.board-title-heading h2 {
+  margin-bottom: 0;
+}
+
+.ranking-view-info-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.ranking-view-info-button:hover {
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
 .board-heading p,
 .board-footer p {
   margin-bottom: 0;
@@ -1929,45 +1958,11 @@ h1 {
   color: var(--text);
 }
 
-.ranking-view-description {
-  min-height: 40px;
-  margin: 0;
-  padding: 10px 24px;
+.ranking-view-options {
+  padding: 6px 24px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 18px;
   border-bottom: 1px solid var(--border);
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.45;
-}
-
-.ranking-view-description p {
-  margin: 0;
-}
-
-.ranking-view-description button {
-  min-height: 36px;
-  padding: 0 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex: 0 0 auto;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 10px;
-  font-weight: 650;
-}
-
-.ranking-view-description > button {
-  width: 36px;
-  margin-left: auto;
-  padding: 0;
-  justify-content: center;
 }
 
 .trending-period-tabs {
@@ -1996,12 +1991,6 @@ h1 {
   background: var(--surface);
   color: var(--text);
   box-shadow: 0 1px 3px color-mix(in srgb, var(--text) 12%, transparent);
-}
-
-.ranking-view-description button:hover {
-  border-color: var(--border-strong);
-  background: var(--surface-muted);
-  color: var(--text);
 }
 
 .ranking-board-loading .ranking-list {
@@ -2788,17 +2777,14 @@ h1 {
     min-height: 42px;
   }
 
-  .ranking-view-description {
-    min-height: 44px;
-    padding: 10px 18px;
-    align-items: center;
-    gap: 10px;
+  .ranking-view-info-button {
+    width: 44px;
+    height: 44px;
+    margin-block: -8px;
   }
 
-  .ranking-view-description > button {
-    min-height: 44px;
-    border: 0;
-    color: var(--accent-text);
+  .ranking-view-options {
+    padding: 6px 18px;
   }
 
   .trending-period-tabs {
