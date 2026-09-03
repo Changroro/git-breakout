@@ -92,8 +92,10 @@ const PAGE_SIZE = 10;
 const DEFAULT_TOPIC_LIMIT = 12;
 const SEARCH_TOPIC_LIMIT = 40;
 const SEARCH_RESULT_LIMIT = 10;
-const READ_REPOSITORIES_STORAGE_KEY = "github-trend-radar:read-repositories";
-const LOCALE_STORAGE_KEY = "github-trend-radar:locale";
+const READ_REPOSITORIES_STORAGE_KEY = "git-breakout:read-repositories";
+const LEGACY_READ_REPOSITORIES_STORAGE_KEY = "github-trend-radar:read-repositories";
+const LOCALE_STORAGE_KEY = "git-breakout:locale";
+const LEGACY_LOCALE_STORAGE_KEY = "github-trend-radar:locale";
 
 export const RANKING_VIEW_ORDER = ["breakout", "momentum", "current", "github"] as const;
 const RANKING_VIEW_LABEL_KEYS = {
@@ -1410,7 +1412,7 @@ function MethodologyDialog({
                 <h3>검증된 사전 발굴</h3>
                 <p>
                   GitHub 일간 트렌딩을 주 검증 기준으로 삼고 주간·월간 트렌딩 진입은 별도로 기록합니다.
-                  수집 주기가 2시간이므로 선행 시간은 AI Trend Radar와 GitHub Trending에서 각각 처음 관측한
+                  수집 주기가 2시간이므로 선행 시간은 GitBreakout과 GitHub Trending에서 각각 처음 관측한
                   시점의 간격입니다. GitHub가 저장소를 추가한 정확한 시각과는 다를 수 있습니다.
                 </p>
                 <p>
@@ -2443,7 +2445,10 @@ function AppContent({
   const [traffic, setTraffic] = useState<TrafficState>({ status: "loading" });
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [readRepositories, setReadRepositories] = useState<ReadonlySet<string>>(() => (
-    parseReadRepositories(localStorage.getItem(READ_REPOSITORIES_STORAGE_KEY))
+    parseReadRepositories(
+      localStorage.getItem(READ_REPOSITORIES_STORAGE_KEY)
+        ?? localStorage.getItem(LEGACY_READ_REPOSITORIES_STORAGE_KEY),
+    )
   ));
   const [locationPath, setLocationPath] = useState<AppPath>(() => resolveAppPath(window.location.pathname));
   const [locationSearch, setLocationSearch] = useState(window.location.search);
@@ -2704,8 +2709,8 @@ function AppContent({
             aria-label={t("header.home")}
             onClick={navigateHome}
           >
-            <MarkGithubIcon size={30} />
-            <span>AI Trend Radar</span>
+            <span aria-hidden="true" className="brand-mark" />
+            <span>GitBreakout</span>
           </a>
           <div className="header-actions">
             <button
@@ -2776,19 +2781,22 @@ function AppContent({
 
 export default function App() {
   const [locale, setLocale] = useState<Locale>(() => resolveInitialLocale(
-    localStorage.getItem(LOCALE_STORAGE_KEY),
+    localStorage.getItem(LOCALE_STORAGE_KEY)
+      ?? localStorage.getItem(LEGACY_LOCALE_STORAGE_KEY),
     navigator.languages,
   ));
 
   useEffect(() => {
     localStorage.setItem(LOCALE_STORAGE_KEY, locale);
     document.documentElement.lang = locale;
-    document.title = locale === "ko" ? "AI Trend Radar · GitHub 트렌드 랭킹" : "AI Trend Radar · GitHub trend rankings";
+    document.title = locale === "ko"
+      ? "GitBreakout: 떠오르는 GitHub 저장소 랭킹"
+      : "GitBreakout: Rising GitHub repository rankings";
     const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
     if (description !== null) {
       description.content = locale === "ko"
-        ? "GitHub 저장소의 성장 신호와 실제 관측 데이터를 비교하는 AI Trend Radar 랭킹입니다."
-        : "AI Trend Radar ranks GitHub repositories using observed growth, activity, and transparent momentum signals.";
+        ? "GitBreakout은 실제 성장과 활동 신호를 관측해 떠오르는 GitHub 저장소를 찾습니다."
+        : "GitBreakout discovers rising GitHub repositories using observed growth, activity, and transparent ranking signals.";
     }
   }, [locale]);
 

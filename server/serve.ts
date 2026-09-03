@@ -17,20 +17,34 @@ function readPort(value: string): number {
   return port;
 }
 
+function readHostList(value: string | undefined): string[] {
+  if (value === undefined || value.trim() === "") {
+    return [];
+  }
+  const hosts = value.split(",").map((host) => host.trim());
+  if (hosts.some((host) => host === "")) {
+    throw new TypeError("TREND_RADAR_LEGACY_HOSTS must be a comma-separated hostname list");
+  }
+  return hosts;
+}
+
 const port = readPort(requireEnvironment("TREND_RADAR_WEB_PORT"));
+const publicHost = requireEnvironment("TREND_RADAR_PUBLIC_HOST");
 const server = createWebServer({
   cacheDirectory: resolve(requireEnvironment("TREND_RADAR_WEB_CACHE_DIR")),
+  canonicalHost: publicHost,
   internalApiUrl: requireEnvironment("TREND_RADAR_INTERNAL_API_URL"),
+  legacyHosts: readHostList(process.env.TREND_RADAR_LEGACY_HOSTS),
   staticDirectory: resolve(requireEnvironment("TREND_RADAR_STATIC_DIR")),
   trafficAnalytics: {
     apiToken: requireEnvironment("CLOUDFLARE_ANALYTICS_TOKEN"),
-    hostname: requireEnvironment("TREND_RADAR_PUBLIC_HOST"),
+    hostname: publicHost,
     zoneId: requireEnvironment("CLOUDFLARE_ZONE_ID"),
   },
 });
 
 server.listen(port, "0.0.0.0", () => {
-  process.stdout.write(`GitHub Trend Radar web server listening on port ${port}\n`);
+  process.stdout.write(`GitBreakout web server listening on port ${port}\n`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

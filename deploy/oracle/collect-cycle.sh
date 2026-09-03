@@ -9,7 +9,7 @@ env_file="$TREND_RADAR_REPO/deploy/oracle/.env"
 
 exec 9>/run/lock/github-trend-radar-collector.lock
 if ! flock -n 9; then
-  echo "A GitHub Trend Radar collection is already running"
+  echo "A GitBreakout collection is already running"
   exit 0
 fi
 

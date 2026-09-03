@@ -1,86 +1,73 @@
 <div align="center">
 
-![GitHub Trend Radar](docs/banner.png)
+![GitBreakout](docs/banner.png)
 
-**A momentum ranking that tracks real repository growth and activity every two hours instead of cloning GitHub Trending.**
+**An open-source ranking that observes real growth and activity signals to find rising GitHub repositories.**
 
+[![License](https://img.shields.io/badge/License-MIT-f1e05a?style=flat-square)](LICENSE)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-22-5FA04E?style=flat-square&logo=nodedotjs&logoColor=white)](https://nodejs.org/)
-[![Collector](https://img.shields.io/badge/Collector-Every%202%20hours-3FB950?style=flat-square)](.github/workflows/collect.yml)
-[![Status](https://img.shields.io/badge/Status-Personal%20project-8B949E?style=flat-square)](#status-and-scope)
+[![Collection](https://img.shields.io/badge/Collection-every%202%20hours-3FB950?style=flat-square)](#collection-and-storage)
 
-[한국어](README.md) · [Public web](https://github-trend-radar.imbch.dev) · [API health](https://github-trend-radar.imbch.dev/rpc/health)
+[한국어](README.md) · [Open the service](https://gitbreakout.imbch.dev) · [API health](https://gitbreakout.imbch.dev/rpc/health)
 
 </div>
 
-> [!IMPORTANT]
-> This is a personal project, not an official GitHub product. The public web app, API, and collection data store run on Oracle A1.
+## Why GitBreakout
 
-## About
+GitHub Trending is useful for seeing what is popular now, but established repositories can appear repeatedly while early-stage growth goes unnoticed. GitBreakout combines Trending with recently created and pushed repositories plus public activity events, then emphasizes **recent change** over lifetime popularity.
 
-GitHub Trend Radar does more than re-display the current Trending page. It merges current GitHub Trending entries, recently created repositories, recently pushed repositories, and previously observed repositories that still satisfy the retention policy. It then reranks that pool using repeatedly observed star growth and repository activity.
-
-`Momentum` measures **how quickly a repository is gaining attention now**, not its lifetime popularity. Observed growth has a much larger weight than total stars, so established repositories do not automatically dominate the ranking.
-
-### Current candidate pool
-
-| Source | Collection scope | Purpose |
-| --- | --- | --- |
-| GitHub Trending | Current daily, weekly, and monthly pages | Official exposure signals and current ranks |
-| GitHub Search | Repositories created in 7 days or pushed in 24 hours | Discover active repositories outside Trending |
-| GH Archive | Watch, Fork, PR, Issue, Comment, Push, and Release events from the last 72 hours | Discover event-active repositories early and measure breadth of attention |
-| Bootstrap seeds | Valid public repositories that have not been observed yet | Expand only the first collection pool |
-| Previously observed pool | Top 1,000 by prior momentum after a 14-day grace period, 7-day star growth, or a push within 30 days | Track relevant candidates after they leave Trending and Search |
-| GitHub GraphQL | Stars, forks, watchers, issues, language, topics, and push time | Refresh current metadata |
-
-Each Search query is capped at 1,000 results, so this project does not claim to be a complete ranking of every GitHub repository. Repositories that fail the retention policy stop receiving new snapshots, but their existing history remains available. A later Trending or Search discovery automatically resumes observation.
+GitBreakout is not a complete index of every repository on GitHub. It discovers a broad candidate pool within API search limits and builds rankings and star charts only from values it has observed directly.
 
 ## Screenshots
 
 | Desktop | Mobile |
 | :---: | :---: |
-| ![Desktop ranking and timeline](docs/screenshots/desktop.png) | ![Mobile ranking and timeline](docs/screenshots/mobile.png) |
-
-Every point on the timeline is a persisted ranking snapshot. Selecting a point restores the ranking and repository content captured at that time. Row content uses a flip transition when the selected snapshot or page changes.
+| ![GitBreakout desktop](docs/screenshots/desktop.png) | ![GitBreakout mobile](docs/screenshots/mobile.png) |
 
 ## Features
 
-### Discovery and ranking
+- **Breakout** finds unusually accelerating repositories first observed below 10,000 stars with no previous Trending history.
+- **Momentum** combines observed star growth, lifetime velocity, repository scale, and recent activity for durable strength.
+- **Current heat** measures attention right now through star velocity, unique actors, activity diversity, and short-term persistence.
+- **GitHub Trending** preserves the collected Daily, Weekly, and Monthly source ranks in a separate view.
+- **History** lets visitors inspect past rankings and repository state through two-hour snapshots.
+- **Observed star series** draws sparklines from GitBreakout's own snapshots without an external graph service.
+- **Archive** retains repositories that leave the latest candidate pool together with their historical snapshots.
+- **Track record** verifies whether repositories observed early by GitBreakout later enter GitHub Trending Daily.
+- **Discovery UI** includes repository search, language and topic filters, pagination, read-state dimming, Korean and English, responsive layouts, and light and dark themes.
 
-- **GitHub-wide discovery**: merges three Trending periods and two Search windows while validating renamed or unavailable repositories.
-- **Verified early discovery**: records the interval between observations and the observed rank only when the first source was Search or GH Archive and the repository is later observed in GitHub Trending Daily.
-- **Track Record**: publishes verified hits, median observed lead, and 7-day and 14-day follow-through while excluding unknown legacy provenance and collection gaps from denominators.
-- **14-day cutoff**: gives new repositories a 14-day grace period, then retains candidates with 7-day star growth or a push within 30 days.
-- **Two-hour observations**: derives 1-hour, 6-hour, and 24-hour star deltas from persisted measurements.
-- **Momentum score**: combines observed growth, age-adjusted star velocity, size, forks, open issues, and recent pushes.
-- **Confidence levels**: a first observation is not treated as real growth and is stored with `low` confidence.
-- **Shadow Breakout ranking**: limits eligibility to repositories first observed below 10k stars with no prior GitHub Trending history, then compares growth against their own seven-day baseline and similar peers.
-- **Shadow Current Heat ranking**: separates current attention using absolute star velocity, unique actors, activity diversity, and persistence.
-- **Evidence states**: zero observed star growth, stale events, or undersized cohorts produce `insufficient_data` with explicit missing evidence instead of an estimated score.
+## Data flow
 
-### History and interface
+```text
+GitHub Trending ─┐
+GitHub Search ───┼─→ merge and deduplicate ─→ verify GitHub metadata
+GH Archive ──────┘                               │
+                                                ▼
+                                  calculate growth and activity
+                                                │
+                                                ▼
+                                  PostgreSQL snapshots and archive
+                                                │
+                                                ▼
+                                      API ─→ GitBreakout UI
+```
 
-- **Snapshot timeline**: drag across persisted timestamps to inspect earlier rankings.
-- **Pagination**: centered previous/next controls and at most ten visible page numbers.
-- **Real repository cards**: caches each repository's GitHub Open Graph image.
-- **First-party star growth chart**: renders a row-level sparkline from star observations collected since discovery.
-- **Responsive UI**: desktop table, mobile cards, and light/dark themes.
-- **Page-sized reads**: sends only ten repositories and bounded facets needed by the current view instead of the entire snapshot.
-- **Public methodology**: the question-mark dialog exposes the momentum formula, Breakout and Current Heat components, evidence rules, and coverage limits.
+### Candidate sources
 
-### Storage and automation
+| Source | Coverage | Purpose |
+| --- | --- | --- |
+| GitHub Trending | Current Daily, Weekly, and Monthly lists | Exposure evidence and source rank history |
+| GitHub Search | Recently created and pushed repositories | Discovery outside Trending |
+| GH Archive | Watch, Fork, PR, Issue, Comment, Push, and Release events | Early event discovery and breadth of attention |
+| Previous observations | Candidates that pass the 14-day retention policy | Continued tracking beyond search windows |
+| GitHub GraphQL | Stars, forks, issues, language, topics, and push time | Current metadata verification |
 
-- **Local development**: stores collection runs, leases, snapshots, and observations in SQLite.
-- **Remote operation**: uses an isolated PostgreSQL 17 and PostgREST 14 stack.
-- **Scheduled collection**: an Oracle systemd timer checks the database-backed two-hour interval and starts remote collection when due.
-- **Event collection**: each cycle ingests two completed GH Archive hours first, while event-source failures do not block the baseline momentum snapshot.
-- **Duplicate prevention**: a server file lock and database lease prevent overlapping collectors.
-- **Operational safeguards**: systemd timers run daily PostgreSQL backups, weekly restore drills, and five-minute health and disk checks.
+GitHub Search returns at most 1,000 results per query, so GitBreakout must not be described as a complete ranking of every GitHub repository. Leaving the candidate pool stops new observations; it does not delete existing snapshots.
 
 ## Ranking model
 
-The current score version is `baseline-v1`.
+The baseline momentum model is `baseline-v1`.
 
 ```text
 score = log1p(observedStarsPerDay) × 55
@@ -92,83 +79,52 @@ score = log1p(observedStarsPerDay) × 55
       + firstObservationBonus
 ```
 
-- `observedStarsPerDay` has the largest weight.
-- A first observation produces no growth value and receives only a 12-point discovery bonus.
-- Real observed velocity starts after an earlier measurement exists at least two hours away.
-- Trending ranks affect discovery and reason labels but do not directly add score in this version.
-- Ties are resolved by `owner/repository` name for deterministic output.
+- A first observation receives a discovery bonus but does not invent growth.
+- Observed star velocity begins only after measurements are at least two hours apart.
+- GitHub Trending rank is used for discovery and evidence, not added directly to momentum.
+- Missing evidence remains `insufficient_data` instead of being converted into a zero score.
+- Breakout and Current heat are stored separately under `trend-intelligence-v5-shadow`.
 
-### Trend Intelligence v5 shadow model
+See the [Trend Intelligence research note](docs/research/trend-intelligence-v2.md) for model comparisons and limitations. The question-mark control beside each ranking view also exposes the current methodology in the web app.
 
-The collector persists optional `Breakout` and `Current heat` views without replacing the default ranking. `Breakout` is limited to repositories first observed below 10k stars, outside official Trending at first observation, and with no prior Trending episode. It requires at least six hours of observed star growth; during a collection gap, a daily rate calculated from observations at least two hours apart supplies temporary low-confidence evidence. Early candidates are limited to the top 10% of calculated scores; after 24-hour evidence exists, every repository scoring at least 70 is shown. A seven-day self baseline and GitHub events strengthen the score and confidence but are not required. `Current heat` uses current star velocity and unique-actor breadth across the candidate pool.
+## Collection and storage
 
-Public events also expand discovery. Repositories with high unique-actor breadth, activity diversity, and event volume over the last 24 hours join the existing candidate pool before GitHub API validation. Aggregated events expire after 168 hours while ranking snapshots remain intact.
-
-The base model and comparison research are documented in [Trend Intelligence v2 research and design](docs/research/trend-intelligence-v2.md). v5 excludes established repositories, then applies separate visibility rules to early six-hour and mature 24-hour candidates.
-
-```text
-Trending + Search + retained pool
-                 │
-                 ▼
-    retention filter and dedupe
-                 │
-                 ▼
-        GitHub GraphQL metadata
-                 │
-                 ▼
-      1h / 6h / 24h growth windows
-                 │
-                 ▼
-       baseline-v1 momentum ranking
-                 │
-                 ▼
-   PostgreSQL snapshot → timeline UI
-```
-
-## Historical backfill
-
-The current implementation accurately preserves rankings and growth **from the moment the service starts observing them**. It does not fabricate earlier snapshots, and observations captured before source provenance was stored remain `legacy` and are excluded from early-discovery results.
-
-| Backfill target | Support | Reason |
-| --- | --- | --- |
-| Past GitHub Trending ranks | Not available | GitHub exposes the current Trending pages but no official historical ranking API. |
-| Past fork, issue, and push state | Not available | GitHub returns current metadata, which cannot reconstruct a past snapshot. |
-| Older repository discovery | Feasible, not implemented | Time-sliced Search queries could add historically created repositories to the observed pool. |
-| Historical star-growth curve | Restricted | It requires `starred_at` listings, but stargazer-list access has been restricted to repository admins and collaborators since July 2026. |
-
-GitHub can include star creation timestamps with `application/vnd.github.star+json`, but the current access restriction is documented in the [official GitHub stargazer documentation](https://docs.github.com/en/rest/activity/starring?apiVersion=2026-03-10#list-stargazers). The ranking therefore uses only snapshots it observed directly instead of mixing in unverifiable estimates for external repositories.
+- The production collector follows a database-backed schedule and runs about every two hours.
+- A server file lock and database lease prevent overlapping runs.
+- Aggregated events are retained for 168 hours and evaluated over 1, 6, 24, and 72-hour windows.
+- Ranking snapshots and archived observations are retained independently from raw event windows.
+- The production stack uses PostgreSQL 17, PostgREST 14, a Node web server, and Cloudflare Tunnel.
+- Scheduled collection does not use GitHub Actions.
 
 ## Getting started
 
 ### Requirements
 
-- Node.js 22
+- Node.js 22 or newer
 - npm
 - A GitHub API token that can read public repository metadata
 
 ### Local development
 
 ```bash
-git clone https://github.com/Changroro/github-trend-radar.git
-cd github-trend-radar
+git clone https://github.com/Changroro/git-breakout.git
+cd git-breakout
 npm ci
 GITHUB_TOKEN=your_token npm run collect
 npm run dev
 ```
 
-Open `http://localhost:5173`. If no snapshot has been collected, the UI reports that no ranking data is available.
+Open `http://localhost:5173`. If no snapshot has been collected, the UI fails loudly with a data requirement instead of silently substituting sample data.
 
 ### Verification
 
 ```bash
 npm test
+npm run typecheck
 npm run build
 ```
 
-<details>
-<summary><strong>Remote collection and Oracle deployment</strong></summary>
-
-Remote collection requires all three values.
+### Remote collection
 
 ```bash
 export GITHUB_TOKEN=your_token
@@ -177,15 +133,7 @@ export TREND_RADAR_COLLECTOR_TOKEN=your_collector_jwt
 npm run collect:remote
 ```
 
-Ingest a completed UTC hour from GH Archive separately:
-
-```bash
-npm run collect:events:remote -- --hour=2026-08-28T00:00:00.000Z --limit=5000
-```
-
-Before starting the Oracle Compose stack, fill every required `.env.example` value and copy the Cloudflare Tunnel example with your own Tunnel ID and hostname.
-
-Compose runs PostgreSQL, PostgREST, the Node web server, and Cloudflare Tunnel. The web server serves the static UI, loads timeline metadata and only the selected page or search result from PostgREST, and forwards `/rpc/*` collection requests to the internal PostgREST service.
+`deploy/oracle/.env.example` and `deploy/oracle/cloudflared.yml.example` are self-hosting templates. Never commit real tokens, passwords, or tunnel credentials.
 
 ```bash
 cp deploy/oracle/.env.example deploy/oracle/.env
@@ -194,50 +142,26 @@ docker compose --env-file deploy/oracle/.env \
   -f deploy/oracle/docker-compose.yml up -d
 ```
 
-After confirming that the Oracle server's Git credential helper returns credentials for `github.com`, install the collector timer.
+## Project layout
 
-```bash
-sudo install -m 0644 deploy/oracle/systemd/github-trend-radar-collector.service \
-  /etc/systemd/system/github-trend-radar-collector.service
-sudo install -m 0644 deploy/oracle/systemd/github-trend-radar-collector.timer \
-  /etc/systemd/system/github-trend-radar-collector.timer
-sudo systemctl daemon-reload
-sudo systemctl enable --now github-trend-radar-collector.timer
+```text
+src/                 React UI, i18n, filters, and ranking views
+server/              GitHub collectors, ranking API, and web server
+deploy/oracle/db/    PostgreSQL schema and migrations
+deploy/oracle/       Docker Compose and systemd operations
+docs/                Brand assets, screenshots, and research notes
 ```
 
-</details>
+## Contributing
 
-## Technology
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [SECURITY.md](SECURITY.md) for responsible vulnerability reporting. Major third-party assets and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-| Area | Stack |
-| --- | --- |
-| Frontend | React 19, TypeScript, Vite, Radix Slider, Primer Octicons |
-| Collector | Node.js, GitHub REST/Search/GraphQL, Cheerio |
-| Public events | Hourly GH Archive event aggregation |
-| Local storage | SQLite, better-sqlite3 |
-| Remote storage | PostgreSQL 17, PostgREST 14 |
-| Network | Cloudflare Tunnel |
-| Automation | Oracle systemd timer, database-backed two-hour interval |
-| Tests | Vitest, strict TypeScript build |
-
-## Status and scope
-
-- This is a personal project with the public web app, API, and scheduled collector operating.
-- Star charts use only snapshots collected directly by this project, with no external data service.
-- Trend Intelligence v5 remains in shadow mode; the verified `baseline-v1` stays the default ranking.
-- This project is not affiliated with GitHub and remains subject to GitHub's trademarks and service terms.
-- The source repository is private and does not grant redistribution rights.
-
-### Roadmap
-
-- [ ] Time-sliced repository discovery backfill with explicit completeness states
-- [x] On-demand PostgREST snapshot reads from the public web UI
-- [x] Daily remote database backups, weekly restore drills, and indefinite snapshot retention
-- [x] First-party observed star growth charts without an external data service
-- [ ] Accuracy view comparing v5 predictions with actual outcomes after 24 and 72 hours
+GitBreakout is distributed under the [MIT License](LICENSE).
 
 ---
 
 <div align="center">
 Built by <a href="https://github.com/Changroro">Changroro</a>
 </div>
+
+This project is not an official GitHub product and is not affiliated with, sponsored by, or endorsed by GitHub, Inc.

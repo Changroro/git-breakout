@@ -1,4 +1,5 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,15 +9,19 @@ const snapshotId = "11111111-1111-4111-8111-111111111111";
 const servers: ReturnType<typeof createWebServer>[] = [];
 const trafficAnalytics = {
   apiToken: "test-token",
-  hostname: "github-trend-radar.imbch.dev",
+  hostname: "gitbreakout.imbch.dev",
   zoneId: "0123456789abcdef0123456789abcdef",
+};
+const redirectConfig = {
+  canonicalHost: "gitbreakout.imbch.dev",
+  legacyHosts: [] as string[],
 };
 
 function testDirectories(): { cacheDirectory: string; staticDirectory: string } {
-  const root = mkdtempSync(join(tmpdir(), "trend-radar-web-"));
+  const root = mkdtempSync(join(tmpdir(), "git-breakout-web-"));
   const staticDirectory = join(root, "dist");
   mkdirSync(staticDirectory);
-  writeFileSync(join(staticDirectory, "index.html"), "<main>Trend Radar</main>");
+  writeFileSync(join(staticDirectory, "index.html"), "<main>GitBreakout</main>");
   return { cacheDirectory: join(root, "cache"), staticDirectory };
 }
 
@@ -44,6 +49,39 @@ async function listen(server: ReturnType<typeof createWebServer>): Promise<strin
   return `http://127.0.0.1:${address.port}`;
 }
 
+async function requestWithHost(
+  baseUrl: string,
+  path: string,
+  host: string,
+  method: "GET" | "POST",
+  body?: string,
+): Promise<{ body: string; headers: import("node:http").IncomingHttpHeaders; statusCode: number }> {
+  const target = new URL(path, baseUrl);
+  return await new Promise((resolve, reject) => {
+    const request = httpRequest(target, {
+      method,
+      headers: {
+        Host: host,
+        ...(body === undefined ? {} : {
+          Authorization: "Bearer token",
+          "Content-Length": Buffer.byteLength(body),
+          "Content-Type": "application/json",
+        }),
+      },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => resolve({
+        body: Buffer.concat(chunks).toString("utf8"),
+        headers: response.headers,
+        statusCode: response.statusCode ?? 0,
+      }));
+    });
+    request.on("error", reject);
+    request.end(body);
+  });
+}
+
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => {
     server.close((error) => error === undefined ? resolve() : reject(error));
@@ -51,6 +89,43 @@ afterEach(async () => {
 });
 
 describe("createWebServer", () => {
+  it("redirects legacy page requests without redirecting collector writes", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(new Response(
+      JSON.stringify({ status: "ok" }),
+      { headers: { "Content-Type": "application/json" } },
+    ));
+    const server = createWebServer({
+      ...testDirectories(),
+      canonicalHost: "gitbreakout.imbch.dev",
+      legacyHosts: ["github-trend-radar.imbch.dev"],
+      internalApiUrl: "http://rest:3000",
+      trafficAnalytics,
+    }, { fetchImplementation });
+    const baseUrl = await listen(server);
+
+    const page = await requestWithHost(
+      baseUrl,
+      "/archive?page=2&query=rust",
+      "github-trend-radar.imbch.dev",
+      "GET",
+    );
+    expect(page.statusCode).toBe(301);
+    expect(page.headers.location).toBe(
+      "https://gitbreakout.imbch.dev/archive?page=2&query=rust",
+    );
+    expect(fetchImplementation).not.toHaveBeenCalled();
+
+    const collector = await requestWithHost(
+      baseUrl,
+      "/rpc/health",
+      "github-trend-radar.imbch.dev",
+      "POST",
+      "{}",
+    );
+    expect(collector.statusCode).toBe(200);
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+  });
+
   it("serves the built application and health endpoint", async () => {
     const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(
       JSON.stringify({ status: "ok" }),
@@ -58,6 +133,7 @@ describe("createWebServer", () => {
     ));
     const server = createWebServer({
       ...testDirectories(),
+      ...redirectConfig,
       internalApiUrl: "http://rest:3000",
       trafficAnalytics,
     }, { fetchImplementation });
@@ -65,14 +141,14 @@ describe("createWebServer", () => {
 
     const page = await fetch(baseUrl);
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain("Trend Radar");
+    expect(await page.text()).toContain("GitBreakout");
     expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(page.headers.get("strict-transport-security")).toContain("max-age=31536000");
     await expect(fetch(`${baseUrl}/archive`).then((response) => response.text())).resolves.toContain(
-      "Trend Radar",
+      "GitBreakout",
     );
     await expect(fetch(`${baseUrl}/track-record`).then((response) => response.text())).resolves.toContain(
-      "Trend Radar",
+      "GitBreakout",
     );
     await expect(fetch(`${baseUrl}/health`).then((response) => response.json())).resolves.toEqual({
       status: "ok",
@@ -83,6 +159,7 @@ describe("createWebServer", () => {
     const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(successfulTrafficResponse(15));
     const server = createWebServer({
       ...testDirectories(),
+      ...redirectConfig,
       internalApiUrl: "http://rest:3000",
       trafficAnalytics,
     }, { fetchImplementation });
@@ -166,6 +243,7 @@ describe("createWebServer", () => {
       }), { headers: { "Content-Type": "application/json" } }));
     const server = createWebServer({
       ...testDirectories(),
+      ...redirectConfig,
       internalApiUrl: "http://rest:3000",
       trafficAnalytics,
     }, { fetchImplementation });
@@ -221,6 +299,7 @@ describe("createWebServer", () => {
       }));
     const server = createWebServer({
       ...testDirectories(),
+      ...redirectConfig,
       internalApiUrl: "http://rest:3000",
       trafficAnalytics,
     }, { fetchImplementation });
@@ -253,6 +332,7 @@ describe("createWebServer", () => {
   it("does not serve files outside the static directory", async () => {
     const server = createWebServer({
       ...testDirectories(),
+      ...redirectConfig,
       internalApiUrl: "http://rest:3000",
       trafficAnalytics,
     });
