@@ -3,7 +3,7 @@ import { CloudflareTrafficAnalytics } from "./cloudflare-traffic.ts";
 
 const config = {
   apiToken: "test-token",
-  hostname: "github-trend-radar.imbch.dev",
+  hostname: "gitbreakout.imbch.dev",
   zoneId: "0123456789abcdef0123456789abcdef",
 };
 
@@ -41,7 +41,7 @@ describe("CloudflareTrafficAnalytics", () => {
       variables: { filter: Record<string, string> };
     };
     expect(body.variables.filter).toEqual({
-      clientRequestHTTPHost: "github-trend-radar.imbch.dev",
+      clientRequestHTTPHost: "gitbreakout.imbch.dev",
       datetime_geq: "2026-08-31T15:00:00.000Z",
       datetime_lt: "2026-09-01T03:15:00.000Z",
       requestSource: "eyeball",

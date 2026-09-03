@@ -65,6 +65,7 @@ services:
       CLOUDFLARE_ANALYTICS_TOKEN: ${CLOUDFLARE_ANALYTICS_TOKEN:?CLOUDFLARE_ANALYTICS_TOKEN is required}
       CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID:?CLOUDFLARE_ZONE_ID is required}
       TREND_RADAR_PUBLIC_HOST: ${TREND_RADAR_PUBLIC_HOST:?TREND_RADAR_PUBLIC_HOST is required}
+      TREND_RADAR_LEGACY_HOSTS: ${TREND_RADAR_LEGACY_HOSTS:-}
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/health"]
       interval: 30s

@@ -1,5 +1,5 @@
 [Unit]
-Description=Verify GitHub Trend Radar backup restore weekly
+Description=Verify GitBreakout backup restore weekly
 
 [Timer]
 OnCalendar=Sun *-*-* 19:00:00 UTC

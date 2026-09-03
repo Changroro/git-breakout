@@ -27,7 +27,9 @@ const MIME_TYPES: Record<string, string> = {
 
 export type WebServerConfig = {
   cacheDirectory: string;
+  canonicalHost: string;
   internalApiUrl: string;
+  legacyHosts: readonly string[];
   staticDirectory: string;
   trafficAnalytics: CloudflareTrafficConfig;
 };
@@ -67,6 +69,47 @@ function errorMessage(error: unknown): string {
 function rejectMethod(response: ServerResponse, allowed: string): void {
   response.setHeader("Allow", allowed);
   sendJson(response, 405, { error: "Method not allowed" });
+}
+
+function requireHostname(value: string, name: string): string {
+  const hostname = value.trim().toLowerCase();
+  const url = new URL(`https://${hostname}`);
+  if (url.hostname !== hostname || url.port !== "" || url.pathname !== "/") {
+    throw new TypeError(`${name} must be a hostname without a path or port`);
+  }
+  return hostname;
+}
+
+function requestHostname(request: IncomingMessage): string | null {
+  const host = request.headers.host;
+  if (host === undefined) {
+    return null;
+  }
+  try {
+    return new URL(`http://${host}`).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function redirectLegacyRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  canonicalHost: string,
+  legacyHosts: ReadonlySet<string>,
+): boolean {
+  if (
+    (request.method !== "GET" && request.method !== "HEAD")
+    || !legacyHosts.has(requestHostname(request) ?? "")
+  ) {
+    return false;
+  }
+  response.statusCode = 301;
+  response.setHeader("Cache-Control", "public, max-age=86400");
+  response.setHeader("Location", `https://${canonicalHost}${requestUrl.pathname}${requestUrl.search}`);
+  response.end();
+  return true;
 }
 
 function requirePositiveIntegerParameter(
@@ -236,6 +279,11 @@ export function createWebServer(
   if (!existsSync(resolve(staticDirectory, "index.html"))) {
     throw new Error(`Static index is missing from ${staticDirectory}`);
   }
+  const canonicalHost = requireHostname(config.canonicalHost, "Canonical host");
+  const legacyHosts = new Set(config.legacyHosts.map((host) => requireHostname(host, "Legacy host")));
+  if (legacyHosts.has(canonicalHost)) {
+    throw new TypeError("Canonical host cannot also be a legacy host");
+  }
   const fetchImplementation = dependencies.fetchImplementation ?? fetch;
   const historyApi = new PublicHistoryApi({
     baseUrl: config.internalApiUrl,
@@ -249,6 +297,9 @@ export function createWebServer(
   const server = createServer(async (request, response) => {
     setSecurityHeaders(response);
     const requestUrl = new URL(request.url ?? "/", "http://localhost");
+    if (redirectLegacyRequest(request, response, requestUrl, canonicalHost, legacyHosts)) {
+      return;
+    }
     if (requestUrl.pathname === "/health") {
       if (request.method !== "GET") {
         rejectMethod(response, "GET");

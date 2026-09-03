@@ -1,5 +1,5 @@
 [Unit]
-Description=Check the GitHub Trend Radar collection schedule every five minutes
+Description=Check the GitBreakout collection schedule every five minutes
 
 [Timer]
 OnCalendar=*:0/5

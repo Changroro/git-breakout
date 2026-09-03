@@ -1,5 +1,5 @@
 [Unit]
-Description=Collect GitHub Trend Radar repository rankings
+Description=Collect GitBreakout repository rankings
 After=network-online.target docker.service
 Wants=network-online.target
 Requires=docker.service

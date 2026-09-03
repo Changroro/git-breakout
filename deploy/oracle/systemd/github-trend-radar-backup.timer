@@ -1,5 +1,5 @@
 [Unit]
-Description=Run GitHub Trend Radar PostgreSQL backup daily
+Description=Run GitBreakout PostgreSQL backup daily
 
 [Timer]
 OnCalendar=*-*-* 18:30:00 UTC

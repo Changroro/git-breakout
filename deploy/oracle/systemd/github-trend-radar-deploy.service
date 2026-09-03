@@ -1,5 +1,5 @@
 [Unit]
-Description=Deploy GitHub Trend Radar from main
+Description=Deploy GitBreakout from main
 After=network-online.target docker.service
 Wants=network-online.target
 Requires=docker.service

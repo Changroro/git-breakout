@@ -1,5 +1,5 @@
 [Unit]
-Description=Back up GitHub Trend Radar PostgreSQL
+Description=Back up GitBreakout PostgreSQL
 After=docker.service
 Requires=docker.service
 

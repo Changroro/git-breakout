@@ -1,6 +1,7 @@
 {
-  "name": "ai-trend-radar-web",
+  "name": "git-breakout",
   "private": true,
+  "license": "MIT",
   "version": "0.0.0",
   "type": "module",
   "scripts": {

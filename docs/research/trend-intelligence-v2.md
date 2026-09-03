@@ -16,7 +16,6 @@
 | 제품·프로젝트 | 확인한 핵심 방식 | 배울 점 | 그대로 채택하지 않은 이유 |
 | --- | --- | --- | --- |
 | [GitHub Trending](https://github.com/trending) | 현재 기간별 인기 목록 | 사용자가 이해하기 쉬운 기준점 | 공식 점수와 과거 순위 API가 없고 이미 노출된 저장소 중심이다. |
-| [Trendshift Signal](https://trendshift.io/signal) | 참여 급증과 트렌딩 목록을 API로 제공 | 단순 누적량보다 급증 신호가 중요하다. | 외부 유료 데이터에 운영 랭킹을 종속시키지 않는다. |
 | [RepoVelocity](https://repovelocity.com/about) | Star velocity, contributor spread, 활동 다양성, 신선도를 함께 평가 | 한 종류 이벤트보다 사람과 활동 폭을 같이 봐야 한다. | 점수 산식과 원시 근거가 공개되지 않아 독립 검증이 어렵다. |
 | [OSSInsight](https://github.com/pingcap/ossinsight) | 대규모 GitHub 이벤트 분석과 기간별 증가 지표 | 공개 이벤트는 저장소 발견과 활동 검증 모두에 쓸 수 있다. | 별도 분석 플랫폼 전체를 도입하지 않고 필요한 시간 창만 저장한다. |
 | [trending8](https://github.com/korbinjoe/trending8) | 절대 Star 증가, 작은 저장소의 상대 속도, 최근 commit 상태 | 신규 저장소에는 절대 증가량과 상대 증가율을 분리해야 한다. | 단일 상승 점수보다 현재 인기와 초기 돌파를 별도 랭킹으로 보여준다. |

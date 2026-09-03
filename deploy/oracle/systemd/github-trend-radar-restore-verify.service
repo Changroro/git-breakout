@@ -1,5 +1,5 @@
 [Unit]
-Description=Verify GitHub Trend Radar backup restore
+Description=Verify GitBreakout backup restore
 After=docker.service
 Requires=docker.service
 

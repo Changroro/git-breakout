@@ -1,5 +1,5 @@
 [Unit]
-Description=Check GitHub Trend Radar public health every five minutes
+Description=Check GitBreakout public health every five minutes
 
 [Timer]
 OnBootSec=2min
