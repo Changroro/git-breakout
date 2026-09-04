@@ -20,7 +20,7 @@ import {
   TrackRecordSection,
 } from "./App";
 import type { DiscoveryEvidence, TrackRecord } from "./lib/discovery-track-record";
-import { I18nProvider } from "./lib/i18n";
+import { I18nProvider, translate } from "./lib/i18n";
 
 describe("ranking view guidance", () => {
   it("orders the ranking views around discovery first", () => {
@@ -145,11 +145,13 @@ describe("InitialLoadingState", () => {
 });
 
 describe("SiteFooter", () => {
-  it("links to the public source, owner GitHub profile, and email address", () => {
+  it("uses the spaced brand name and links to source, sponsor, owner, and email", () => {
     const markup = renderToStaticMarkup(<SiteFooter />);
 
+    expect(translate("en", "ranking.title")).toBe("Git Breakout");
     expect(markup).toContain('href="https://github.com/Changroro/git-breakout"');
-    expect(markup).toContain('aria-label="GitBreakout source code"');
+    expect(markup).toContain('aria-label="Git Breakout source code"');
+    expect(markup).toContain('href="https://github.com/sponsors/Changroro"');
     expect(markup).toContain('href="https://github.com/Changroro"');
     expect(markup).toContain('href="mailto:chbae624@gmail.com"');
   });
@@ -161,7 +163,8 @@ describe("SiteFooter", () => {
       </I18nProvider>,
     );
 
-    expect(markup).toContain('aria-label="GitBreakout 소스 코드"');
+    expect(markup).toContain('aria-label="Git Breakout 소스 코드"');
+    expect(markup).toContain('aria-label="GitHub Sponsors에서 후원"');
     expect(markup).toContain(">소스 코드</a>");
   });
 });

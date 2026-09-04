@@ -51,16 +51,16 @@ const RANKING_VIEW_NAMES: Record<RankingView, string> = {
 
 const DOCUMENT_METADATA: Record<"/" | "/archive" | "/track-record", DocumentMetadata> = {
   "/": {
-    title: "GitBreakout: Rising GitHub repository rankings",
-    description: "GitBreakout discovers rising GitHub repositories using observed growth, activity, and transparent ranking signals.",
+    title: "Git Breakout: Rising GitHub repository rankings",
+    description: "Git Breakout discovers rising GitHub repositories using observed growth, activity, and transparent ranking signals.",
   },
   "/archive": {
-    title: "GitHub Repository Ranking Archive | GitBreakout",
-    description: "Browse repositories previously observed by GitBreakout and reopen their historical ranking snapshots.",
+    title: "GitHub Repository Ranking Archive | Git Breakout",
+    description: "Browse repositories previously observed by Git Breakout and reopen their historical ranking snapshots.",
   },
   "/track-record": {
-    title: "GitHub Trending Early Discovery Track Record | GitBreakout",
-    description: "Review verifiable GitBreakout observations recorded before repositories appeared in GitHub Trending Daily.",
+    title: "GitHub Trending Early Discovery Track Record | Git Breakout",
+    description: "Review verifiable Git Breakout observations recorded before repositories appeared in GitHub Trending Daily.",
   },
 };
 
@@ -222,8 +222,8 @@ function repositoryShareMetadata(
   }
   const view = viewValue as RankingView;
   return {
-    title: `${fullName} · GitBreakout`,
-    description: `#${rank} in GitBreakout ${RANKING_VIEW_NAMES[view]} rankings`,
+    title: `${fullName} · Git Breakout`,
+    description: `#${rank} in Git Breakout ${RANKING_VIEW_NAMES[view]} rankings`,
     imageAlt: `${fullName} GitHub repository card`,
     imageUrl: imageUrl.toString(),
     socialUrl: `https://${canonicalHost}${requestUrl.pathname}${requestUrl.search}`,
@@ -241,7 +241,7 @@ function renderDocumentHtml(indexTemplate: string, requestUrl: URL, canonicalHos
   const canonicalUrl = `https://${canonicalHost}${pathname}`;
   const socialUrl = shareMetadata?.socialUrl ?? canonicalUrl;
   const imageUrl = shareMetadata?.imageUrl ?? `https://${canonicalHost}/gitbreakout-social-card.png`;
-  const imageAlt = shareMetadata?.imageAlt ?? "GitBreakout — rising GitHub repository rankings";
+  const imageAlt = shareMetadata?.imageAlt ?? "Git Breakout — rising GitHub repository rankings";
   const robots = requestUrl.search === "" ? "index,follow" : "noindex,follow";
   const title = escapeHtmlAttribute(metadata.title);
   const description = escapeHtmlAttribute(metadata.description);

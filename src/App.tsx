@@ -13,6 +13,7 @@ import {
   ClockIcon,
   FilterIcon,
   GraphIcon,
+  HeartIcon,
   HistoryIcon,
   MarkGithubIcon,
   MailIcon,
@@ -1432,7 +1433,7 @@ function MethodologyDialog({
                 <h3>검증된 사전 발굴</h3>
                 <p>
                   GitHub 일간 트렌딩을 주 검증 기준으로 삼고 주간·월간 트렌딩 진입은 별도로 기록합니다.
-                  수집 주기가 2시간이므로 선행 시간은 GitBreakout과 GitHub Trending에서 각각 처음 관측한
+                  수집 주기가 2시간이므로 선행 시간은 Git Breakout과 GitHub Trending에서 각각 처음 관측한
                   시점의 간격입니다. GitHub가 저장소를 추가한 정확한 시각과는 다를 수 있습니다.
                 </p>
                 <p>
@@ -2443,6 +2444,15 @@ export function SiteFooter() {
             <RepoIcon size={16} />
             {t("footer.source")}
           </a>
+          <a
+            aria-label={t("footer.sponsorLabel")}
+            href="https://github.com/sponsors/Changroro"
+            rel="noreferrer"
+            target="_blank"
+          >
+            <HeartIcon size={16} />
+            {t("footer.sponsor")}
+          </a>
           <a href="https://github.com/Changroro" rel="noreferrer" target="_blank">
             <MarkGithubIcon size={16} />
             github.com/Changroro
@@ -2739,7 +2749,7 @@ function AppContent({
             onClick={navigateHome}
           >
             <span aria-hidden="true" className="brand-mark" />
-            <span>GitBreakout</span>
+            <span>Git Breakout</span>
           </a>
           <div className="header-actions">
             <button
@@ -2819,13 +2829,13 @@ export default function App() {
     localStorage.setItem(LOCALE_STORAGE_KEY, locale);
     document.documentElement.lang = locale;
     document.title = locale === "ko"
-      ? "GitBreakout: 떠오르는 GitHub 저장소 랭킹"
-      : "GitBreakout: Rising GitHub repository rankings";
+      ? "Git Breakout: 떠오르는 GitHub 저장소 랭킹"
+      : "Git Breakout: Rising GitHub repository rankings";
     const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
     if (description !== null) {
       description.content = locale === "ko"
-        ? "GitBreakout은 실제 성장과 활동 신호를 관측해 떠오르는 GitHub 저장소를 찾습니다."
-        : "GitBreakout discovers rising GitHub repositories using observed growth, activity, and transparent ranking signals.";
+        ? "Git Breakout은 실제 성장과 활동 신호를 관측해 떠오르는 GitHub 저장소를 찾습니다."
+        : "Git Breakout discovers rising GitHub repositories using observed growth, activity, and transparent ranking signals.";
     }
   }, [locale]);
 

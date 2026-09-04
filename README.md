@@ -1,6 +1,6 @@
 <div align="center">
 
-![GitBreakout](docs/banner.png)
+![Git Breakout](docs/banner.png)
 
 **실제 성장과 활동 신호를 관측해 떠오르는 GitHub 저장소를 찾는 오픈소스 랭킹.**
 
@@ -8,14 +8,15 @@
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Collection](https://img.shields.io/badge/Collection-every%202%20hours-3FB950?style=flat-square)](#수집과-저장)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?style=flat-square&logo=githubsponsors)](https://github.com/sponsors/Changroro)
 
 [English](README.en.md) · [서비스 열기](https://gitbreakout.imbch.dev) · [API 상태](https://gitbreakout.imbch.dev/rpc/health)
 
 </div>
 
-## GitBreakout이 필요한 이유
+## Git Breakout이 필요한 이유
 
-GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하지만, 이미 알려진 저장소가 반복해서 노출되거나 성장 초기의 프로젝트를 놓칠 수 있다. GitBreakout은 Trending 목록뿐 아니라 최근 생성·푸시된 저장소와 공개 이벤트를 함께 관측하고, 누적 인기도보다 **최근의 변화**에 무게를 둔다.
+GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하지만, 이미 알려진 저장소가 반복해서 노출되거나 성장 초기의 프로젝트를 놓칠 수 있다. Git Breakout은 Trending 목록뿐 아니라 최근 생성·푸시된 저장소와 공개 이벤트를 함께 관측하고, 누적 인기도보다 **최근의 변화**에 무게를 둔다.
 
 이 프로젝트는 GitHub 전체 저장소의 완전한 색인이 아니다. API 검색 한계 안에서 후보를 넓게 발견하고, 반복 관측한 값만 사용해 순위와 Star 그래프를 만든다.
 
@@ -24,13 +25,13 @@ GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하
 ### 데스크톱
 
 <p align="center">
-  <img src="docs/screenshots/desktop.png" alt="GitBreakout 데스크톱 랭킹 화면" width="960" />
+  <img src="docs/screenshots/desktop.png" alt="Git Breakout 데스크톱 랭킹 화면" width="960" />
 </p>
 
 ### 모바일
 
 <p align="center">
-  <img src="docs/screenshots/mobile.png" alt="GitBreakout 모바일 랭킹 화면" width="360" />
+  <img src="docs/screenshots/mobile.png" alt="Git Breakout 모바일 랭킹 화면" width="360" />
 </p>
 
 ## 주요 기능
@@ -40,9 +41,9 @@ GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하
 - **현재 관심도**: Star 속도와 고유 참여자, 활동 종류, 단기 지속성으로 지금의 관심 집중도를 계산한다.
 - **GitHub Trending**: 수집 시점의 Daily·Weekly·Monthly 원본 순위를 별도 탭으로 보존한다.
 - **히스토리**: 2시간 단위 스냅샷 타임라인으로 과거 순위와 당시 저장소 상태를 조회한다.
-- **Star 시계열**: 외부 그래프 서비스 없이 GitBreakout이 직접 관측한 Star 변화만 표시한다.
+- **Star 시계열**: 외부 그래프 서비스 없이 Git Breakout이 직접 관측한 Star 변화만 표시한다.
 - **아카이브**: 최신 후보군에서 제외된 저장소도 과거 스냅샷과 함께 보존한다.
-- **발굴 성과**: GitBreakout이 먼저 관측한 저장소가 이후 Daily Trending에 진입했는지 검증한다.
+- **발굴 성과**: Git Breakout이 먼저 관측한 저장소가 이후 Daily Trending에 진입했는지 검증한다.
 - **탐색 UI**: 저장소 검색, 언어·토픽 필터, 페이지네이션, 읽은 항목 표시, 한·영 전환, 반응형 라이트·다크 테마를 제공한다.
 
 ## 데이터 흐름
@@ -58,7 +59,7 @@ GH Archive ──────┘                            │
                               PostgreSQL 스냅샷·아카이브
                                              │
                                              ▼
-                                 API ─→ GitBreakout UI
+                                 API ─→ Git Breakout UI
 ```
 
 ### 후보 소스
@@ -71,7 +72,7 @@ GH Archive ──────┘                            │
 | 이전 관측 | 14일 유지 정책을 통과한 후보 | 검색 범위를 벗어난 저장소의 연속 추적 |
 | GitHub GraphQL | Star, Fork, Issue, 언어, Topic, Push 시각 | 현재 메타데이터 검증 |
 
-GitHub Search는 쿼리별 최대 1,000개 결과만 반환하므로 GitBreakout의 순위를 “GitHub 전체 저장소의 완전한 순위”로 해석하면 안 된다. 후보군에서 제외된 저장소는 새 관측만 멈추며 기존 스냅샷은 삭제하지 않는다.
+GitHub Search는 쿼리별 최대 1,000개 결과만 반환하므로 Git Breakout의 순위를 “GitHub 전체 저장소의 완전한 순위”로 해석하면 안 된다. 후보군에서 제외된 저장소는 새 관측만 멈추며 기존 스냅샷은 삭제하지 않는다.
 
 ## 랭킹 방식
 

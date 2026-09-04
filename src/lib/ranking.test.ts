@@ -8,7 +8,7 @@ function candidate(overrides: Partial<RepositoryCandidate> = {}): RepositoryCand
     full_name: "example/radar",
     url: "https://github.com/example/radar",
     open_graph_image_url: "https://opengraph.githubassets.com/test/example/radar",
-    description: "GitBreakout ranking",
+    description: "Git Breakout ranking",
     language: "TypeScript",
     topics: ["ai"],
     observation_sources: ["official_daily", "github_search_pushed"],

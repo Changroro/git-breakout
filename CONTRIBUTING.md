@@ -1,6 +1,6 @@
-# Contributing to GitBreakout
+# Contributing to Git Breakout
 
-Thank you for helping improve GitBreakout. Contributions that make discovery more accurate, methodology more transparent, or the interface easier to use are welcome.
+Thank you for helping improve Git Breakout. Contributions that make discovery more accurate, methodology more transparent, or the interface easier to use are welcome.
 
 ## Development setup
 
