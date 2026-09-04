@@ -219,7 +219,7 @@ describe("createWebServer", () => {
 
     expect(response.status).toBe(200);
     expect(html).toContain("owner/repository · Git Breakout");
-    expect(html).toContain("#3 in Git Breakout Breakout rankings");
+    expect(html).toContain("Breakout #3 on Git Breakout");
     expect(html).toContain('property="og:image" content="https://opengraph.githubassets.com/hash/owner/repository"');
     expect(html).toContain('name="twitter:image" content="https://opengraph.githubassets.com/hash/owner/repository"');
     expect(html).not.toContain('property="og:image:height"');

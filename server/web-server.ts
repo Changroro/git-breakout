@@ -223,7 +223,7 @@ function repositoryShareMetadata(
   const view = viewValue as RankingView;
   return {
     title: `${fullName} · Git Breakout`,
-    description: `#${rank} in Git Breakout ${RANKING_VIEW_NAMES[view]} rankings`,
+    description: `${RANKING_VIEW_NAMES[view]} #${rank} on Git Breakout`,
     imageAlt: `${fullName} GitHub repository card`,
     imageUrl: imageUrl.toString(),
     socialUrl: `https://${canonicalHost}${requestUrl.pathname}${requestUrl.search}`,
