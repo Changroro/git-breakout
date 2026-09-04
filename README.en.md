@@ -1,6 +1,6 @@
 <div align="center">
 
-![GitBreakout](docs/banner.png)
+![Git Breakout](docs/banner.png)
 
 **An open-source ranking that observes real growth and activity signals to find rising GitHub repositories.**
 
@@ -8,29 +8,30 @@
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Collection](https://img.shields.io/badge/Collection-every%202%20hours-3FB950?style=flat-square)](#collection-and-storage)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?style=flat-square&logo=githubsponsors)](https://github.com/sponsors/Changroro)
 
 [한국어](README.md) · [Open the service](https://gitbreakout.imbch.dev) · [API health](https://gitbreakout.imbch.dev/rpc/health)
 
 </div>
 
-## Why GitBreakout
+## Why Git Breakout
 
-GitHub Trending is useful for seeing what is popular now, but established repositories can appear repeatedly while early-stage growth goes unnoticed. GitBreakout combines Trending with recently created and pushed repositories plus public activity events, then emphasizes **recent change** over lifetime popularity.
+GitHub Trending is useful for seeing what is popular now, but established repositories can appear repeatedly while early-stage growth goes unnoticed. Git Breakout combines Trending with recently created and pushed repositories plus public activity events, then emphasizes **recent change** over lifetime popularity.
 
-GitBreakout is not a complete index of every repository on GitHub. It discovers a broad candidate pool within API search limits and builds rankings and star charts only from values it has observed directly.
+Git Breakout is not a complete index of every repository on GitHub. It discovers a broad candidate pool within API search limits and builds rankings and star charts only from values it has observed directly.
 
 ## Screenshots
 
 ### Desktop
 
 <p align="center">
-  <img src="docs/screenshots/desktop.png" alt="GitBreakout desktop ranking view" width="960" />
+  <img src="docs/screenshots/desktop.png" alt="Git Breakout desktop ranking view" width="960" />
 </p>
 
 ### Mobile
 
 <p align="center">
-  <img src="docs/screenshots/mobile.png" alt="GitBreakout mobile ranking view" width="360" />
+  <img src="docs/screenshots/mobile.png" alt="Git Breakout mobile ranking view" width="360" />
 </p>
 
 ## Features
@@ -40,9 +41,9 @@ GitBreakout is not a complete index of every repository on GitHub. It discovers 
 - **Current heat** measures attention right now through star velocity, unique actors, activity diversity, and short-term persistence.
 - **GitHub Trending** preserves the collected Daily, Weekly, and Monthly source ranks in a separate view.
 - **History** lets visitors inspect past rankings and repository state through two-hour snapshots.
-- **Observed star series** draws sparklines from GitBreakout's own snapshots without an external graph service.
+- **Observed star series** draws sparklines from Git Breakout's own snapshots without an external graph service.
 - **Archive** retains repositories that leave the latest candidate pool together with their historical snapshots.
-- **Track record** verifies whether repositories observed early by GitBreakout later enter GitHub Trending Daily.
+- **Track record** verifies whether repositories observed early by Git Breakout later enter GitHub Trending Daily.
 - **Discovery UI** includes repository search, language and topic filters, pagination, read-state dimming, Korean and English, responsive layouts, and light and dark themes.
 
 ## Data flow
@@ -58,7 +59,7 @@ GH Archive ──────┘                               │
                                   PostgreSQL snapshots and archive
                                                 │
                                                 ▼
-                                      API ─→ GitBreakout UI
+                                      API ─→ Git Breakout UI
 ```
 
 ### Candidate sources
@@ -71,7 +72,7 @@ GH Archive ──────┘                               │
 | Previous observations | Candidates that pass the 14-day retention policy | Continued tracking beyond search windows |
 | GitHub GraphQL | Stars, forks, issues, language, topics, and push time | Current metadata verification |
 
-GitHub Search returns at most 1,000 results per query, so GitBreakout must not be described as a complete ranking of every GitHub repository. Leaving the candidate pool stops new observations; it does not delete existing snapshots.
+GitHub Search returns at most 1,000 results per query, so Git Breakout must not be described as a complete ranking of every GitHub repository. Leaving the candidate pool stops new observations; it does not delete existing snapshots.
 
 ## Ranking model
 
@@ -145,7 +146,7 @@ Production deployment automation, secret configuration, backup operations, and i
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and [SECURITY.md](SECURITY.md) for responsible vulnerability reporting. Major third-party assets and their licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-GitBreakout is distributed under the [MIT License](LICENSE).
+Git Breakout is distributed under the [MIT License](LICENSE).
 
 ---
 

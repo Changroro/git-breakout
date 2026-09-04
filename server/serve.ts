@@ -44,7 +44,7 @@ const server = createWebServer({
 });
 
 server.listen(port, "0.0.0.0", () => {
-  process.stdout.write(`GitBreakout web server listening on port ${port}\n`);
+  process.stdout.write(`Git Breakout web server listening on port ${port}\n`);
 });
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {

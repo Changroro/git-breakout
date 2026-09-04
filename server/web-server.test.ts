@@ -32,14 +32,14 @@ function testDirectories(): { cacheDirectory: string; staticDirectory: string } 
       <meta property="og:image:type" content="image/png" />
       <meta property="og:image:width" content="1200" />
       <meta property="og:image:height" content="630" />
-      <meta property="og:image:alt" content="GitBreakout" />
+      <meta property="og:image:alt" content="Git Breakout" />
       <meta name="twitter:title" content="Home title" />
       <meta name="twitter:description" content="Home description" />
       <meta name="twitter:image" content="https://gitbreakout.imbch.dev/gitbreakout-social-card.png" />
-      <meta name="twitter:image:alt" content="GitBreakout" />
+      <meta name="twitter:image:alt" content="Git Breakout" />
       <link rel="canonical" href="https://gitbreakout.imbch.dev/" />
-      <title>GitBreakout</title>
-    </head><body><main>GitBreakout</main></body></html>`);
+      <title>Git Breakout</title>
+    </head><body><main>Git Breakout</main></body></html>`);
   return { cacheDirectory: join(root, "cache"), staticDirectory };
 }
 
@@ -159,14 +159,14 @@ describe("createWebServer", () => {
 
     const page = await fetch(baseUrl);
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain("GitBreakout");
+    expect(await page.text()).toContain("Git Breakout");
     expect(page.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
     expect(page.headers.get("strict-transport-security")).toContain("max-age=31536000");
     await expect(fetch(`${baseUrl}/archive`).then((response) => response.text())).resolves.toContain(
-      "GitBreakout",
+      "Git Breakout",
     );
     await expect(fetch(`${baseUrl}/track-record`).then((response) => response.text())).resolves.toContain(
-      "GitBreakout",
+      "Git Breakout",
     );
     await expect(fetch(`${baseUrl}/health`).then((response) => response.json())).resolves.toEqual({
       status: "ok",
@@ -184,13 +184,13 @@ describe("createWebServer", () => {
 
     const archive = await fetch(`${baseUrl}/archive`);
     const archiveHtml = await archive.text();
-    expect(archiveHtml).toContain("GitHub Repository Ranking Archive | GitBreakout");
+    expect(archiveHtml).toContain("GitHub Repository Ranking Archive | Git Breakout");
     expect(archiveHtml).toContain('rel="canonical" href="https://gitbreakout.imbch.dev/archive"');
     expect(archiveHtml).toContain('name="robots" content="index,follow"');
 
     const trackRecord = await fetch(`${baseUrl}/track-record`);
     const trackRecordHtml = await trackRecord.text();
-    expect(trackRecordHtml).toContain("GitHub Trending Early Discovery Track Record | GitBreakout");
+    expect(trackRecordHtml).toContain("GitHub Trending Early Discovery Track Record | Git Breakout");
     expect(trackRecordHtml).toContain('property="og:url" content="https://gitbreakout.imbch.dev/track-record"');
 
     const filtered = await fetch(`${baseUrl}/?view=breakout&language=rust`);
@@ -218,8 +218,8 @@ describe("createWebServer", () => {
     const html = await response.text();
 
     expect(response.status).toBe(200);
-    expect(html).toContain("owner/repository · GitBreakout");
-    expect(html).toContain("#3 in GitBreakout Breakout rankings");
+    expect(html).toContain("owner/repository · Git Breakout");
+    expect(html).toContain("#3 in Git Breakout Breakout rankings");
     expect(html).toContain('property="og:image" content="https://opengraph.githubassets.com/hash/owner/repository"');
     expect(html).toContain('name="twitter:image" content="https://opengraph.githubassets.com/hash/owner/repository"');
     expect(html).not.toContain('property="og:image:height"');

@@ -1,8 +1,8 @@
-# GitBreakout methodology
+# Git Breakout methodology
 
 Updated: 2026-09-04
 
-GitBreakout discovers public repositories from GitHub Trending, GitHub Search, recent public activity, and previously observed candidates. It then ranks only values that were observed directly. A missing observation is not replaced with an estimated historical value or a zero.
+Git Breakout discovers public repositories from GitHub Trending, GitHub Search, recent public activity, and previously observed candidates. It then ranks only values that were observed directly. A missing observation is not replaced with an estimated historical value or a zero.
 
 ## Candidate discovery
 
@@ -14,7 +14,7 @@ GitBreakout discovers public repositories from GitHub Trending, GitHub Search, r
 | Previous observations | Continue tracking candidates that pass the retention policy |
 | GitHub GraphQL | Verify current stars, forks, issues, language, topics, and push time |
 
-GitHub Search returns at most 1,000 results per query. GitBreakout therefore describes its results as rankings within the observed candidate pool, not a complete ranking of every GitHub repository.
+GitHub Search returns at most 1,000 results per query. Git Breakout therefore describes its results as rankings within the observed candidate pool, not a complete ranking of every GitHub repository.
 
 ## Momentum
 
@@ -58,4 +58,4 @@ Cases with unknown historical provenance, collection gaps, or an initial observa
 
 Newly observed repositories receive a 14-day grace period. After that period, recent star growth, a recent push, or retained ranking position is required for continued collection. Leaving the candidate pool stops new observations but does not delete existing ranking snapshots. Rediscovered repositories automatically return to active collection.
 
-Star charts begin when GitBreakout first observes a repository. They do not claim to reconstruct the repository's complete historical star curve.
+Star charts begin when Git Breakout first observes a repository. They do not claim to reconstruct the repository's complete historical star curve.
