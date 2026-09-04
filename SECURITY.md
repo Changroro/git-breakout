@@ -19,4 +19,4 @@ Do not include real credentials or private user data. Acknowledgement is normall
 
 ## Deployment responsibility
 
-The example deployment files require operators to provide their own GitHub, PostgreSQL, PostgREST, Cloudflare, and collector credentials. Rotate exposed secrets immediately and keep `.env`, tunnel credentials, database volumes, backups, caches, and logs outside version control.
+Production operations are not distributed in this repository. Rotate exposed secrets immediately and keep `.env`, tunnel credentials, database volumes, backups, caches, and logs outside version control.

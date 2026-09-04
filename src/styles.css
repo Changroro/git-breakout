@@ -2176,6 +2176,33 @@ h1 {
 
 .repository-copy {
   min-width: 0;
+  position: relative;
+  padding-right: 32px;
+}
+
+.repository-share-button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  position: absolute;
+  top: -6px;
+  right: -4px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.66;
+  text-decoration: none;
+}
+
+.repository-share-button:hover,
+.repository-share-button:focus-visible {
+  background: var(--surface-muted);
+  color: var(--text);
+  opacity: 1;
 }
 
 .repository-title-line {
@@ -2921,6 +2948,17 @@ h1 {
 
   .repository-title-line {
     gap: 5px;
+  }
+
+  .repository-copy {
+    padding-right: 38px;
+  }
+
+  .repository-share-button {
+    width: 40px;
+    height: 40px;
+    top: -10px;
+    right: -8px;
   }
 
   .discovery-evidence-badge {

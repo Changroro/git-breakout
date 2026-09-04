@@ -1,0 +1,22 @@
+# GitBreakout
+
+> GitBreakout discovers rising GitHub repositories using directly observed growth and activity signals.
+
+## Public pages
+
+- [Current rankings](https://gitbreakout.imbch.dev/): Breakout, Momentum, Current heat, and collected GitHub Trending ranks.
+- [Archive](https://gitbreakout.imbch.dev/archive): Repositories no longer present in the latest candidate pool.
+- [Track record](https://gitbreakout.imbch.dev/track-record): Verifiable observations recorded before GitHub Trending Daily.
+- [Methodology](https://github.com/Changroro/git-breakout/blob/main/docs/methodology.md): Data sources, ranking formulas, evidence rules, and limitations.
+
+## Data notes
+
+- Rankings cover the observed candidate pool, not every repository on GitHub.
+- Star history begins when GitBreakout first observes a repository.
+- Missing evidence is not replaced with estimated historical values.
+- Public activity archives are treated as lower-bound evidence when source coverage varies.
+
+## Publisher
+
+- [Source code](https://github.com/Changroro/git-breakout)
+- [Creator](https://github.com/Changroro)

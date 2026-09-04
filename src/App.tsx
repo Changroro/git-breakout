@@ -16,6 +16,7 @@ import {
   HistoryIcon,
   MarkGithubIcon,
   MailIcon,
+  MentionIcon,
   MoonIcon,
   PeopleIcon,
   RepoIcon,
@@ -87,6 +88,7 @@ import {
   type Locale,
 } from "./lib/i18n";
 import { parsePublicTrafficResponse } from "./lib/public-traffic";
+import { threadsShareUrl } from "./lib/repository-share";
 
 const PAGE_SIZE = 10;
 const DEFAULT_TOPIC_LIMIT = 12;
@@ -902,6 +904,14 @@ function RankingRow({
   const viewScore = repositoryViewScore(repository, rankingView);
   const phase = intelligence?.phase === "insufficient_data" ? null : intelligence?.phase ?? null;
 
+  const shareUrl = threadsShareUrl({
+    fullName: repository.full_name,
+    imageUrl: repository.open_graph_image_url,
+    pageUrl: window.location.href,
+    rank: displayRank,
+    view: rankingView,
+  });
+
   return (
     <li className={`ranking-row ${isRead ? "ranking-row-read" : ""}`}>
       <div
@@ -934,6 +944,16 @@ function RankingRow({
                 {rankingView === "momentum" || viewScore === null ? null : ` ${Math.round(viewScore)}`}
               </span>
             )}
+            <a
+              aria-label={t("repository.shareThreads", { name: repository.full_name })}
+              className="repository-share-button"
+              href={shareUrl}
+              rel="noopener noreferrer"
+              target="_blank"
+              title={t("repository.shareThreads", { name: repository.full_name })}
+            >
+              <MentionIcon aria-hidden="true" size={15} />
+            </a>
           </div>
           <p>{repository.description}</p>
           <div className="mobile-meta">
