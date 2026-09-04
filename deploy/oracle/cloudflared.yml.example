@@ -1,9 +1,0 @@
-tunnel: <TUNNEL-UUID>
-credentials-file: /etc/cloudflared/credentials.json
-
-ingress:
-  - hostname: <PUBLIC-HOSTNAME>
-    service: http://web:8080
-  - hostname: <LEGACY-PUBLIC-HOSTNAME>
-    service: http://web:8080
-  - service: http_status:404

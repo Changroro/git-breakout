@@ -21,9 +21,17 @@ GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하
 
 ## 화면
 
-| 데스크톱 | 모바일 |
-| :---: | :---: |
-| ![GitBreakout 데스크톱](docs/screenshots/desktop.png) | ![GitBreakout 모바일](docs/screenshots/mobile.png) |
+### 데스크톱
+
+<p align="center">
+  <img src="docs/screenshots/desktop.png" alt="GitBreakout 데스크톱 랭킹 화면" width="960" />
+</p>
+
+### 모바일
+
+<p align="center">
+  <img src="docs/screenshots/mobile.png" alt="GitBreakout 모바일 랭킹 화면" width="360" />
+</p>
 
 ## 주요 기능
 
@@ -85,7 +93,7 @@ score = log1p(observedStarsPerDay) × 55
 - 데이터가 부족한 값은 0점으로 꾸미지 않고 `insufficient_data`로 남긴다.
 - 급부상과 현재 관심도는 `trend-intelligence-v5-shadow` 모델로 별도 계산한다.
 
-자세한 모델 비교와 한계는 [Trend Intelligence 연구 문서](docs/research/trend-intelligence-v2.md)에 정리돼 있다. 웹 화면의 각 지표 옆 물음표에서도 현재 계산 방식을 확인할 수 있다.
+자세한 산식과 한계는 [공개 방법론](docs/methodology.md)에 정리돼 있다. 웹 화면의 각 지표 옆 물음표에서도 현재 계산 방식을 확인할 수 있다.
 
 ## 수집과 저장
 
@@ -93,7 +101,6 @@ score = log1p(observedStarsPerDay) × 55
 - 중복 실행은 서버 파일 잠금과 DB lease로 차단한다.
 - 최근 168시간의 집계 이벤트를 유지하고 1·6·24·72시간 구간을 계산한다.
 - 랭킹 스냅샷과 아카이브는 이벤트 보존 기간과 별도로 유지한다.
-- 운영 스택은 PostgreSQL 17, PostgREST 14, Node 웹 서버, Cloudflare Tunnel로 구성된다.
 - GitHub Actions 예약 수집은 사용하지 않는다.
 
 ## 시작하기
@@ -124,33 +131,15 @@ npm run typecheck
 npm run build
 ```
 
-### 원격 수집
-
-```bash
-export GITHUB_TOKEN=your_token
-export TREND_RADAR_API_URL=https://your-api.example.com
-export TREND_RADAR_COLLECTOR_TOKEN=your_collector_jwt
-npm run collect:remote
-```
-
-`deploy/oracle/.env.example`과 `deploy/oracle/cloudflared.yml.example`은 자체 호스팅용 예제다. 실제 토큰·비밀번호·Tunnel credentials는 저장소에 커밋하지 않는다.
-
-```bash
-cp deploy/oracle/.env.example deploy/oracle/.env
-cp deploy/oracle/cloudflared.yml.example deploy/oracle/cloudflared.yml
-docker compose --env-file deploy/oracle/.env \
-  -f deploy/oracle/docker-compose.yml up -d
-```
-
 ## 프로젝트 구조
 
 ```text
 src/                 React UI, i18n, filters, ranking views
 server/              GitHub collectors, ranking API, web server
-deploy/oracle/db/    PostgreSQL schema and migrations
-deploy/oracle/       Docker Compose and systemd operations
-docs/                Brand assets, screenshots, research notes
+docs/                Brand assets, screenshots, public methodology
 ```
+
+운영 서버의 배포 자동화, 비밀 설정, 백업 구성과 내부 비교 조사는 공개 저장소에 포함하지 않는다.
 
 ## 기여
 

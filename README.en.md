@@ -21,9 +21,17 @@ GitBreakout is not a complete index of every repository on GitHub. It discovers 
 
 ## Screenshots
 
-| Desktop | Mobile |
-| :---: | :---: |
-| ![GitBreakout desktop](docs/screenshots/desktop.png) | ![GitBreakout mobile](docs/screenshots/mobile.png) |
+### Desktop
+
+<p align="center">
+  <img src="docs/screenshots/desktop.png" alt="GitBreakout desktop ranking view" width="960" />
+</p>
+
+### Mobile
+
+<p align="center">
+  <img src="docs/screenshots/mobile.png" alt="GitBreakout mobile ranking view" width="360" />
+</p>
 
 ## Features
 
@@ -85,7 +93,7 @@ score = log1p(observedStarsPerDay) × 55
 - Missing evidence remains `insufficient_data` instead of being converted into a zero score.
 - Breakout and Current heat are stored separately under `trend-intelligence-v5-shadow`.
 
-See the [Trend Intelligence research note](docs/research/trend-intelligence-v2.md) for model comparisons and limitations. The question-mark control beside each ranking view also exposes the current methodology in the web app.
+See the [public methodology](docs/methodology.md) for formulas and limitations. The question-mark control beside each ranking view also exposes the current methodology in the web app.
 
 ## Collection and storage
 
@@ -93,7 +101,6 @@ See the [Trend Intelligence research note](docs/research/trend-intelligence-v2.m
 - A server file lock and database lease prevent overlapping runs.
 - Aggregated events are retained for 168 hours and evaluated over 1, 6, 24, and 72-hour windows.
 - Ranking snapshots and archived observations are retained independently from raw event windows.
-- The production stack uses PostgreSQL 17, PostgREST 14, a Node web server, and Cloudflare Tunnel.
 - Scheduled collection does not use GitHub Actions.
 
 ## Getting started
@@ -124,33 +131,15 @@ npm run typecheck
 npm run build
 ```
 
-### Remote collection
-
-```bash
-export GITHUB_TOKEN=your_token
-export TREND_RADAR_API_URL=https://your-api.example.com
-export TREND_RADAR_COLLECTOR_TOKEN=your_collector_jwt
-npm run collect:remote
-```
-
-`deploy/oracle/.env.example` and `deploy/oracle/cloudflared.yml.example` are self-hosting templates. Never commit real tokens, passwords, or tunnel credentials.
-
-```bash
-cp deploy/oracle/.env.example deploy/oracle/.env
-cp deploy/oracle/cloudflared.yml.example deploy/oracle/cloudflared.yml
-docker compose --env-file deploy/oracle/.env \
-  -f deploy/oracle/docker-compose.yml up -d
-```
-
 ## Project layout
 
 ```text
 src/                 React UI, i18n, filters, and ranking views
 server/              GitHub collectors, ranking API, and web server
-deploy/oracle/db/    PostgreSQL schema and migrations
-deploy/oracle/       Docker Compose and systemd operations
-docs/                Brand assets, screenshots, and research notes
+docs/                Brand assets, screenshots, and public methodology
 ```
+
+Production deployment automation, secret configuration, backup operations, and internal competitive research are not distributed in the public repository.
 
 ## Contributing
 

@@ -1,4 +1,4 @@
-import { createReadStream, existsSync, statSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
 import { loadRepositoryCard } from "./card-cache.ts";
@@ -23,6 +23,45 @@ const MIME_TYPES: Record<string, string> = {
   ".png": "image/png",
   ".svg": "image/svg+xml",
   ".webp": "image/webp",
+  ".xml": "application/xml; charset=utf-8",
+};
+
+type DocumentMetadata = {
+  description: string;
+  title: string;
+};
+
+type RepositoryShareMetadata = DocumentMetadata & {
+  imageAlt: string;
+  imageUrl: string;
+  socialUrl: string;
+};
+
+const GITHUB_CARD_HOSTS = new Set([
+  "opengraph.githubassets.com",
+  "repository-images.githubusercontent.com",
+]);
+
+const RANKING_VIEW_NAMES: Record<RankingView, string> = {
+  breakout: "Breakout",
+  current: "Current heat",
+  github: "GitHub Trending",
+  momentum: "Momentum",
+};
+
+const DOCUMENT_METADATA: Record<"/" | "/archive" | "/track-record", DocumentMetadata> = {
+  "/": {
+    title: "GitBreakout: Rising GitHub repository rankings",
+    description: "GitBreakout discovers rising GitHub repositories using observed growth, activity, and transparent ranking signals.",
+  },
+  "/archive": {
+    title: "GitHub Repository Ranking Archive | GitBreakout",
+    description: "Browse repositories previously observed by GitBreakout and reopen their historical ranking snapshots.",
+  },
+  "/track-record": {
+    title: "GitHub Trending Early Discovery Track Record | GitBreakout",
+    description: "Review verifiable GitBreakout observations recorded before repositories appeared in GitHub Trending Daily.",
+  },
 };
 
 export type WebServerConfig = {
@@ -105,11 +144,125 @@ function redirectLegacyRequest(
   ) {
     return false;
   }
+  const targetPathname = normalizeDocumentPath(requestUrl.pathname) ?? requestUrl.pathname;
   response.statusCode = 301;
   response.setHeader("Cache-Control", "public, max-age=86400");
-  response.setHeader("Location", `https://${canonicalHost}${requestUrl.pathname}${requestUrl.search}`);
+  response.setHeader("Location", `https://${canonicalHost}${targetPathname}${requestUrl.search}`);
   response.end();
   return true;
+}
+
+function normalizeDocumentPath(pathname: string): "/archive" | "/track-record" | null {
+  if (pathname === "/archive/") {
+    return "/archive";
+  }
+  if (pathname === "/track-record/") {
+    return "/track-record";
+  }
+  return null;
+}
+
+function redirectNormalizedDocument(
+  request: IncomingMessage,
+  response: ServerResponse,
+  requestUrl: URL,
+  canonicalHost: string,
+): boolean {
+  const pathname = normalizeDocumentPath(requestUrl.pathname);
+  if (pathname === null || (request.method !== "GET" && request.method !== "HEAD")) {
+    return false;
+  }
+  response.statusCode = 301;
+  response.setHeader("Cache-Control", "public, max-age=86400");
+  response.setHeader("Location", `https://${canonicalHost}${pathname}${requestUrl.search}`);
+  response.end();
+  return true;
+}
+
+function replaceRequired(html: string, pattern: RegExp, replacement: string, field: string): string {
+  if (!pattern.test(html)) {
+    throw new Error(`Static index is missing ${field}`);
+  }
+  return html.replace(pattern, replacement);
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function repositoryShareMetadata(
+  requestUrl: URL,
+  canonicalHost: string,
+): RepositoryShareMetadata | null {
+  const fullName = requestUrl.searchParams.get("share_repository");
+  const imageValue = requestUrl.searchParams.get("share_image");
+  const rankValue = requestUrl.searchParams.get("share_rank");
+  const viewValue = requestUrl.searchParams.get("share_view");
+  if (fullName === null || imageValue === null || rankValue === null || viewValue === null) {
+    return null;
+  }
+  const imageUrl = URL.parse(imageValue);
+  if (
+    !/^[^/\s]+\/[^/\s]+$/.test(fullName)
+    || imageUrl === null
+    || imageUrl.protocol !== "https:"
+    || !GITHUB_CARD_HOSTS.has(imageUrl.hostname)
+    || !/^\d+$/.test(rankValue)
+    || !(viewValue in RANKING_VIEW_NAMES)
+  ) {
+    return null;
+  }
+  const rank = Number(rankValue);
+  if (!Number.isSafeInteger(rank) || rank < 1) {
+    return null;
+  }
+  const view = viewValue as RankingView;
+  return {
+    title: `${fullName} · GitBreakout`,
+    description: `#${rank} in GitBreakout ${RANKING_VIEW_NAMES[view]} rankings`,
+    imageAlt: `${fullName} GitHub repository card`,
+    imageUrl: imageUrl.toString(),
+    socialUrl: `https://${canonicalHost}${requestUrl.pathname}${requestUrl.search}`,
+  };
+}
+
+function renderDocumentHtml(indexTemplate: string, requestUrl: URL, canonicalHost: string): string {
+  const pathname = requestUrl.pathname as keyof typeof DOCUMENT_METADATA;
+  const documentMetadata = DOCUMENT_METADATA[pathname];
+  if (documentMetadata === undefined) {
+    throw new RangeError(`Document metadata is unavailable for ${requestUrl.pathname}`);
+  }
+  const shareMetadata = pathname === "/" ? repositoryShareMetadata(requestUrl, canonicalHost) : null;
+  const metadata = shareMetadata ?? documentMetadata;
+  const canonicalUrl = `https://${canonicalHost}${pathname}`;
+  const socialUrl = shareMetadata?.socialUrl ?? canonicalUrl;
+  const imageUrl = shareMetadata?.imageUrl ?? `https://${canonicalHost}/gitbreakout-social-card.png`;
+  const imageAlt = shareMetadata?.imageAlt ?? "GitBreakout — rising GitHub repository rankings";
+  const robots = requestUrl.search === "" ? "index,follow" : "noindex,follow";
+  const title = escapeHtmlAttribute(metadata.title);
+  const description = escapeHtmlAttribute(metadata.description);
+  let html = replaceRequired(indexTemplate, /<title>[^<]*<\/title>/, `<title>${title}</title>`, "title");
+  html = replaceRequired(html, /<meta name="description" content="[^"]*" \/>/, `<meta name="description" content="${description}" />`, "description");
+  html = replaceRequired(html, /<meta name="robots" content="[^"]*" \/>/, `<meta name="robots" content="${robots}" />`, "robots metadata");
+  html = replaceRequired(html, /<meta property="og:title" content="[^"]*" \/>/, `<meta property="og:title" content="${title}" />`, "Open Graph title");
+  html = replaceRequired(html, /<meta property="og:description" content="[^"]*" \/>/, `<meta property="og:description" content="${description}" />`, "Open Graph description");
+  html = replaceRequired(html, /<meta property="og:url" content="[^"]*" \/>/, `<meta property="og:url" content="${escapeHtmlAttribute(socialUrl)}" />`, "Open Graph URL");
+  html = replaceRequired(html, /<meta property="og:image" content="[^"]*" \/>/, `<meta property="og:image" content="${escapeHtmlAttribute(imageUrl)}" />`, "Open Graph image");
+  html = replaceRequired(html, /<meta property="og:image:alt" content="[^"]*" \/>/, `<meta property="og:image:alt" content="${escapeHtmlAttribute(imageAlt)}" />`, "Open Graph image alt");
+  if (shareMetadata !== null) {
+    html = replaceRequired(html, /\s*<meta property="og:image:type" content="[^"]*" \/>/, "", "Open Graph image type");
+    html = replaceRequired(html, /\s*<meta property="og:image:width" content="[^"]*" \/>/, "", "Open Graph image width");
+    html = replaceRequired(html, /\s*<meta property="og:image:height" content="[^"]*" \/>/, "", "Open Graph image height");
+  }
+  html = replaceRequired(html, /<meta name="twitter:title" content="[^"]*" \/>/, `<meta name="twitter:title" content="${title}" />`, "Twitter title");
+  html = replaceRequired(html, /<meta name="twitter:description" content="[^"]*" \/>/, `<meta name="twitter:description" content="${description}" />`, "Twitter description");
+  html = replaceRequired(html, /<meta name="twitter:image" content="[^"]*" \/>/, `<meta name="twitter:image" content="${escapeHtmlAttribute(imageUrl)}" />`, "Twitter image");
+  html = replaceRequired(html, /<meta name="twitter:image:alt" content="[^"]*" \/>/, `<meta name="twitter:image:alt" content="${escapeHtmlAttribute(imageAlt)}" />`, "Twitter image alt");
+  return replaceRequired(html, /<link rel="canonical" href="[^"]*" \/>/, `<link rel="canonical" href="${canonicalUrl}" />`, "canonical link");
 }
 
 function requirePositiveIntegerParameter(
@@ -237,14 +390,16 @@ function resolveStaticFile(staticDirectory: string, pathname: string): string | 
 function serveStatic(
   request: IncomingMessage,
   response: ServerResponse,
+  indexTemplate: string,
+  canonicalHost: string,
   staticDirectory: string,
-  pathname: string,
+  requestUrl: URL,
 ): void {
   if (request.method !== "GET" && request.method !== "HEAD") {
     rejectMethod(response, "GET, HEAD");
     return;
   }
-  const filePath = resolveStaticFile(staticDirectory, pathname);
+  const filePath = resolveStaticFile(staticDirectory, requestUrl.pathname);
   if (filePath === null) {
     sendJson(response, 404, { error: "Page not found" });
     return;
@@ -254,10 +409,16 @@ function serveStatic(
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader(
     "Cache-Control",
-    ["/", "/archive", "/track-record", "/theme-init.js", "/locale-init.js"].includes(pathname)
+    ["/", "/archive", "/track-record", "/theme-init.js", "/locale-init.js"].includes(requestUrl.pathname)
       ? "no-cache"
       : "public, max-age=31536000, immutable",
   );
+  if (["/", "/archive", "/track-record"].includes(requestUrl.pathname)) {
+    const html = renderDocumentHtml(indexTemplate, requestUrl, canonicalHost);
+    response.setHeader("Content-Length", Buffer.byteLength(html));
+    response.end(request.method === "HEAD" ? undefined : html);
+    return;
+  }
   if (request.method === "HEAD") {
     response.end();
     return;
@@ -276,9 +437,11 @@ export function createWebServer(
   dependencies: WebServerDependencies = {},
 ): Server {
   const staticDirectory = resolve(config.staticDirectory);
-  if (!existsSync(resolve(staticDirectory, "index.html"))) {
+  const indexPath = resolve(staticDirectory, "index.html");
+  if (!existsSync(indexPath)) {
     throw new Error(`Static index is missing from ${staticDirectory}`);
   }
+  const indexTemplate = readFileSync(indexPath, "utf8");
   const canonicalHost = requireHostname(config.canonicalHost, "Canonical host");
   const legacyHosts = new Set(config.legacyHosts.map((host) => requireHostname(host, "Legacy host")));
   if (legacyHosts.has(canonicalHost)) {
@@ -299,6 +462,16 @@ export function createWebServer(
     const requestUrl = new URL(request.url ?? "/", "http://localhost");
     if (redirectLegacyRequest(request, response, requestUrl, canonicalHost, legacyHosts)) {
       return;
+    }
+    if (redirectNormalizedDocument(request, response, requestUrl, canonicalHost)) {
+      return;
+    }
+    if (
+      requestUrl.pathname === "/health"
+      || requestUrl.pathname.startsWith("/api/")
+      || requestUrl.pathname.startsWith("/rpc/")
+    ) {
+      response.setHeader("X-Robots-Tag", "noindex, nofollow");
     }
     if (requestUrl.pathname === "/health") {
       if (request.method !== "GET") {
@@ -492,7 +665,7 @@ export function createWebServer(
       );
       return;
     }
-    serveStatic(request, response, staticDirectory, requestUrl.pathname);
+    serveStatic(request, response, indexTemplate, canonicalHost, staticDirectory, requestUrl);
   });
   return server;
 }

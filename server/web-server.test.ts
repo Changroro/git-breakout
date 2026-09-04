@@ -21,7 +21,25 @@ function testDirectories(): { cacheDirectory: string; staticDirectory: string } 
   const root = mkdtempSync(join(tmpdir(), "git-breakout-web-"));
   const staticDirectory = join(root, "dist");
   mkdirSync(staticDirectory);
-  writeFileSync(join(staticDirectory, "index.html"), "<main>GitBreakout</main>");
+  writeFileSync(join(staticDirectory, "index.html"), `<!doctype html>
+    <html><head>
+      <meta name="description" content="Home description" />
+      <meta name="robots" content="index,follow" />
+      <meta property="og:title" content="Home title" />
+      <meta property="og:description" content="Home description" />
+      <meta property="og:url" content="https://gitbreakout.imbch.dev/" />
+      <meta property="og:image" content="https://gitbreakout.imbch.dev/gitbreakout-social-card.png" />
+      <meta property="og:image:type" content="image/png" />
+      <meta property="og:image:width" content="1200" />
+      <meta property="og:image:height" content="630" />
+      <meta property="og:image:alt" content="GitBreakout" />
+      <meta name="twitter:title" content="Home title" />
+      <meta name="twitter:description" content="Home description" />
+      <meta name="twitter:image" content="https://gitbreakout.imbch.dev/gitbreakout-social-card.png" />
+      <meta name="twitter:image:alt" content="GitBreakout" />
+      <link rel="canonical" href="https://gitbreakout.imbch.dev/" />
+      <title>GitBreakout</title>
+    </head><body><main>GitBreakout</main></body></html>`);
   return { cacheDirectory: join(root, "cache"), staticDirectory };
 }
 
@@ -153,6 +171,80 @@ describe("createWebServer", () => {
     await expect(fetch(`${baseUrl}/health`).then((response) => response.json())).resolves.toEqual({
       status: "ok",
     });
+  });
+
+  it("serves path-specific metadata and keeps query variants out of the index", async () => {
+    const server = createWebServer({
+      ...testDirectories(),
+      ...redirectConfig,
+      internalApiUrl: "http://rest:3000",
+      trafficAnalytics,
+    });
+    const baseUrl = await listen(server);
+
+    const archive = await fetch(`${baseUrl}/archive`);
+    const archiveHtml = await archive.text();
+    expect(archiveHtml).toContain("GitHub Repository Ranking Archive | GitBreakout");
+    expect(archiveHtml).toContain('rel="canonical" href="https://gitbreakout.imbch.dev/archive"');
+    expect(archiveHtml).toContain('name="robots" content="index,follow"');
+
+    const trackRecord = await fetch(`${baseUrl}/track-record`);
+    const trackRecordHtml = await trackRecord.text();
+    expect(trackRecordHtml).toContain("GitHub Trending Early Discovery Track Record | GitBreakout");
+    expect(trackRecordHtml).toContain('property="og:url" content="https://gitbreakout.imbch.dev/track-record"');
+
+    const filtered = await fetch(`${baseUrl}/?view=breakout&language=rust`);
+    expect(await filtered.text()).toContain('name="robots" content="noindex,follow"');
+  });
+
+  it("uses a repository's GitHub card for ranking share previews", async () => {
+    const server = createWebServer({
+      ...testDirectories(),
+      ...redirectConfig,
+      internalApiUrl: "http://rest:3000",
+      trafficAnalytics,
+    });
+    const baseUrl = await listen(server);
+    const parameters = new URLSearchParams({
+      page: "1",
+      share_image: "https://opengraph.githubassets.com/hash/owner/repository",
+      share_rank: "3",
+      share_repository: "owner/repository",
+      share_view: "breakout",
+      snapshot: snapshotId,
+    });
+
+    const response = await fetch(`${baseUrl}/?${parameters}`);
+    const html = await response.text();
+
+    expect(response.status).toBe(200);
+    expect(html).toContain("owner/repository · GitBreakout");
+    expect(html).toContain("#3 in GitBreakout Breakout rankings");
+    expect(html).toContain('property="og:image" content="https://opengraph.githubassets.com/hash/owner/repository"');
+    expect(html).toContain('name="twitter:image" content="https://opengraph.githubassets.com/hash/owner/repository"');
+    expect(html).not.toContain('property="og:image:height"');
+    expect(html).toContain('name="robots" content="noindex,follow"');
+  });
+
+  it("normalizes trailing slashes and marks machine endpoints as noindex", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(new Response(
+      JSON.stringify({ status: "ok" }),
+      { headers: { "Content-Type": "application/json" } },
+    ));
+    const server = createWebServer({
+      ...testDirectories(),
+      ...redirectConfig,
+      internalApiUrl: "http://rest:3000",
+      trafficAnalytics,
+    }, { fetchImplementation });
+    const baseUrl = await listen(server);
+
+    const trailingSlash = await fetch(`${baseUrl}/archive/`, { redirect: "manual" });
+    expect(trailingSlash.status).toBe(301);
+    expect(trailingSlash.headers.get("location")).toBe("https://gitbreakout.imbch.dev/archive");
+
+    const health = await fetch(`${baseUrl}/health`);
+    expect(health.headers.get("x-robots-tag")).toBe("noindex, nofollow");
   });
 
   it("serves cached public traffic without exposing Cloudflare credentials", async () => {
