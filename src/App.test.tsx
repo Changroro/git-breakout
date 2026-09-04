@@ -145,11 +145,24 @@ describe("InitialLoadingState", () => {
 });
 
 describe("SiteFooter", () => {
-  it("links to the owner GitHub profile and email address", () => {
+  it("links to the public source, owner GitHub profile, and email address", () => {
     const markup = renderToStaticMarkup(<SiteFooter />);
 
+    expect(markup).toContain('href="https://github.com/Changroro/git-breakout"');
+    expect(markup).toContain('aria-label="GitBreakout source code"');
     expect(markup).toContain('href="https://github.com/Changroro"');
     expect(markup).toContain('href="mailto:chbae624@gmail.com"');
+  });
+
+  it("localizes the source link in Korean", () => {
+    const markup = renderToStaticMarkup(
+      <I18nProvider locale="ko">
+        <SiteFooter />
+      </I18nProvider>,
+    );
+
+    expect(markup).toContain('aria-label="GitBreakout 소스 코드"');
+    expect(markup).toContain(">소스 코드</a>");
   });
 });
 

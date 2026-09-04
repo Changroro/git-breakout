@@ -21,9 +21,17 @@ GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하
 
 ## 화면
 
-| 데스크톱 | 모바일 |
-| :---: | :---: |
-| ![GitBreakout 데스크톱](docs/screenshots/desktop.png) | ![GitBreakout 모바일](docs/screenshots/mobile.png) |
+### 데스크톱
+
+<p align="center">
+  <img src="docs/screenshots/desktop.png" alt="GitBreakout 데스크톱 랭킹 화면" width="960" />
+</p>
+
+### 모바일
+
+<p align="center">
+  <img src="docs/screenshots/mobile.png" alt="GitBreakout 모바일 랭킹 화면" width="360" />
+</p>
 
 ## 주요 기능
 

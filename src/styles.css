@@ -2596,7 +2596,8 @@ h1 {
 
   .footer-links {
     width: 100%;
-    justify-content: space-between;
+    flex-wrap: wrap;
+    justify-content: flex-start;
     gap: 12px;
   }
 

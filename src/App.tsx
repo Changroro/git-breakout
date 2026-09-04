@@ -2414,6 +2414,15 @@ export function SiteFooter() {
       <div className="footer-inner">
         <span className="footer-owner">Changroro</span>
         <nav aria-label={t("footer.links")} className="footer-links">
+          <a
+            aria-label={t("footer.sourceLabel")}
+            href="https://github.com/Changroro/git-breakout"
+            rel="noreferrer"
+            target="_blank"
+          >
+            <RepoIcon size={16} />
+            {t("footer.source")}
+          </a>
           <a href="https://github.com/Changroro" rel="noreferrer" target="_blank">
             <MarkGithubIcon size={16} />
             github.com/Changroro

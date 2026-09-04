@@ -21,9 +21,17 @@ GitBreakout is not a complete index of every repository on GitHub. It discovers 
 
 ## Screenshots
 
-| Desktop | Mobile |
-| :---: | :---: |
-| ![GitBreakout desktop](docs/screenshots/desktop.png) | ![GitBreakout mobile](docs/screenshots/mobile.png) |
+### Desktop
+
+<p align="center">
+  <img src="docs/screenshots/desktop.png" alt="GitBreakout desktop ranking view" width="960" />
+</p>
+
+### Mobile
+
+<p align="center">
+  <img src="docs/screenshots/mobile.png" alt="GitBreakout mobile ranking view" width="360" />
+</p>
 
 ## Features
 
