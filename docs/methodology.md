@@ -41,6 +41,8 @@ Breakout compares recent star velocity, relative growth, acceleration, and avail
 
 Absolute star counts are not capped. Comparison cohorts by repository size are a planned refinement pending real data.
 
+Each collection run reads the remaining GitHub API quota before requesting star history and refreshes only as many repositories as that quota covers, spending it on repositories with no history first and then the stalest. Repositories beyond the budget keep their previously stored history; those without any record `star_history` as missing evidence rather than being scored on an assumed past.
+
 ## Current heat
 
 Current heat separates immediate attention from long-term momentum. It uses the strongest complete star-growth window available together with unique actor breadth, activity diversity, and short-term persistence. It does not imply code quality, security, or long-term adoption.

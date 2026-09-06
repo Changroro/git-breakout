@@ -9,7 +9,11 @@ import {
   mergeStarSeries,
   parseStarHistoryPage,
   collectStarHistories,
+  DEFAULT_RATE_LIMIT_RESERVE,
   GitHubRateLimitError,
+  readCoreRateLimit,
+  starHistoryFetchBudget,
+  STAR_HISTORY_CALLS_PER_REPOSITORY,
   RANKING_HISTORY_WINDOW_DAYS,
   StarHistoryLagError,
   StarHistoryStore,
@@ -533,66 +537,209 @@ describe("summarizeStarHistory", () => {
   });
 });
 
+describe("readCoreRateLimit and starHistoryFetchBudget", () => {
+  it("reads the core resource and converts it into a repository budget", async () => {
+    const fetchImplementation = routedFetch({
+      "https://api.github.com/rate_limit": () => jsonResponse({
+        resources: { core: { limit: 5_000, remaining: 4_100, used: 900, reset: 1_788_656_180 } },
+      }),
+    });
+
+    const rateLimit = await readCoreRateLimit("token", fetchImplementation);
+
+    expect(rateLimit).toEqual({
+      limit: 5_000,
+      remaining: 4_100,
+      reset_at: "2026-09-06T00:56:20.000Z",
+    });
+    expect(STAR_HISTORY_CALLS_PER_REPOSITORY).toBe(2);
+    expect(starHistoryFetchBudget(rateLimit)).toBe((4_100 - DEFAULT_RATE_LIMIT_RESERVE) / 2);
+    expect(starHistoryFetchBudget(rateLimit, 100)).toBe(2_000);
+  });
+
+  it("never returns a negative budget and rejects an invalid reserve", () => {
+    const rateLimit = { limit: 5_000, remaining: 120, reset_at: "2026-09-06T00:56:20.000Z" };
+
+    expect(starHistoryFetchBudget(rateLimit)).toBe(0);
+    expect(starHistoryFetchBudget(rateLimit, 100)).toBe(10);
+    expect(() => starHistoryFetchBudget(rateLimit, -1)).toThrow(RangeError);
+  });
+
+  it("rejects a response without a valid core resource", async () => {
+    const fetchImplementation = routedFetch({
+      "https://api.github.com/rate_limit": () => jsonResponse({ resources: { search: {} } }),
+    });
+
+    await expect(readCoreRateLimit("token", fetchImplementation)).rejects.toThrow("core resource");
+  });
+});
+
 describe("collectStarHistories", () => {
-  it("collects histories with bounded concurrency and skips failures", async () => {
-    let active = 0;
-    let peak = 0;
+  function reader(options: {
+    cached?: Record<string, { fetchedAt: string; fresh: boolean }>;
+    failing?: readonly string[];
+    rateLimitedAt?: string;
+  } = {}) {
+    const cached = options.cached ?? {};
     const read = vi.fn(async (fullName: string) => {
-      active += 1;
-      peak = Math.max(peak, active);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      active -= 1;
-      if (fullName === "owner/missing") {
-        throw new Error("GitHub repository owner/missing request failed with status 404");
+      if (fullName === options.rateLimitedAt) {
+        throw new GitHubRateLimitError(`GitHub repository ${fullName}`, 403, NOW);
+      }
+      if (options.failing?.includes(fullName) === true) {
+        throw new Error(`GitHub repository ${fullName} request failed with status 404`);
       }
       return { ...sampleHistory(), full_name: fullName };
     });
-    const errors = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const readCached = vi.fn((fullName: string) => {
+      const entry = cached[fullName];
+      if (entry === undefined) {
+        return null;
+      }
+      return {
+        history: { ...sampleHistory(), full_name: fullName, fetched_at: entry.fetchedAt },
+        fresh: entry.fresh,
+      };
+    });
+    return { read, readCached };
+  }
 
-    const histories = await collectStarHistories(
-      ["owner/a", "owner/missing", "owner/b", "owner/c", "owner/d"],
-      { read },
-      { capturedAt: "2026-09-05T02:00:00.000Z", concurrency: 2 },
+  const options = { capturedAt: "2026-09-05T02:00:00.000Z", concurrency: 2 } as const;
+
+  it("serves fresh cache without spending budget", async () => {
+    const store = reader({
+      cached: {
+        "owner/a": { fetchedAt: NOW.toISOString(), fresh: true },
+        "owner/b": { fetchedAt: NOW.toISOString(), fresh: true },
+      },
+    });
+
+    const collection = await collectStarHistories(["owner/a", "owner/b"], store, {
+      ...options,
+      fetchBudget: 0,
+    });
+
+    expect(collection.histories.map((history) => history.full_name)).toEqual(["owner/a", "owner/b"]);
+    expect(collection).toMatchObject({ fetched: 0, reused: 2, skipped: 0 });
+    expect(store.read).not.toHaveBeenCalled();
+  });
+
+  it("spends the budget on repositories with no history, then the stalest", async () => {
+    const store = reader({
+      cached: {
+        "owner/recent": { fetchedAt: "2026-09-04T00:00:00.000Z", fresh: false },
+        "owner/stale": { fetchedAt: "2026-09-01T00:00:00.000Z", fresh: false },
+        "owner/fresh": { fetchedAt: NOW.toISOString(), fresh: true },
+      },
+    });
+
+    const collection = await collectStarHistories(
+      ["owner/recent", "owner/fresh", "owner/stale", "owner/unknown"],
+      store,
+      { ...options, fetchBudget: 2 },
     );
 
-    expect(histories.map((history) => history.full_name)).toEqual(["owner/a", "owner/b", "owner/c", "owner/d"]);
-    expect(peak).toBe(2);
-    expect(read).toHaveBeenCalledWith("owner/a", "2026-05-30T02:00:00.000Z");
+    expect(store.read.mock.calls.map((call) => call[0]).sort()).toEqual(["owner/stale", "owner/unknown"]);
+    expect(collection).toMatchObject({ fetched: 2, reused: 2, skipped: 0 });
+    expect(collection.histories).toHaveLength(4);
+  });
+
+  it("keeps deferred repositories on their stale history and skips the rest", async () => {
+    const store = reader({
+      cached: { "owner/stale": { fetchedAt: "2026-09-01T00:00:00.000Z", fresh: false } },
+    });
+
+    const collection = await collectStarHistories(["owner/stale", "owner/unknown"], store, {
+      ...options,
+      fetchBudget: 1,
+    });
+
+    expect(store.read).toHaveBeenCalledTimes(1);
+    expect(store.read).toHaveBeenCalledWith("owner/unknown", "2026-05-30T02:00:00.000Z");
+    expect(collection.histories.map((history) => history.full_name).sort())
+      .toEqual(["owner/stale", "owner/unknown"]);
+    expect(collection).toMatchObject({ fetched: 1, reused: 1, skipped: 0 });
+  });
+
+  it("records repositories it can neither fetch nor read from cache as skipped", async () => {
+    const store = reader({ failing: ["owner/missing"] });
+    const errors = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const collection = await collectStarHistories(
+      ["owner/a", "owner/missing", "owner/b"],
+      store,
+      { ...options, fetchBudget: 10 },
+    );
+
+    expect(collection.histories.map((history) => history.full_name)).toEqual(["owner/a", "owner/b"]);
+    expect(collection).toMatchObject({ fetched: 2, reused: 0, skipped: 1 });
     expect(errors).toHaveBeenCalledWith(expect.stringContaining("Skipping star history for owner/missing"));
     errors.mockRestore();
   });
 
-  it("stops requesting once GitHub reports the quota as spent", async () => {
-    const read = vi.fn(async (fullName: string) => {
-      if (fullName === "owner/b") {
-        throw new GitHubRateLimitError("GitHub repository owner/b", 403, new Date("2026-09-06T00:56:20.000Z"));
-      }
+  it("collects with bounded concurrency", async () => {
+    let active = 0;
+    let peak = 0;
+    const store = reader();
+    store.read.mockImplementation(async (fullName: string) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
       return { ...sampleHistory(), full_name: fullName };
     });
+
+    await collectStarHistories(["owner/a", "owner/b", "owner/c", "owner/d"], store, {
+      ...options,
+      fetchBudget: 10,
+    });
+
+    expect(peak).toBe(2);
+  });
+
+  it("stops requesting once GitHub reports the quota as spent", async () => {
+    const store = reader({ rateLimitedAt: "owner/b" });
     const errors = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-    const histories = await collectStarHistories(
+    const collection = await collectStarHistories(
       ["owner/a", "owner/b", "owner/c", "owner/d"],
-      { read },
-      { capturedAt: "2026-09-05T02:00:00.000Z", concurrency: 1 },
+      store,
+      { capturedAt: options.capturedAt, concurrency: 1, fetchBudget: 10 },
     );
 
-    expect(histories.map((history) => history.full_name)).toEqual(["owner/a"]);
-    expect(read).toHaveBeenCalledTimes(2);
+    expect(collection.histories.map((history) => history.full_name)).toEqual(["owner/a"]);
+    expect(store.read).toHaveBeenCalledTimes(2);
+    expect(collection.skipped).toBe(3);
     expect(errors).toHaveBeenCalledWith(expect.stringContaining("Stopping star history collection after owner/b"));
     errors.mockRestore();
   });
 
-  it("fails the run when no history could be read", async () => {
-    const read = vi.fn(async () => {
-      throw new Error("GitHub repository request failed with status 401");
-    });
+  it("fails the run when every attempted repository failed", async () => {
+    const store = reader({ failing: ["owner/a", "owner/b"] });
     const errors = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
-    await expect(collectStarHistories(["owner/a", "owner/b"], { read }, {
-      capturedAt: "2026-09-05T02:00:00.000Z",
+    await expect(collectStarHistories(["owner/a", "owner/b"], store, {
+      ...options,
+      fetchBudget: 10,
     })).rejects.toThrow("failed for all 2 attempted repositories");
-    expect(await collectStarHistories([], { read }, { capturedAt: "2026-09-05T02:00:00.000Z" })).toEqual([]);
+    errors.mockRestore();
+  });
+
+  it("does not fail when the budget deliberately allows no fetches", async () => {
+    const store = reader();
+    const errors = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const collection = await collectStarHistories(["owner/a", "owner/b"], store, {
+      ...options,
+      fetchBudget: 0,
+    });
+
+    expect(collection).toEqual({ histories: [], fetched: 0, reused: 0, skipped: 2 });
+    expect(store.read).not.toHaveBeenCalled();
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining("2 deferred to a later run"));
+    expect(await collectStarHistories([], store, { ...options, fetchBudget: 0 }))
+      .toMatchObject({ histories: [] });
+    await expect(collectStarHistories(["owner/a"], store, { ...options, fetchBudget: -1 }))
+      .rejects.toThrow(RangeError);
     errors.mockRestore();
   });
 });

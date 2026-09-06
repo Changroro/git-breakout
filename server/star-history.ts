@@ -17,6 +17,10 @@ const DAY_MS = 86_400_000;
 /** Days of completed history handed to the ranking: the compared weeks plus slack. */
 export const RANKING_HISTORY_WINDOW_DAYS = (BREAKOUT_HISTORY_WEEKS + 2) * 7;
 const DEFAULT_COLLECTION_CONCURRENCY = 4;
+/** REST calls one repository costs: the stargazer count plus one history page. */
+export const STAR_HISTORY_CALLS_PER_REPOSITORY = 2;
+/** Core calls left untouched so star history never consumes the whole quota. */
+export const DEFAULT_RATE_LIMIT_RESERVE = 500;
 const HISTORY_PAGE_WEEKS = 30;
 const HISTORY_PAGE_LIMIT = 100;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -122,6 +126,64 @@ function githubHeaders(token: string): Record<string, string> {
     "User-Agent": USER_AGENT,
     "X-GitHub-Api-Version": GITHUB_API_VERSION,
   };
+}
+
+export type CoreRateLimit = {
+  limit: number;
+  remaining: number;
+  reset_at: string;
+};
+
+/**
+ * Reads the token's remaining core quota. This endpoint is itself exempt from
+ * the rate limit, so it can always be called before deciding a budget.
+ */
+export async function readCoreRateLimit(
+  token: string,
+  fetchImplementation: typeof fetch = fetch,
+): Promise<CoreRateLimit> {
+  if (token.trim() === "") {
+    throw new TypeError("GITHUB_TOKEN is required");
+  }
+  const response = await fetchImplementation("https://api.github.com/rate_limit", {
+    headers: githubHeaders(token),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  requireResponseOk(response, "GitHub rate limit");
+  const payload: unknown = await response.json();
+  const core = isRecord(payload) && isRecord(payload.resources) ? payload.resources.core : undefined;
+  if (
+    !isRecord(core)
+    || !Number.isInteger(core.limit)
+    || !Number.isInteger(core.remaining)
+    || !Number.isInteger(core.reset)
+    || (core.remaining as number) < 0
+  ) {
+    throw new TypeError("GitHub rate limit response is missing a valid core resource");
+  }
+  return {
+    limit: core.limit as number,
+    remaining: core.remaining as number,
+    reset_at: new Date((core.reset as number) * 1000).toISOString(),
+  };
+}
+
+/**
+ * Repositories that may be refreshed from GitHub in this run. Everything the
+ * budget does not cover is served from cache or left out entirely, so a run
+ * never spends more of the quota than it actually has.
+ */
+export function starHistoryFetchBudget(
+  rateLimit: CoreRateLimit,
+  reserve: number = DEFAULT_RATE_LIMIT_RESERVE,
+): number {
+  if (!Number.isInteger(reserve) || reserve < 0) {
+    throw new RangeError("reserve must be a non-negative integer");
+  }
+  return Math.max(
+    0,
+    Math.floor((rateLimit.remaining - reserve) / STAR_HISTORY_CALLS_PER_REPOSITORY),
+  );
 }
 
 export function parseStarHistoryPage(value: unknown, fullName: string): StarHistoryWeek[] {
@@ -461,6 +523,24 @@ export class StarHistoryStore {
     return this.now().getTime() - Date.parse(history.fetched_at) < this.ttlFor(history.full_name);
   }
 
+  /**
+   * Returns the cached history when it covers the window, without contacting
+   * GitHub. `fresh` reports whether it is still inside its TTL; a stale entry
+   * is still usable when there is no budget left to refresh it.
+   */
+  readCached(
+    fullName: string,
+    coverFrom: string,
+  ): { history: GitHubStarHistory; fresh: boolean } | null {
+    requireFullName(fullName);
+    requireTimestamp(coverFrom, "coverFrom");
+    const cached = this.readCache(fullName);
+    if (cached === null || !this.covers(cached, coverFrom)) {
+      return null;
+    }
+    return { history: cached, fresh: this.isFresh(cached) };
+  }
+
   async read(fullName: string, coverFrom: string): Promise<GitHubStarHistory> {
     requireFullName(fullName);
     requireTimestamp(coverFrom, "coverFrom");
@@ -555,61 +635,141 @@ export function summarizeStarHistory(
   };
 }
 
+export type StarHistoryCollection = {
+  histories: RepositoryStarHistory[];
+  /** Repositories refreshed from GitHub in this run. */
+  fetched: number;
+  /** Repositories served from cache without spending quota. */
+  reused: number;
+  /** Repositories left without history: no cache and no budget, or an error. */
+  skipped: number;
+};
+
+type StarHistoryReader = Pick<StarHistoryStore, "read" | "readCached">;
+
 /**
- * Loads star history for every repository in a collection run. A repository
- * whose history cannot be read is skipped and logged so the ranking records
- * it as missing evidence; once GitHub reports the hourly quota as spent the
- * remaining repositories are skipped without further requests. The run only
- * fails when no history could be read.
+ * Loads star history for a collection run inside a fixed fetch budget.
+ *
+ * Cached histories that still cover the window cost nothing, so only the
+ * repositories that actually need a refresh compete for the budget; the ones
+ * missing history entirely go first, then the stalest. Anything beyond the
+ * budget falls back to its cached history, or is skipped so the ranking
+ * records it as missing evidence. Skipped repositories are not carried over
+ * to the next run as debt: each run simply refreshes what it can afford.
  */
 export async function collectStarHistories(
   fullNames: readonly string[],
-  store: Pick<StarHistoryStore, "read">,
+  store: StarHistoryReader,
   {
     capturedAt,
+    fetchBudget,
     windowDays = RANKING_HISTORY_WINDOW_DAYS,
     concurrency = DEFAULT_COLLECTION_CONCURRENCY,
   }: {
     capturedAt: string;
+    fetchBudget: number;
     windowDays?: number;
     concurrency?: number;
   },
-): Promise<RepositoryStarHistory[]> {
+): Promise<StarHistoryCollection> {
   const capturedTimestamp = requireTimestamp(capturedAt, "capturedAt");
+  if (!Number.isInteger(fetchBudget) || fetchBudget < 0) {
+    throw new RangeError("fetchBudget must be a non-negative integer");
+  }
   if (!Number.isInteger(concurrency) || concurrency <= 0) {
     throw new RangeError("concurrency must be a positive integer");
   }
   const coverFrom = new Date(capturedTimestamp - windowDays * DAY_MS).toISOString();
   const results: Array<RepositoryStarHistory | null> = new Array(fullNames.length).fill(null);
+  const refreshable: Array<{ index: number; fullName: string; cachedAt: number }> = [];
+  let reused = 0;
+
+  fullNames.forEach((fullName, index) => {
+    let cached: { history: GitHubStarHistory; fresh: boolean } | null = null;
+    try {
+      cached = store.readCached(fullName, coverFrom);
+    } catch (error) {
+      process.stderr.write(
+        `Discarding unreadable star history cache for ${fullName}: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
+    if (cached !== null && cached.fresh) {
+      results[index] = summarizeStarHistory(cached.history, capturedAt, windowDays);
+      reused += 1;
+      return;
+    }
+    refreshable.push({
+      index,
+      fullName,
+      cachedAt: cached === null ? Number.NEGATIVE_INFINITY : Date.parse(cached.history.fetched_at),
+    });
+  });
+
+  // Repositories with no usable history at all come first, then the stalest.
+  refreshable.sort((left, right) => (
+    left.cachedAt - right.cachedAt || left.fullName.localeCompare(right.fullName)
+  ));
+  const selected = refreshable.slice(0, fetchBudget);
+  const deferred = refreshable.slice(fetchBudget);
+
   let next = 0;
-  let failures = 0;
+  let fetched = 0;
   let rateLimited = false;
   async function worker(): Promise<void> {
-    while (next < fullNames.length && !rateLimited) {
-      const index = next;
+    while (next < selected.length && !rateLimited) {
+      const entry = selected[next];
       next += 1;
-      const fullName = fullNames[index];
       try {
-        results[index] = summarizeStarHistory(await store.read(fullName, coverFrom), capturedAt, windowDays);
+        results[entry.index] = summarizeStarHistory(
+          await store.read(entry.fullName, coverFrom),
+          capturedAt,
+          windowDays,
+        );
+        fetched += 1;
       } catch (error) {
-        failures += 1;
         if (error instanceof GitHubRateLimitError && !rateLimited) {
           rateLimited = true;
           process.stderr.write(
-            `Stopping star history collection after ${fullName}: ${error.message}; ${fullNames.length - next} repositories skipped\n`,
+            `Stopping star history collection after ${entry.fullName}: ${error.message}; ${selected.length - next} refreshes skipped\n`,
           );
           return;
         }
         process.stderr.write(
-          `Skipping star history for ${fullName}: ${error instanceof Error ? error.message : String(error)}\n`,
+          `Skipping star history for ${entry.fullName}: ${error instanceof Error ? error.message : String(error)}\n`,
         );
       }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, fullNames.length) }, () => worker()));
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, selected.length) }, () => worker()),
+  );
+
+  // Anything the budget did not cover keeps its stale history rather than
+  // losing the signal entirely.
+  [...deferred, ...selected.slice(next)].forEach((entry) => {
+    if (results[entry.index] !== null || entry.cachedAt === Number.NEGATIVE_INFINITY) {
+      return;
+    }
+    const cached = store.readCached(entry.fullName, coverFrom);
+    if (cached !== null) {
+      results[entry.index] = summarizeStarHistory(cached.history, capturedAt, windowDays);
+      reused += 1;
+    }
+  });
+
   const histories = results.filter((history): history is RepositoryStarHistory => history !== null);
-  if (fullNames.length > 0 && histories.length === 0) {
-    throw new Error(`Star history collection failed for all ${failures} attempted repositories`);
+  if (selected.length > 0 && fetched === 0 && histories.length === 0) {
+    throw new Error(`Star history collection failed for all ${selected.length} attempted repositories`);
   }
-  return histories;
+  if (deferred.length > 0) {
+    process.stderr.write(
+      `Star history budget covered ${selected.length} of ${refreshable.length} refreshes; ${deferred.length} deferred to a later run\n`,
+    );
+  }
+  return {
+    histories,
+    fetched,
+    reused,
+    skipped: fullNames.length - histories.length,
+  };
 }

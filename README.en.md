@@ -103,6 +103,7 @@ See the [public methodology](docs/methodology.md) for formulas and limitations. 
 - A server file lock and database lease prevent overlapping runs.
 - Aggregated events are retained for 168 hours and evaluated over 1, 6, 24, and 72-hour windows.
 - Ranking snapshots and archived observations are retained independently from raw event windows.
+- Star history is refreshed only within the API quota remaining when a run starts. Repositories beyond that budget keep their cached history, and those without one are recorded as missing evidence.
 - Scheduled collection does not use GitHub Actions.
 
 ## Getting started
