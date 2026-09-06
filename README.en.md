@@ -18,7 +18,7 @@
 
 GitHub Trending is useful for seeing what is popular now, but established repositories can appear repeatedly while early-stage growth goes unnoticed. Git Breakout combines Trending with recently created and pushed repositories plus public activity events, then emphasizes **recent change** over lifetime popularity.
 
-Git Breakout is not a complete index of every repository on GitHub. It discovers a broad candidate pool within API search limits and builds rankings and star charts only from values it has observed directly.
+Git Breakout is not a complete index of every repository on GitHub. It discovers a broad candidate pool within API search limits and ranks only values it has observed directly. Star charts combine the daily history provided by the GitHub Star History API with Git Breakout's own observations.
 
 ## Screenshots
 
@@ -41,7 +41,7 @@ Git Breakout is not a complete index of every repository on GitHub. It discovers
 - **Current heat** measures attention right now through star velocity, unique actors, activity diversity, and short-term persistence.
 - **GitHub Trending** preserves the collected Daily, Weekly, and Monthly source ranks in a separate view.
 - **History** lets visitors inspect past rankings and repository state through two-hour snapshots.
-- **Observed star series** draws sparklines from Git Breakout's own snapshots without an external graph service.
+- **Star series** merges GitHub Star History API daily records with Git Breakout's two-hour observations into one series covering the last 90 days.
 - **Archive** retains repositories that leave the latest candidate pool together with their historical snapshots.
 - **Track record** verifies whether repositories observed early by Git Breakout later enter GitHub Trending Daily.
 - **Discovery UI** includes repository search, language and topic filters, pagination, read-state dimming, Korean and English, responsive layouts, and light and dark themes.
@@ -71,6 +71,7 @@ GH Archive ──────┘                               │
 | GH Archive | Watch, Fork, PR, Issue, Comment, Push, and Release events | Early event discovery and breadth of attention |
 | Previous observations | Candidates that pass the 14-day retention policy | Continued tracking beyond search windows |
 | GitHub GraphQL | Stars, forks, issues, language, topics, and push time | Current metadata verification |
+| GitHub Star History API | Daily star changes | Star series (not used for candidate discovery) |
 
 GitHub Search returns at most 1,000 results per query, so Git Breakout must not be described as a complete ranking of every GitHub repository. Leaving the candidate pool stops new observations; it does not delete existing snapshots.
 
@@ -110,7 +111,7 @@ See the [public methodology](docs/methodology.md) for formulas and limitations. 
 
 - Node.js 22 or newer
 - npm
-- A GitHub API token that can read public repository metadata
+- A GitHub API token that can read public repository metadata (used by both the collector and the web server)
 
 ### Local development
 
@@ -119,7 +120,7 @@ git clone https://github.com/Changroro/git-breakout.git
 cd git-breakout
 npm ci
 GITHUB_TOKEN=your_token npm run collect
-npm run dev
+GITHUB_TOKEN=your_token npm run dev
 ```
 
 Open `http://localhost:5173`. If no snapshot has been collected, the UI fails loudly with a data requirement instead of silently substituting sample data.

@@ -7,6 +7,7 @@ import {
   type CloudflareTrafficConfig,
 } from "./cloudflare-traffic.ts";
 import { PublicHistoryApi } from "./public-history.ts";
+import { enrichStarSeries, StarHistoryStore } from "./star-history.ts";
 import type {
   GitHubTrendingPeriod,
   RankingView,
@@ -67,6 +68,7 @@ const DOCUMENT_METADATA: Record<"/" | "/archive" | "/track-record", DocumentMeta
 export type WebServerConfig = {
   cacheDirectory: string;
   canonicalHost: string;
+  githubToken: string;
   internalApiUrl: string;
   legacyHosts: readonly string[];
   staticDirectory: string;
@@ -456,6 +458,25 @@ export function createWebServer(
     fetchImplementation,
   });
   const cardCacheDirectory = resolve(config.cacheDirectory, "repository-cards");
+  const starHistory = new StarHistoryStore({
+    cacheDirectory: resolve(config.cacheDirectory, "star-history"),
+    token: config.githubToken,
+    fetchImplementation,
+  });
+  const snapshotCaptureTimes = new Map<string, string>();
+  async function resolveSnapshotCapturedAt(snapshotId: string): Promise<string> {
+    const known = snapshotCaptureTimes.get(snapshotId);
+    if (known !== undefined) {
+      return known;
+    }
+    const timeline = await historyApi.readTimeline();
+    timeline.snapshots.forEach((snapshot) => snapshotCaptureTimes.set(snapshot.id, snapshot.captured_at));
+    const capturedAt = snapshotCaptureTimes.get(snapshotId);
+    if (capturedAt === undefined) {
+      throw new RangeError(`Snapshot ${snapshotId} does not exist`);
+    }
+    return capturedAt;
+  }
 
   const server = createServer(async (request, response) => {
     setSecurityHeaders(response);
@@ -644,14 +665,20 @@ export function createWebServer(
         return;
       }
       try {
+        const capturedAt = await resolveSnapshotCapturedAt(snapshotId);
+        const observed = await historyApi.readStarSeries(snapshotId, repositoryNames);
         sendJson(
           response,
           200,
-          await historyApi.readStarSeries(snapshotId, repositoryNames),
+          await enrichStarSeries(observed, capturedAt, starHistory),
           "public, max-age=31536000, immutable",
         );
       } catch (error) {
-        sendJson(response, error instanceof TypeError ? 400 : 502, { error: errorMessage(error) });
+        sendJson(
+          response,
+          error instanceof TypeError ? 400 : error instanceof RangeError ? 404 : 502,
+          { error: errorMessage(error) },
+        );
       }
       return;
     }

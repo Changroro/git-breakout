@@ -1,3 +1,6 @@
+/** Days of star history shown in each sparkline, ending at the snapshot capture time. */
+export const STAR_SERIES_WINDOW_DAYS = 90;
+
 export type RepositoryStarPoint = {
   captured_at: string;
   stars: number;

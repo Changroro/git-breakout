@@ -33,6 +33,7 @@ const publicHost = requireEnvironment("TREND_RADAR_PUBLIC_HOST");
 const server = createWebServer({
   cacheDirectory: resolve(requireEnvironment("TREND_RADAR_WEB_CACHE_DIR")),
   canonicalHost: publicHost,
+  githubToken: requireEnvironment("GITHUB_TOKEN"),
   internalApiUrl: requireEnvironment("TREND_RADAR_INTERNAL_API_URL"),
   legacyHosts: readHostList(process.env.TREND_RADAR_LEGACY_HOSTS),
   staticDirectory: resolve(requireEnvironment("TREND_RADAR_STATIC_DIR")),

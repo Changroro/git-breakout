@@ -1,6 +1,6 @@
 # Git Breakout methodology
 
-Updated: 2026-09-04
+Updated: 2026-09-06
 
 Git Breakout discovers public repositories from GitHub Trending, GitHub Search, recent public activity, and previously observed candidates. It then ranks only values that were observed directly. A missing observation is not replaced with an estimated historical value or a zero.
 
@@ -13,6 +13,7 @@ Git Breakout discovers public repositories from GitHub Trending, GitHub Search, 
 | Public GitHub activity | Add repositories showing recent Watch, Fork, PR, Issue, Comment, Push, or Release activity |
 | Previous observations | Continue tracking candidates that pass the retention policy |
 | GitHub GraphQL | Verify current stars, forks, issues, language, topics, and push time |
+| GitHub Star History API | Daily star changes for the star series (not used for discovery or ranking) |
 
 GitHub Search returns at most 1,000 results per query. Git Breakout therefore describes its results as rankings within the observed candidate pool, not a complete ranking of every GitHub repository.
 
@@ -58,4 +59,4 @@ Cases with unknown historical provenance, collection gaps, or an initial observa
 
 Newly observed repositories receive a 14-day grace period. After that period, recent star growth, a recent push, or retained ranking position is required for continued collection. Leaving the candidate pool stops new observations but does not delete existing ranking snapshots. Rediscovered repositories automatically return to active collection.
 
-Star charts begin when Git Breakout first observes a repository. They do not claim to reconstruct the repository's complete historical star curve.
+Star charts cover the 90 days ending at the selected snapshot. They combine two exact sources into one series: the daily star changes reported by the GitHub Star History API, anchored to the repository's current stargazer count, and the star counts Git Breakout observed at each collection. Days that are still in progress are not drawn. Ranking signals continue to use only Git Breakout's own observations.

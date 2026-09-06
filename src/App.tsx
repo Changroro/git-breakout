@@ -64,6 +64,7 @@ import {
 import {
   buildSparklinePoints,
   parseStarSeriesResponse,
+  STAR_SERIES_WINDOW_DAYS,
   type RepositoryStarSeries,
 } from "./lib/star-series";
 import {
@@ -772,7 +773,8 @@ function formatStarGain(series: RepositoryStarSeries, locale: Locale = "en"): st
     return translate(locale, "repository.trackingStarted");
   }
   const gain = series.points[series.points.length - 1].stars - series.points[0].stars;
-  return translate(locale, "repository.gainedSinceTracked", {
+  return translate(locale, "repository.gainedInWindow", {
+    days: String(STAR_SERIES_WINDOW_DAYS),
     gain: `${gain > 0 ? "+" : ""}${formatCompactNumber(gain, locale)}`,
   });
 }

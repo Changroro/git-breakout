@@ -14,8 +14,23 @@ const trafficAnalytics = {
 };
 const redirectConfig = {
   canonicalHost: "gitbreakout.imbch.dev",
+  githubToken: "github-token",
   legacyHosts: [] as string[],
 };
+
+function currentWeekStart(): number {
+  const days = Math.floor(Date.now() / 86_400_000);
+  const weekday = (days + 4) % 7;
+  return (days - weekday) * 86_400;
+}
+
+function emptyStarHistoryPage(): unknown[] {
+  return Array.from({ length: 29 }, (_, index) => ({
+    week: currentWeekStart() - index * 7 * 86_400,
+    total: 0,
+    days: [0, 0, 0, 0, 0, 0, 0],
+  }));
+}
 
 function testDirectories(): { cacheDirectory: string; staticDirectory: string } {
   const root = mkdtempSync(join(tmpdir(), "git-breakout-web-"));
@@ -115,6 +130,7 @@ describe("createWebServer", () => {
     const server = createWebServer({
       ...testDirectories(),
       canonicalHost: "gitbreakout.imbch.dev",
+      githubToken: "github-token",
       legacyHosts: ["github-trend-radar.imbch.dev"],
       internalApiUrl: "http://rest:3000",
       trafficAnalytics,
@@ -377,6 +393,12 @@ describe("createWebServer", () => {
         open_graph_image_url: "https://opengraph.githubassets.com/example/owner/repository",
         observation_sources: null,
       }]), { headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([{
+        id: snapshotId,
+        captured_at: "2026-08-27T01:17:00.000Z",
+        source: "github_combined",
+        repository_count: 1,
+      }]), { headers: { "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(new Response(JSON.stringify({
         schema_version: "1.0",
         series: [{
@@ -386,6 +408,12 @@ describe("createWebServer", () => {
           ],
         }],
       }), { headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ stargazers_count: 10 }), {
+        headers: { "Content-Type": "application/json" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(emptyStarHistoryPage()), {
+        headers: { "Content-Type": "application/json" },
+      }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       }));
@@ -407,7 +435,16 @@ describe("createWebServer", () => {
       `${baseUrl}/api/star-series?snapshot=${snapshotId}&repository=owner%2Frepository`,
     );
     expect(seriesResponse.status).toBe(200);
-    expect((await seriesResponse.json() as { series: unknown[] }).series).toHaveLength(1);
+    const seriesBody = await seriesResponse.json() as { series: Array<{ points: Array<{ stars: number }> }> };
+    expect(seriesBody.series).toHaveLength(1);
+    expect(seriesBody.series[0].points.at(-1)).toEqual({ captured_at: "2026-08-27T01:17:00.000Z", stars: 10 });
+    expect(seriesBody.series[0].points.every((point) => point.stars === 10)).toBe(true);
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      "https://api.github.com/repos/owner/repository",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer github-token" }),
+      }),
+    );
     const rpcResponse = await fetch(`${baseUrl}/rpc/health`, {
       method: "POST",
       headers: { Authorization: "Bearer token", "Content-Type": "application/json" },
