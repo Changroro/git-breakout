@@ -29,7 +29,8 @@ describe("ranking view guidance", () => {
 
   it("explains each ranking model in plain language", () => {
     expect(rankingViewCopy("momentum").description).toContain("Durable overall strength");
-    expect(rankingViewCopy("breakout").description).toContain("first observed below 10k stars");
+    expect(rankingViewCopy("breakout").description).toContain("own GitHub star history");
+    expect(rankingViewCopy("breakout").description).toContain("rising again after a quiet period");
     expect(rankingViewCopy("breakout").description).toContain("at least two hours");
     expect(rankingViewCopy("current").description).toContain("Absolute attention now");
     expect(rankingViewCopy("github").description).toContain("GitHub Trending rank");
@@ -255,7 +256,7 @@ describe("TrackRecordSection", () => {
     expect(markup).toContain("log1p(value) × 55");
     expect(markup).toContain("Official Trending signal");
     expect(markup).toContain("24h → 6h → 1h");
-    expect(markup).toContain("trend-intelligence-v5-shadow");
+    expect(markup).toContain("trend-intelligence-v6-shadow");
   });
 });
 

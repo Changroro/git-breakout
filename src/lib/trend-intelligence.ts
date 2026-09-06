@@ -4,12 +4,18 @@ const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
 
 export const MAX_EVENT_SIGNAL_AGE_HOURS = 4;
-export const BREAKOUT_INITIAL_STAR_LIMIT = 10_000;
-export const BREAKOUT_BASELINE_DAYS = 7;
+/** Completed weeks of GitHub star history compared against the recent day. */
+export const BREAKOUT_HISTORY_WEEKS = 12;
+/** Minimum completed weeks required before a self-relative baseline exists. */
+export const BREAKOUT_HISTORY_MIN_WEEKS = 2;
 export const BREAKOUT_SCORE_THRESHOLD = 70;
 export const BREAKOUT_PROVISIONAL_FRACTION = 0.1;
 
-const BREAKOUT_COHORT_KEY = "emerging:global";
+const BREAKOUT_COHORT_KEY = "breakout:global";
+/** A completed history day older than this is too stale to stand in for a 24-hour window. */
+const HISTORY_DAY_MAX_AGE_MS = 36 * HOUR_MS;
+/** Day boundaries reported by GitHub are matched with this tolerance. */
+const HISTORY_DAY_TOLERANCE_MS = 2 * HOUR_MS;
 
 export type TrendPhase =
   | "spark"
@@ -47,14 +53,22 @@ export type RepositoryEventSignals = {
   };
 };
 
-export type RepositoryBreakoutHistory = {
+export type StarHistoryPoint = {
+  /** End of a completed GitHub star history day. */
+  captured_at: string;
+  stars: number;
+};
+
+/**
+ * Exact star counts at the end of completed days, derived from the GitHub
+ * star history endpoint anchored to the repository's current count.
+ */
+export type RepositoryStarHistory = {
   full_name: string;
-  first_observed_at: string;
-  first_observed_stars: number;
-  first_observation_was_trending: boolean;
-  official_trending_episode_count: number;
-  baseline_captured_at: string | null;
-  baseline_stars: number | null;
+  /** Moment the history was anchored; every point precedes it. */
+  captured_at: string;
+  /** Ascending, at most one point per day. */
+  day_ends: StarHistoryPoint[];
 };
 
 type ScoreComponents = {
@@ -78,7 +92,8 @@ export type TrendIntelligence = {
     | "trend-intelligence-v2-shadow"
     | "trend-intelligence-v3-shadow"
     | "trend-intelligence-v4-shadow"
-    | "trend-intelligence-v5-shadow";
+    | "trend-intelligence-v5-shadow"
+    | "trend-intelligence-v6-shadow";
   phase: TrendPhase;
   confidence: Confidence;
   star_evidence_window_hours: 1 | 6 | 24 | null;
@@ -110,6 +125,7 @@ export function trendIntelligenceFor(repository: RankedRepository): TrendIntelli
       "trend-intelligence-v3-shadow",
       "trend-intelligence-v4-shadow",
       "trend-intelligence-v5-shadow",
+      "trend-intelligence-v6-shadow",
     ].includes(String(value.score_version))
   ) {
     throw new TypeError(`Repository ${repository.full_name} has invalid trend intelligence`);
@@ -132,7 +148,16 @@ type FeatureRow = {
   organicBreadth: number | null;
   eventDiversity: number | null;
   persistence: number | null;
-  emergingEligible: boolean;
+};
+
+type HistoryFeatures = {
+  /** Stars gained during the most recent completed day. */
+  dailyGain: number | null;
+  /** Stars at the start of that day. */
+  dailyGainStartStars: number | null;
+  /** Median daily growth over the completed weeks before the recent window. */
+  priorDailyGrowth: number | null;
+  priorWeeks: number;
 };
 
 function parseTimestamp(value: string, field: string): number {
@@ -149,56 +174,123 @@ function requireNonNegativeInteger(value: number, field: string): void {
   }
 }
 
-function validateBreakoutHistory(
-  history: RepositoryBreakoutHistory,
+function validateStarHistory(
+  history: RepositoryStarHistory,
   capturedAt: number,
-): RepositoryBreakoutHistory {
+): RepositoryStarHistory {
   if (!/^[^/\s]+\/[^/\s]+$/.test(history.full_name)) {
-    throw new TypeError("breakout_history.full_name must use owner/name format");
+    throw new TypeError("star_history.full_name must use owner/name format");
   }
-  const firstObservedAt = parseTimestamp(
-    history.first_observed_at,
-    `breakout_history.${history.full_name}.first_observed_at`,
+  const anchoredAt = parseTimestamp(
+    history.captured_at,
+    `star_history.${history.full_name}.captured_at`,
   );
-  if (firstObservedAt >= capturedAt) {
-    throw new RangeError(`Breakout history for ${history.full_name} must precede capturedAt`);
+  if (anchoredAt > capturedAt) {
+    throw new RangeError(`Star history for ${history.full_name} cannot be anchored after capturedAt`);
   }
-  requireNonNegativeInteger(
-    history.first_observed_stars,
-    `breakout_history.${history.full_name}.first_observed_stars`,
-  );
-  if (typeof history.first_observation_was_trending !== "boolean") {
-    throw new TypeError(
-      `breakout_history.${history.full_name}.first_observation_was_trending must be boolean`,
+  if (!Array.isArray(history.day_ends)) {
+    throw new TypeError(`star_history.${history.full_name}.day_ends must be an array`);
+  }
+  let previous = Number.NEGATIVE_INFINITY;
+  const dayEnds = history.day_ends.map((point, index) => {
+    const timestamp = parseTimestamp(
+      point.captured_at,
+      `star_history.${history.full_name}.day_ends[${index}].captured_at`,
     );
-  }
-  requireNonNegativeInteger(
-    history.official_trending_episode_count,
-    `breakout_history.${history.full_name}.official_trending_episode_count`,
-  );
-  if (
-    history.first_observation_was_trending
-    && history.official_trending_episode_count === 0
-  ) {
-    throw new RangeError(`Breakout history for ${history.full_name} has inconsistent Trending evidence`);
-  }
-  if ((history.baseline_captured_at === null) !== (history.baseline_stars === null)) {
-    throw new TypeError(`Breakout baseline for ${history.full_name} must be complete or null`);
-  }
-  if (history.baseline_captured_at !== null && history.baseline_stars !== null) {
-    const baselineCapturedAt = parseTimestamp(
-      history.baseline_captured_at,
-      `breakout_history.${history.full_name}.baseline_captured_at`,
-    );
-    requireNonNegativeInteger(
-      history.baseline_stars,
-      `breakout_history.${history.full_name}.baseline_stars`,
-    );
-    if (baselineCapturedAt < firstObservedAt || baselineCapturedAt >= capturedAt) {
-      throw new RangeError(`Breakout baseline for ${history.full_name} has inconsistent timestamps`);
+    requireNonNegativeInteger(point.stars, `star_history.${history.full_name}.day_ends[${index}].stars`);
+    if (timestamp <= previous || timestamp > anchoredAt) {
+      throw new RangeError(`Star history for ${history.full_name} must list completed days in ascending order`);
+    }
+    previous = timestamp;
+    return { captured_at: point.captured_at, stars: point.stars };
+  });
+  return { full_name: history.full_name, captured_at: history.captured_at, day_ends: dayEnds };
+}
+
+function median(values: readonly number[]): number {
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
+
+function latestPointAtOrBefore(
+  points: readonly StarHistoryPoint[],
+  timestamp: number,
+): StarHistoryPoint | null {
+  for (let index = points.length - 1; index >= 0; index -= 1) {
+    if (Date.parse(points[index].captured_at) <= timestamp) {
+      return points[index];
     }
   }
-  return { ...history };
+  return null;
+}
+
+function pointNear(points: readonly StarHistoryPoint[], timestamp: number): StarHistoryPoint | null {
+  let best: StarHistoryPoint | null = null;
+  let bestDistance = HISTORY_DAY_TOLERANCE_MS;
+  points.forEach((point) => {
+    const distance = Math.abs(Date.parse(point.captured_at) - timestamp);
+    if (distance <= bestDistance) {
+      best = point;
+      bestDistance = distance;
+    }
+  });
+  return best;
+}
+
+/**
+ * Derives the recent completed day and the repository's own growth
+ * baseline from GitHub star history. `recentWindowStart` is the moment the
+ * recent evidence begins; prior weeks end at or before it so the baseline
+ * never overlaps the growth it is compared against.
+ */
+function historyFeatures(
+  history: RepositoryStarHistory | null,
+  capturedAt: number,
+  observedDelta24: number | null,
+): HistoryFeatures {
+  const empty: HistoryFeatures = {
+    dailyGain: null,
+    dailyGainStartStars: null,
+    priorDailyGrowth: null,
+    priorWeeks: 0,
+  };
+  if (history === null) return empty;
+  const points = history.day_ends;
+  const latest = latestPointAtOrBefore(points, capturedAt);
+  const latestTimestamp = latest === null ? null : Date.parse(latest.captured_at);
+  const dayBefore = latestTimestamp === null ? null : pointNear(points, latestTimestamp - DAY_MS);
+  const recentDayUsable = latest !== null
+    && latestTimestamp !== null
+    && dayBefore !== null
+    && capturedAt - latestTimestamp <= HISTORY_DAY_MAX_AGE_MS;
+  const dailyGain = recentDayUsable ? Math.max(0, latest.stars - dayBefore.stars) : null;
+  const dailyGainStartStars = recentDayUsable ? dayBefore.stars : null;
+
+  const recentWindowStart = observedDelta24 !== null
+    ? capturedAt - DAY_MS
+    : recentDayUsable
+      ? latestTimestamp - DAY_MS
+      : null;
+  const anchor = recentWindowStart === null ? null : latestPointAtOrBefore(points, recentWindowStart);
+  const weeklyGains: number[] = [];
+  if (anchor !== null) {
+    const anchorTimestamp = Date.parse(anchor.captured_at);
+    for (let week = 1; week <= BREAKOUT_HISTORY_WEEKS; week += 1) {
+      const end = pointNear(points, anchorTimestamp - (week - 1) * 7 * DAY_MS);
+      const start = pointNear(points, anchorTimestamp - week * 7 * DAY_MS);
+      if (end === null || start === null) break;
+      weeklyGains.push(Math.max(0, end.stars - start.stars));
+    }
+  }
+  return {
+    dailyGain,
+    dailyGainStartStars,
+    priorDailyGrowth: weeklyGains.length >= BREAKOUT_HISTORY_MIN_WEEKS ? median(weeklyGains) / 7 : null,
+    priorWeeks: weeklyGains.length,
+  };
 }
 
 function validateWindow(window: TrendWindowSignals, field: string): void {
@@ -261,7 +353,7 @@ function eventEvidenceWindow(signals: RepositoryEventSignals): 1 | 6 | 24 | null
 function featureRow(
   repository: RankedRepository,
   eventSignals: RepositoryEventSignals | null,
-  history: RepositoryBreakoutHistory | null,
+  history: RepositoryStarHistory | null,
   capturedAt: number,
 ): FeatureRow {
   const missingEvidence: string[] = [];
@@ -270,41 +362,16 @@ function featureRow(
   const delta6 = repository.growth.stars_delta_6h;
   const delta24 = repository.growth.stars_delta_24h;
   const stars = repository.metrics.stars;
+  const historyEvidence = historyFeatures(history, capturedAt, delta24);
   if (selectedStarEvidence === null) {
-    missingEvidence.push("star_growth_window");
+    missingEvidence.push(historyEvidence.dailyGain === null ? "star_growth_window" : "star_window_observed");
   } else if (selectedStarEvidence.hours < 24) {
     missingEvidence.push("star_window_24h");
   }
-
-  let emergingEligible = history !== null;
   if (history === null) {
-    missingEvidence.push("emerging_history");
-  } else {
-    if (history.first_observed_stars >= BREAKOUT_INITIAL_STAR_LIMIT) {
-      missingEvidence.push("emerging_initial_stars");
-      emergingEligible = false;
-    }
-    if (history.first_observation_was_trending) {
-      missingEvidence.push("emerging_first_observation");
-      emergingEligible = false;
-    }
-    if (history.official_trending_episode_count > 0) {
-      missingEvidence.push("emerging_prior_trending");
-      emergingEligible = false;
-    }
-    const baselineCapturedAt = history.baseline_captured_at === null
-      ? null
-      : parseTimestamp(
-        history.baseline_captured_at,
-        `breakout_history.${repository.full_name}.baseline_captured_at`,
-      );
-    if (
-      baselineCapturedAt === null
-      || history.baseline_stars === null
-      || baselineCapturedAt > capturedAt - BREAKOUT_BASELINE_DAYS * DAY_MS
-    ) {
-      missingEvidence.push("emerging_baseline_7d");
-    }
+    missingEvidence.push("star_history");
+  } else if (historyEvidence.priorDailyGrowth === null) {
+    missingEvidence.push("star_history_baseline");
   }
 
   let freshSignals = eventSignals;
@@ -344,29 +411,15 @@ function featureRow(
   const selectedBreakoutEvidence = (selectedStarEvidence?.hours ?? 0) >= 6
     ? selectedStarEvidence
     : null;
-  const breakoutStarVelocity = selectedBreakoutEvidence === null
-    ? repository.observedStarsPerDay
-    : selectedBreakoutEvidence.delta * 24 / selectedBreakoutEvidence.hours;
-  const baselineCapturedAt = history?.baseline_captured_at === null
-    || history?.baseline_captured_at === undefined
-    ? null
-    : parseTimestamp(
-      history.baseline_captured_at,
-      `breakout_history.${repository.full_name}.baseline_captured_at`,
-    );
-  const priorDayStars = stars === null || delta24 === null
-    ? null
-    : Math.max(stars - delta24, 0);
-  const baselineElapsedDays = baselineCapturedAt === null
-    ? null
-    : (capturedAt - DAY_MS - baselineCapturedAt) / DAY_MS;
-  const previousDailyGrowth = priorDayStars === null
-    || history?.baseline_stars === null
-    || history?.baseline_stars === undefined
-    || baselineElapsedDays === null
-    || baselineElapsedDays <= 0
-    ? null
-    : Math.max(0, priorDayStars - history.baseline_stars) / baselineElapsedDays;
+  // Exact observed windows of at least six hours come first. Without one,
+  // GitHub's most recent completed day is an exact 24-hour measurement and
+  // outranks the shorter observed velocity.
+  const breakoutStarVelocity = selectedBreakoutEvidence !== null
+    ? selectedBreakoutEvidence.delta * 24 / selectedBreakoutEvidence.hours
+    : historyEvidence.dailyGain !== null
+      ? historyEvidence.dailyGain
+      : repository.observedStarsPerDay;
+  const recentDailyGrowth = delta24 ?? historyEvidence.dailyGain;
   const starAcceleration = delta6 !== null && delta24 !== null
     ? delta6 / 6 - delta24 / 24
     : delta1 !== null && delta6 !== null
@@ -410,20 +463,21 @@ function featureRow(
     breakoutStarVelocity,
     relativeGrowth: stars === null || breakoutStarVelocity === null
       ? null
-      : selectedBreakoutEvidence === null
-        ? breakoutStarVelocity / Math.max(stars, 1)
-        : priorStars === null
+      : selectedBreakoutEvidence !== null
+        ? priorStars === null
           ? null
-          : selectedBreakoutEvidence.delta / priorStars * 24 / selectedBreakoutEvidence.hours,
-    selfRelativeGrowth: delta24 === null || previousDailyGrowth === null
+          : selectedBreakoutEvidence.delta / priorStars * 24 / selectedBreakoutEvidence.hours
+        : historyEvidence.dailyGain !== null && historyEvidence.dailyGainStartStars !== null
+          ? historyEvidence.dailyGain / Math.max(historyEvidence.dailyGainStartStars, 1)
+          : breakoutStarVelocity / Math.max(stars, 1),
+    selfRelativeGrowth: recentDailyGrowth === null || historyEvidence.priorDailyGrowth === null
       ? null
-      : delta24 / Math.max(previousDailyGrowth, 1),
+      : recentDailyGrowth / Math.max(historyEvidence.priorDailyGrowth, 1),
     starAcceleration,
     actorAcceleration,
     organicBreadth: selectedSignals?.unique_actors ?? null,
     eventDiversity: selectedSignals === null ? null : eventDiversity(selectedSignals),
     persistence,
-    emergingEligible,
   };
 }
 
@@ -482,7 +536,7 @@ export function rankTrendIntelligence(
   repositories: readonly RankedRepository[],
   eventSignals: readonly RepositoryEventSignals[],
   capturedAt: string | Date,
-  breakoutHistories: readonly RepositoryBreakoutHistory[],
+  starHistories: readonly RepositoryStarHistory[],
 ): TrendRankedRepository[] {
   const capturedTimestamp = capturedAt instanceof Date
     ? capturedAt.getTime()
@@ -503,12 +557,12 @@ export function rankTrendIntelligence(
     signalsByName.set(key, signals);
   });
 
-  const historiesByName = new Map<string, RepositoryBreakoutHistory>();
-  breakoutHistories.forEach((history) => {
-    const validated = validateBreakoutHistory(history, capturedTimestamp);
+  const historiesByName = new Map<string, RepositoryStarHistory>();
+  starHistories.forEach((history) => {
+    const validated = validateStarHistory(history, capturedTimestamp);
     const key = validated.full_name.toLocaleLowerCase("en-US");
     if (historiesByName.has(key)) {
-      throw new Error(`Duplicate breakout history for ${validated.full_name}`);
+      throw new Error(`Duplicate star history for ${validated.full_name}`);
     }
     historiesByName.set(key, validated);
   });
@@ -523,8 +577,7 @@ export function rankTrendIntelligence(
     row.starVelocity !== null && row.starVelocity > 0 && row.organicBreadth !== null
   );
   const breakoutPool = rows.filter((row) =>
-    row.emergingEligible
-    && row.breakoutStarVelocity !== null
+    row.breakoutStarVelocity !== null
     && row.breakoutStarVelocity > 0
     && row.relativeGrowth !== null
   );
@@ -648,7 +701,7 @@ export function rankTrendIntelligence(
         components: { ...row.repository.momentum.components },
       },
       trend_intelligence: {
-        score_version: "trend-intelligence-v5-shadow",
+        score_version: "trend-intelligence-v6-shadow",
         phase,
         confidence,
         star_evidence_window_hours: row.starEvidenceWindowHours,

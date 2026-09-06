@@ -8,8 +8,15 @@ import {
   type RepositoryStarSeries,
   type StarSeriesResponse,
 } from "../src/lib/star-series.ts";
+import {
+  BREAKOUT_HISTORY_WEEKS,
+  type RepositoryStarHistory,
+} from "../src/lib/trend-intelligence.ts";
 
 const DAY_MS = 86_400_000;
+/** Days of completed history handed to the ranking: the compared weeks plus slack. */
+export const RANKING_HISTORY_WINDOW_DAYS = (BREAKOUT_HISTORY_WEEKS + 2) * 7;
+const DEFAULT_COLLECTION_CONCURRENCY = 4;
 const HISTORY_PAGE_WEEKS = 30;
 const HISTORY_PAGE_LIMIT = 100;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -80,15 +87,31 @@ function requireTimestamp(value: string, field: string): number {
   return timestamp;
 }
 
+/** GitHub refused the request because the token's hourly quota is spent. */
+export class GitHubRateLimitError extends Error {
+  readonly resetAt: Date | null;
+
+  constructor(source: string, status: number, resetAt: Date | null) {
+    super(`${source} request failed with status ${status}; rate limit resets at ${resetAt?.toISOString() ?? "an unknown time"}`);
+    this.name = "GitHubRateLimitError";
+    this.resetAt = resetAt;
+  }
+}
+
 function requireResponseOk(response: Response, source: string): void {
   if (response.ok) {
     return;
   }
   const resetHeader = response.headers.get("x-ratelimit-reset");
-  const resetAt = resetHeader === null ? null : new Date(Number(resetHeader) * 1000);
-  const resetMessage = resetAt !== null && Number.isFinite(resetAt.getTime())
-    ? `; rate limit resets at ${resetAt.toISOString()}`
-    : "";
+  const parsedReset = resetHeader === null ? null : new Date(Number(resetHeader) * 1000);
+  const resetAt = parsedReset !== null && Number.isFinite(parsedReset.getTime()) ? parsedReset : null;
+  if (
+    (response.status === 403 || response.status === 429)
+    && response.headers.get("x-ratelimit-remaining") === "0"
+  ) {
+    throw new GitHubRateLimitError(source, response.status, resetAt);
+  }
+  const resetMessage = resetAt === null ? "" : `; rate limit resets at ${resetAt.toISOString()}`;
   throw new Error(`${source} request failed with status ${response.status}${resetMessage}`);
 }
 
@@ -344,6 +367,11 @@ export type StarHistoryStoreOptions = {
   fetchImplementation?: typeof fetch;
   now?: () => Date;
   ttlMs?: number;
+  /**
+   * Shortens each repository's TTL by a stable, repository-specific amount up
+   * to this value so a large cache does not expire all at once.
+   */
+  ttlJitterMs?: number;
 };
 
 /**
@@ -357,6 +385,7 @@ export class StarHistoryStore {
   private readonly fetchImplementation: typeof fetch;
   private readonly now: () => Date;
   private readonly ttlMs: number;
+  private readonly ttlJitterMs: number;
   private readonly inFlight = new Map<string, Promise<GitHubStarHistory>>();
 
   constructor(options: StarHistoryStoreOptions) {
@@ -366,16 +395,33 @@ export class StarHistoryStore {
     if (options.ttlMs !== undefined && (!Number.isFinite(options.ttlMs) || options.ttlMs <= 0)) {
       throw new RangeError("ttlMs must be a positive number");
     }
+    const ttlMs = options.ttlMs ?? DEFAULT_CACHE_TTL_MS;
+    const ttlJitterMs = options.ttlJitterMs ?? 0;
+    if (!Number.isFinite(ttlJitterMs) || ttlJitterMs < 0 || ttlJitterMs >= ttlMs) {
+      throw new RangeError("ttlJitterMs must be non-negative and smaller than ttlMs");
+    }
     this.cacheDirectory = options.cacheDirectory;
     this.token = options.token;
     this.fetchImplementation = options.fetchImplementation ?? fetch;
     this.now = options.now ?? (() => new Date());
-    this.ttlMs = options.ttlMs ?? DEFAULT_CACHE_TTL_MS;
+    this.ttlMs = ttlMs;
+    this.ttlJitterMs = ttlJitterMs;
+  }
+
+  private cacheKey(fullName: string): string {
+    return createHash("sha256").update(fullName.toLowerCase()).digest("hex");
   }
 
   private cachePath(fullName: string): string {
-    const key = createHash("sha256").update(fullName.toLowerCase()).digest("hex");
-    return join(this.cacheDirectory, `${key}.json`);
+    return join(this.cacheDirectory, `${this.cacheKey(fullName)}.json`);
+  }
+
+  private ttlFor(fullName: string): number {
+    if (this.ttlJitterMs === 0) {
+      return this.ttlMs;
+    }
+    const jitter = Number.parseInt(this.cacheKey(fullName).slice(0, 8), 16) % Math.floor(this.ttlJitterMs);
+    return this.ttlMs - jitter;
   }
 
   private readCache(fullName: string): GitHubStarHistory | null {
@@ -412,7 +458,7 @@ export class StarHistoryStore {
   }
 
   private isFresh(history: GitHubStarHistory): boolean {
-    return this.now().getTime() - Date.parse(history.fetched_at) < this.ttlMs;
+    return this.now().getTime() - Date.parse(history.fetched_at) < this.ttlFor(history.full_name);
   }
 
   async read(fullName: string, coverFrom: string): Promise<GitHubStarHistory> {
@@ -481,4 +527,89 @@ export async function enrichStarSeries(
     return mergeStarSeries(observed, history, before, windowDays);
   }));
   return parseStarSeriesResponse({ schema_version: "1.0", series });
+}
+
+/**
+ * Reduces a fetched history to the completed day-end points the ranking
+ * needs, ending no later than `capturedAt`.
+ */
+export function summarizeStarHistory(
+  history: GitHubStarHistory,
+  capturedAt: string,
+  windowDays: number = RANKING_HISTORY_WINDOW_DAYS,
+): RepositoryStarHistory {
+  const capturedTimestamp = requireTimestamp(capturedAt, "capturedAt");
+  if (!Number.isInteger(windowDays) || windowDays <= 0) {
+    throw new RangeError("windowDays must be a positive integer");
+  }
+  const anchoredAt = Math.min(capturedTimestamp, Date.parse(history.fetched_at));
+  const from = anchoredAt - windowDays * DAY_MS;
+  const dayEnds = buildDayEndPoints(history).filter((point) => {
+    const timestamp = Date.parse(point.captured_at);
+    return timestamp >= from && timestamp <= anchoredAt;
+  });
+  return {
+    full_name: history.full_name,
+    captured_at: new Date(anchoredAt).toISOString(),
+    day_ends: dayEnds,
+  };
+}
+
+/**
+ * Loads star history for every repository in a collection run. A repository
+ * whose history cannot be read is skipped and logged so the ranking records
+ * it as missing evidence; once GitHub reports the hourly quota as spent the
+ * remaining repositories are skipped without further requests. The run only
+ * fails when no history could be read.
+ */
+export async function collectStarHistories(
+  fullNames: readonly string[],
+  store: Pick<StarHistoryStore, "read">,
+  {
+    capturedAt,
+    windowDays = RANKING_HISTORY_WINDOW_DAYS,
+    concurrency = DEFAULT_COLLECTION_CONCURRENCY,
+  }: {
+    capturedAt: string;
+    windowDays?: number;
+    concurrency?: number;
+  },
+): Promise<RepositoryStarHistory[]> {
+  const capturedTimestamp = requireTimestamp(capturedAt, "capturedAt");
+  if (!Number.isInteger(concurrency) || concurrency <= 0) {
+    throw new RangeError("concurrency must be a positive integer");
+  }
+  const coverFrom = new Date(capturedTimestamp - windowDays * DAY_MS).toISOString();
+  const results: Array<RepositoryStarHistory | null> = new Array(fullNames.length).fill(null);
+  let next = 0;
+  let failures = 0;
+  let rateLimited = false;
+  async function worker(): Promise<void> {
+    while (next < fullNames.length && !rateLimited) {
+      const index = next;
+      next += 1;
+      const fullName = fullNames[index];
+      try {
+        results[index] = summarizeStarHistory(await store.read(fullName, coverFrom), capturedAt, windowDays);
+      } catch (error) {
+        failures += 1;
+        if (error instanceof GitHubRateLimitError && !rateLimited) {
+          rateLimited = true;
+          process.stderr.write(
+            `Stopping star history collection after ${fullName}: ${error.message}; ${fullNames.length - next} repositories skipped\n`,
+          );
+          return;
+        }
+        process.stderr.write(
+          `Skipping star history for ${fullName}: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, fullNames.length) }, () => worker()));
+  const histories = results.filter((history): history is RepositoryStarHistory => history !== null);
+  if (fullNames.length > 0 && histories.length === 0) {
+    throw new Error(`Star history collection failed for all ${failures} attempted repositories`);
+  }
+  return histories;
 }

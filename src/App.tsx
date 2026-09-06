@@ -1478,7 +1478,7 @@ function MethodologyDialog({
               <section>
                 <div className="methodology-section-title">
                   <h3>급부상과 현재 관심도</h3>
-                  <code>trend-intelligence-v5-shadow</code>
+                  <code>trend-intelligence-v6-shadow</code>
                 </div>
                 <p>확인 가능한 구성요소의 동일 가중 평균에 100을 곱합니다. 누락된 값은 0으로 처리하지 않고 계산에서 제외합니다.</p>
                 <div className="methodology-models">
@@ -1593,7 +1593,7 @@ function MethodologyDialog({
           <section>
             <div className="methodology-section-title">
               <h3>Breakout and Current Heat</h3>
-              <code>trend-intelligence-v5-shadow</code>
+              <code>trend-intelligence-v6-shadow</code>
             </div>
             <p>
               Each score is 100 times the equal-weight mean of its known components. Missing

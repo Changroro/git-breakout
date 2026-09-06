@@ -8,8 +8,12 @@ import {
   fetchGitHubStarHistory,
   mergeStarSeries,
   parseStarHistoryPage,
+  collectStarHistories,
+  GitHubRateLimitError,
+  RANKING_HISTORY_WINDOW_DAYS,
   StarHistoryLagError,
   StarHistoryStore,
+  summarizeStarHistory,
   type GitHubStarHistory,
 } from "./star-history.ts";
 
@@ -236,6 +240,23 @@ describe("fetchGitHubStarHistory", () => {
     })).rejects.toThrow("status 403; rate limit resets at 2026-09-06T00:56:20.000Z");
   });
 
+  it("raises a typed error once the hourly quota is spent", async () => {
+    const fetchImplementation = routedFetch({
+      [REPOSITORY_URL]: () => jsonResponse({ message: "rate limited" }, {
+        status: 403,
+        headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1788656180" },
+      }),
+    });
+
+    await expect(fetchGitHubStarHistory({
+      fullName: "owner/repository",
+      token: "token",
+      coverFrom: "2026-08-24T00:00:00.000Z",
+      fetchImplementation,
+      now: () => NOW,
+    })).rejects.toBeInstanceOf(GitHubRateLimitError);
+  });
+
   it("rejects invalid repository names and empty tokens", async () => {
     await expect(fetchGitHubStarHistory({
       fullName: "owner",
@@ -371,6 +392,37 @@ describe("StarHistoryStore", () => {
     errors.mockRestore();
   });
 
+  it("spreads expiry with stable per-repository jitter", async () => {
+    const cacheDirectory = join(mkdtempSync(join(tmpdir(), "star-history-")), "cache");
+    let current = NOW;
+    const fetchImplementation = routedFetch({
+      [REPOSITORY_URL]: () => jsonResponse({ stargazers_count: 100 }),
+      [HISTORY_URL]: () => historyResponse(sampleWeeks),
+    });
+    const store = new StarHistoryStore({
+      cacheDirectory,
+      token: "token",
+      fetchImplementation,
+      now: () => current,
+      ttlMs: 100_000,
+      ttlJitterMs: 50_000,
+    });
+
+    await store.read("owner/repository", "2026-08-24T00:00:00.000Z");
+    current = new Date(NOW.getTime() + 49_000);
+    await store.read("owner/repository", "2026-08-24T00:00:00.000Z");
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    current = new Date(NOW.getTime() + 100_000);
+    await store.read("owner/repository", "2026-08-24T00:00:00.000Z");
+    expect(fetchImplementation).toHaveBeenCalledTimes(4);
+    expect(() => new StarHistoryStore({
+      cacheDirectory,
+      token: "token",
+      ttlMs: 1_000,
+      ttlJitterMs: 1_000,
+    })).toThrow(RangeError);
+  });
+
   it("surfaces GitHub failures when nothing is cached", async () => {
     const cacheDirectory = join(mkdtempSync(join(tmpdir(), "star-history-")), "cache");
     const store = new StarHistoryStore({
@@ -455,5 +507,92 @@ describe("enrichStarSeries", () => {
       }],
     });
     expect(read).toHaveBeenCalledWith("owner/repository", "2026-09-03T02:00:00.000Z");
+  });
+});
+
+describe("summarizeStarHistory", () => {
+  it("keeps completed day-ends inside the ranking window ending at the capture time", () => {
+    const summary = summarizeStarHistory(sampleHistory(), "2026-09-05T02:00:00.000Z", 2);
+
+    expect(summary).toEqual({
+      full_name: "owner/repository",
+      captured_at: "2026-09-05T02:00:00.000Z",
+      day_ends: [
+        { captured_at: "2026-09-04T00:00:00.000Z", stars: 66 },
+        { captured_at: "2026-09-05T00:00:00.000Z", stars: 96 },
+      ],
+    });
+    expect(RANKING_HISTORY_WINDOW_DAYS).toBe(98);
+  });
+
+  it("anchors at the fetch time when the history is older than the capture", () => {
+    const summary = summarizeStarHistory(sampleHistory(), "2026-09-06T02:00:00.000Z");
+
+    expect(summary.captured_at).toBe(NOW.toISOString());
+    expect(summary.day_ends.at(-1)).toEqual({ captured_at: "2026-09-05T00:00:00.000Z", stars: 96 });
+  });
+});
+
+describe("collectStarHistories", () => {
+  it("collects histories with bounded concurrency and skips failures", async () => {
+    let active = 0;
+    let peak = 0;
+    const read = vi.fn(async (fullName: string) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      if (fullName === "owner/missing") {
+        throw new Error("GitHub repository owner/missing request failed with status 404");
+      }
+      return { ...sampleHistory(), full_name: fullName };
+    });
+    const errors = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const histories = await collectStarHistories(
+      ["owner/a", "owner/missing", "owner/b", "owner/c", "owner/d"],
+      { read },
+      { capturedAt: "2026-09-05T02:00:00.000Z", concurrency: 2 },
+    );
+
+    expect(histories.map((history) => history.full_name)).toEqual(["owner/a", "owner/b", "owner/c", "owner/d"]);
+    expect(peak).toBe(2);
+    expect(read).toHaveBeenCalledWith("owner/a", "2026-05-30T02:00:00.000Z");
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining("Skipping star history for owner/missing"));
+    errors.mockRestore();
+  });
+
+  it("stops requesting once GitHub reports the quota as spent", async () => {
+    const read = vi.fn(async (fullName: string) => {
+      if (fullName === "owner/b") {
+        throw new GitHubRateLimitError("GitHub repository owner/b", 403, new Date("2026-09-06T00:56:20.000Z"));
+      }
+      return { ...sampleHistory(), full_name: fullName };
+    });
+    const errors = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const histories = await collectStarHistories(
+      ["owner/a", "owner/b", "owner/c", "owner/d"],
+      { read },
+      { capturedAt: "2026-09-05T02:00:00.000Z", concurrency: 1 },
+    );
+
+    expect(histories.map((history) => history.full_name)).toEqual(["owner/a"]);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining("Stopping star history collection after owner/b"));
+    errors.mockRestore();
+  });
+
+  it("fails the run when no history could be read", async () => {
+    const read = vi.fn(async () => {
+      throw new Error("GitHub repository request failed with status 401");
+    });
+    const errors = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    await expect(collectStarHistories(["owner/a", "owner/b"], { read }, {
+      capturedAt: "2026-09-05T02:00:00.000Z",
+    })).rejects.toThrow("failed for all 2 attempted repositories");
+    expect(await collectStarHistories([], { read }, { capturedAt: "2026-09-05T02:00:00.000Z" })).toEqual([]);
+    errors.mockRestore();
   });
 });

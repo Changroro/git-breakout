@@ -36,7 +36,7 @@ GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하
 
 ## 주요 기능
 
-- **급부상**: 처음 관측했을 때 Star가 1만 개 미만이고 과거 Trending 이력이 없는 저장소 중 성장 가속이 두드러지는 후보를 찾는다.
+- **급부상**: 최근 스타 증가를 GitHub Star History API로 얻은 그 저장소의 이전 12주 기준선과 후보군에 비교해 성장 가속이 두드러지는 저장소를 찾는다. 오래된 저장소의 재부상도 같은 기준으로 다룬다.
 - **모멘텀**: 관측된 Star 증가, 전체 성장 속도, 저장소 규모, 최근 활동을 합산해 지속적인 성장 강도를 비교한다.
 - **현재 관심도**: Star 속도와 고유 참여자, 활동 종류, 단기 지속성으로 지금의 관심 집중도를 계산한다.
 - **GitHub Trending**: 수집 시점의 Daily·Weekly·Monthly 원본 순위를 별도 탭으로 보존한다.
@@ -71,7 +71,7 @@ GH Archive ──────┘                            │
 | GH Archive | Watch, Fork, PR, Issue, Comment, Push, Release | 이벤트가 먼저 증가한 저장소 발견과 관심 폭 측정 |
 | 이전 관측 | 14일 유지 정책을 통과한 후보 | 검색 범위를 벗어난 저장소의 연속 추적 |
 | GitHub GraphQL | Star, Fork, Issue, 언어, Topic, Push 시각 | 현재 메타데이터 검증 |
-| GitHub Star History API | 일 단위 Star 증감 | Star 시계열 (후보 발견에는 사용하지 않음) |
+| GitHub Star History API | 일 단위 Star 증감 | Star 시계열, 급부상 자기 기준선 (후보 발견에는 사용하지 않음) |
 
 GitHub Search는 쿼리별 최대 1,000개 결과만 반환하므로 Git Breakout의 순위를 “GitHub 전체 저장소의 완전한 순위”로 해석하면 안 된다. 후보군에서 제외된 저장소는 새 관측만 멈추며 기존 스냅샷은 삭제하지 않는다.
 
@@ -93,7 +93,7 @@ score = log1p(observedStarsPerDay) × 55
 - 최소 2시간 떨어진 관측이 생긴 뒤부터 실제 Star 속도를 계산한다.
 - GitHub Trending 순위는 후보 발견과 증거 표시에 사용하며 모멘텀 점수에는 직접 더하지 않는다.
 - 데이터가 부족한 값은 0점으로 꾸미지 않고 `insufficient_data`로 남긴다.
-- 급부상과 현재 관심도는 `trend-intelligence-v5-shadow` 모델로 별도 계산한다.
+- 급부상과 현재 관심도는 `trend-intelligence-v6-shadow` 모델로 별도 계산한다.
 
 자세한 산식과 한계는 [공개 방법론](docs/methodology.md)에 정리돼 있다. 웹 화면의 각 지표 옆 물음표에서도 현재 계산 방식을 확인할 수 있다.
 

@@ -13,7 +13,7 @@ Git Breakout discovers public repositories from GitHub Trending, GitHub Search, 
 | Public GitHub activity | Add repositories showing recent Watch, Fork, PR, Issue, Comment, Push, or Release activity |
 | Previous observations | Continue tracking candidates that pass the retention policy |
 | GitHub GraphQL | Verify current stars, forks, issues, language, topics, and push time |
-| GitHub Star History API | Daily star changes for the star series (not used for discovery or ranking) |
+| GitHub Star History API | Daily star changes for the star series and the breakout self-baseline (not used for discovery) |
 
 GitHub Search returns at most 1,000 results per query. Git Breakout therefore describes its results as rankings within the observed candidate pool, not a complete ranking of every GitHub repository.
 
@@ -35,9 +35,11 @@ The first observation receives a discovery bonus but produces no growth value. O
 
 ## Breakout
 
-`trend-intelligence-v5-shadow` evaluates repositories that were first observed below 10,000 stars, were outside GitHub Trending at first observation, and had no earlier Trending history in the collected data.
+`trend-intelligence-v6-shadow` evaluates every repository in the candidate pool with positive recent star growth. Earlier versions excluded repositories first observed above 10,000 stars or with prior Trending history because their past could not be observed; the GitHub Star History API now supplies that past directly, so a repository rising again after a quiet period is evaluated like a new one.
 
-Breakout compares recent star velocity, relative growth, acceleration, and available activity evidence against similar repositories. An exact six-hour star window is preferred. When collection gaps prevent that window, observations at least two hours apart may provide temporary low-confidence evidence. Early candidates are limited to the top 10% of calculable scores; after 24 hours, every candidate scoring at least 70 is shown.
+Breakout compares recent star velocity, relative growth, acceleration, and available activity evidence against the candidate pool, and compares the recent day with the repository's own baseline: the median weekly gain over up to 12 completed weeks before the recent window, read from GitHub star history. At least two completed weeks are required for that baseline; younger repositories record `star_history_baseline` as missing evidence and are scored on the remaining components. An exact six-hour observed star window is preferred. Without one, GitHub's most recent completed day provides an exact 24-hour measurement, and observations at least two hours apart provide temporary low-confidence evidence. Early candidates are limited to the top 10% of calculable scores; after 24 hours of Git Breakout's own observations, every candidate scoring at least 70 is shown.
+
+Absolute star counts are not capped. Comparison cohorts by repository size are a planned refinement pending real data.
 
 ## Current heat
 

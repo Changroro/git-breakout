@@ -36,7 +36,7 @@ Git Breakout is not a complete index of every repository on GitHub. It discovers
 
 ## Features
 
-- **Breakout** finds unusually accelerating repositories first observed below 10,000 stars with no previous Trending history.
+- **Breakout** compares recent star growth with the repository's own 12-week baseline from the GitHub Star History API and with the candidate pool, so an older repository rising again is treated like a new one.
 - **Momentum** combines observed star growth, lifetime velocity, repository scale, and recent activity for durable strength.
 - **Current heat** measures attention right now through star velocity, unique actors, activity diversity, and short-term persistence.
 - **GitHub Trending** preserves the collected Daily, Weekly, and Monthly source ranks in a separate view.
@@ -71,7 +71,7 @@ GH Archive ──────┘                               │
 | GH Archive | Watch, Fork, PR, Issue, Comment, Push, and Release events | Early event discovery and breadth of attention |
 | Previous observations | Candidates that pass the 14-day retention policy | Continued tracking beyond search windows |
 | GitHub GraphQL | Stars, forks, issues, language, topics, and push time | Current metadata verification |
-| GitHub Star History API | Daily star changes | Star series (not used for candidate discovery) |
+| GitHub Star History API | Daily star changes | Star series and the breakout self-baseline (not used for candidate discovery) |
 
 GitHub Search returns at most 1,000 results per query, so Git Breakout must not be described as a complete ranking of every GitHub repository. Leaving the candidate pool stops new observations; it does not delete existing snapshots.
 
@@ -93,7 +93,7 @@ score = log1p(observedStarsPerDay) × 55
 - Observed star velocity begins only after measurements are at least two hours apart.
 - GitHub Trending rank is used for discovery and evidence, not added directly to momentum.
 - Missing evidence remains `insufficient_data` instead of being converted into a zero score.
-- Breakout and Current heat are stored separately under `trend-intelligence-v5-shadow`.
+- Breakout and Current heat are stored separately under `trend-intelligence-v6-shadow`.
 
 See the [public methodology](docs/methodology.md) for formulas and limitations. The question-mark control beside each ranking view also exposes the current methodology in the web app.
 
