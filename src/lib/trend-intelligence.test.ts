@@ -117,11 +117,6 @@ function eventSignals(index: number, actors: {
 
 const HISTORY_ANCHOR = "2026-08-28T00:00:00.000Z";
 
-/**
- * Completed day-ends for the 98 days ending at the anchor. `dailyGain` is the
- * gain of the most recent completed day and `priorDailyGain` the steady gain
- * of every day before it; `days` limits how much history exists.
- */
 function starHistory(index: number, options: {
   dailyGain?: number;
   priorDailyGain?: number;
@@ -132,21 +127,18 @@ function starHistory(index: number, options: {
   const priorDailyGain = options.priorDailyGain ?? 5;
   const days = options.days ?? 98;
   const anchor = Date.parse(HISTORY_ANCHOR);
-  const finalStars = 1_000 + index * 10;
-  const dayEnds = Array.from({ length: days }, (_, offset) => {
+  const historyDays = Array.from({ length: days }, (_, offset) => {
     const daysBefore = days - 1 - offset;
-    const stars = daysBefore === 0
-      ? finalStars
-      : finalStars - dailyGain - (daysBefore - 1) * priorDailyGain;
     return {
-      captured_at: new Date(anchor - daysBefore * 86_400_000).toISOString(),
-      stars: Math.max(0, stars),
+      start: new Date(anchor - (daysBefore + 1) * 86_400_000).toISOString(),
+      end: new Date(anchor - daysBefore * 86_400_000).toISOString(),
+      retained_stars_added: daysBefore === 0 ? dailyGain : priorDailyGain,
     };
   });
   return {
     full_name: `owner/repository-${index}`,
     captured_at: options.capturedAt ?? HISTORY_ANCHOR,
-    day_ends: dayEnds,
+    days: historyDays,
   };
 }
 
@@ -233,9 +225,17 @@ describe("rankTrendIntelligence", () => {
     expect(() => rankTrendIntelligence(repositories, [], CAPTURED_AT, [{
       full_name: "owner/repository-0",
       captured_at: HISTORY_ANCHOR,
-      day_ends: [
-        { captured_at: "2026-08-27T00:00:00.000Z", stars: 10 },
-        { captured_at: "2026-08-26T00:00:00.000Z", stars: 5 },
+      days: [
+        {
+          start: "2026-08-26T00:00:00.000Z",
+          end: "2026-08-27T00:00:00.000Z",
+          retained_stars_added: 10,
+        },
+        {
+          start: "2026-08-25T00:00:00.000Z",
+          end: "2026-08-26T00:00:00.000Z",
+          retained_stars_added: 5,
+        },
       ],
     }])).toThrow(RangeError);
     expect(() => rankTrendIntelligence(repositories, [], CAPTURED_AT, [
@@ -320,7 +320,7 @@ describe("rankTrendIntelligence", () => {
       return {
         ...history,
         captured_at: staleAnchor,
-        day_ends: history.day_ends.filter((point) => point.captured_at <= staleAnchor),
+        days: history.days.filter((day) => day.end <= staleAnchor),
       };
     });
 

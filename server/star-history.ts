@@ -17,49 +17,37 @@ const DAY_MS = 86_400_000;
 /** Days of completed history handed to the ranking: the compared weeks plus slack. */
 export const RANKING_HISTORY_WINDOW_DAYS = (BREAKOUT_HISTORY_WEEKS + 2) * 7;
 const DEFAULT_COLLECTION_CONCURRENCY = 4;
-/** REST calls one repository costs: the stargazer count plus one history page. */
-export const STAR_HISTORY_CALLS_PER_REPOSITORY = 2;
+/** REST calls needed for the 98-day window, which fits in one 30-week page. */
+export const STAR_HISTORY_CALLS_PER_REPOSITORY = 1;
 /** Core calls left untouched so star history never consumes the whole quota. */
 export const DEFAULT_RATE_LIMIT_RESERVE = 500;
 const HISTORY_PAGE_WEEKS = 30;
 const HISTORY_PAGE_LIMIT = 100;
 const REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_CACHE_TTL_MS = 6 * 3_600_000;
+const MAX_HOURLY_REQUEST_LIMIT = DEFAULT_RATE_LIMIT_RESERVE;
 const GITHUB_API_VERSION = "2026-03-10";
 const USER_AGENT = "ai-trend-radar/0.0.0";
 
 export type StarHistoryDay = {
-  /** ISO timestamp for the start of the GitHub day bucket. */
+  /** ISO label derived from GitHub's week timestamp and day position. */
   start: string;
-  /** ISO timestamp for the start of the following bucket. */
+  /** ISO label for the next derived day position. */
   end: string;
+  /** Stars created in this bucket and still present when fetched. */
   stars_added: number;
 };
 
 export type GitHubStarHistory = {
   schema_version: "1.0";
   full_name: string;
-  /** Moment the star count anchor was read from GitHub. */
+  /** Moment the aggregate history was read from GitHub. */
   fetched_at: string;
-  /** Repository stargazer count at fetched_at. */
-  stars: number;
   /** True when the fetched pages reached the repository's creation week. */
   complete: boolean;
   /** Day buckets in ascending order. */
   days: StarHistoryDay[];
 };
-
-/**
- * GitHub creates the bucket for a new week shortly after it starts. Until it
- * appears the stars gained since the last bucket cannot be separated from
- * the current count, so no exact day-end value can be derived.
- */
-export class StarHistoryLagError extends Error {
-  constructor(fullName: string, fetchedAt: string) {
-    super(`GitHub star history for ${fullName} does not cover ${fetchedAt} yet`);
-    this.name = "StarHistoryLagError";
-  }
-}
 
 type StarHistoryWeek = {
   week: number;
@@ -102,6 +90,56 @@ export class GitHubRateLimitError extends Error {
   }
 }
 
+export class GitHubRequestBudgetError extends Error {
+  constructor(limit: number) {
+    super(`GitHub star history hourly request limit of ${limit} is exhausted`);
+    this.name = "GitHubRequestBudgetError";
+  }
+}
+
+export class GitHubRequestError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "GitHubRequestError";
+  }
+}
+
+function isRecoverableGitHubRequestError(error: unknown): boolean {
+  return error instanceof GitHubRequestBudgetError
+    || error instanceof GitHubRateLimitError
+    || error instanceof GitHubRequestError;
+}
+
+class HourlyRequestBudget {
+  private readonly limit: number;
+  private readonly now: () => Date;
+  private windowStartedAt: number;
+  private used = 0;
+
+  constructor(limit: number, now: () => Date) {
+    if (!Number.isInteger(limit) || limit <= 0 || limit > MAX_HOURLY_REQUEST_LIMIT) {
+      throw new RangeError(
+        `hourlyRequestLimit must be an integer between 1 and ${MAX_HOURLY_REQUEST_LIMIT}`,
+      );
+    }
+    this.limit = limit;
+    this.now = now;
+    this.windowStartedAt = now().getTime();
+  }
+
+  consume(): void {
+    const current = this.now().getTime();
+    if (current - this.windowStartedAt >= 3_600_000) {
+      this.windowStartedAt = current;
+      this.used = 0;
+    }
+    if (this.used >= this.limit) {
+      throw new GitHubRequestBudgetError(this.limit);
+    }
+    this.used += 1;
+  }
+}
+
 function requireResponseOk(response: Response, source: string): void {
   if (response.ok) {
     return;
@@ -116,7 +154,9 @@ function requireResponseOk(response: Response, source: string): void {
     throw new GitHubRateLimitError(source, response.status, resetAt);
   }
   const resetMessage = resetAt === null ? "" : `; rate limit resets at ${resetAt.toISOString()}`;
-  throw new Error(`${source} request failed with status ${response.status}${resetMessage}`);
+  throw new GitHubRequestError(
+    `${source} request failed with status ${response.status}${resetMessage}`,
+  );
 }
 
 function githubHeaders(token: string): Record<string, string> {
@@ -194,12 +234,13 @@ export function parseStarHistoryPage(value: unknown, fullName: string): StarHist
   return value.map((entry, index) => {
     if (
       !isRecord(entry)
-      || !Number.isInteger(entry.week)
+      || !Number.isSafeInteger(entry.week)
       || (entry.week as number) < 0
-      || !Number.isInteger(entry.total)
+      || !Number.isSafeInteger(entry.total)
+      || (entry.total as number) < 0
       || !Array.isArray(entry.days)
       || entry.days.length !== 7
-      || entry.days.some((count) => !Number.isInteger(count))
+      || entry.days.some((count) => !Number.isSafeInteger(count) || (count as number) < 0)
     ) {
       throw new TypeError(`GitHub star history for ${fullName} week ${index} is invalid`);
     }
@@ -238,41 +279,21 @@ function flattenWeeks(weeks: readonly StarHistoryWeek[]): StarHistoryDay[] {
   });
 }
 
-async function fetchStargazerCount(
-  fullName: string,
-  token: string,
-  fetchImplementation: typeof fetch,
-): Promise<number> {
-  const { owner, name } = requireFullName(fullName);
-  const response = await fetchImplementation(
-    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`,
-    { headers: githubHeaders(token), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
-  );
-  requireResponseOk(response, `GitHub repository ${fullName}`);
-  const payload: unknown = await response.json();
-  if (!isRecord(payload) || !Number.isInteger(payload.stargazers_count) || (payload.stargazers_count as number) < 0) {
-    throw new TypeError(`GitHub repository ${fullName} returned an invalid stargazers_count`);
-  }
-  return payload.stargazers_count as number;
-}
-
-/**
- * Reads the GitHub star history for a repository back to `coverFrom` (or the
- * repository's creation week) together with the current stargazer count that
- * anchors the daily increments to absolute values.
- */
+/** Reads retained-star acquisition buckets back to the requested window. */
 export async function fetchGitHubStarHistory({
   fullName,
   token,
   coverFrom,
   fetchImplementation = fetch,
   now = () => new Date(),
+  beforeRequest = () => {},
 }: {
   fullName: string;
   token: string;
   coverFrom: string;
   fetchImplementation?: typeof fetch;
   now?: () => Date;
+  beforeRequest?: () => void;
 }): Promise<GitHubStarHistory> {
   if (token.trim() === "") {
     throw new TypeError("GITHUB_TOKEN is required");
@@ -280,7 +301,6 @@ export async function fetchGitHubStarHistory({
   const { owner, name } = requireFullName(fullName);
   const coverFromTimestamp = requireTimestamp(coverFrom, "coverFrom");
   const fetchedAt = now().toISOString();
-  const stars = await fetchStargazerCount(fullName, token, fetchImplementation);
 
   const weeks: StarHistoryWeek[] = [];
   let complete = false;
@@ -292,10 +312,19 @@ export async function fetchGitHubStarHistory({
       per_page: String(HISTORY_PAGE_WEEKS),
       page: String(page),
     }).toString();
-    const response = await fetchImplementation(url, {
-      headers: githubHeaders(token),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+    beforeRequest();
+    let response: Response;
+    try {
+      response = await fetchImplementation(url, {
+        headers: githubHeaders(token),
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      throw new GitHubRequestError(
+        `GitHub star history ${fullName} request could not be completed`,
+        { cause: error },
+      );
+    }
     requireResponseOk(response, `GitHub star history ${fullName}`);
     const pageWeeks = parseStarHistoryPage(await response.json(), fullName);
     const lastWeek = weeks.at(-1);
@@ -313,28 +342,17 @@ export async function fetchGitHubStarHistory({
     }
   }
 
-  // GitHub returns the whole current week, so days after the fetch time are
-  // still in the future and must be empty. Only buckets up to the current
-  // day are kept, and the current day anchors the running count.
   const fetchedTimestamp = Date.parse(fetchedAt);
   const allDays = flattenWeeks(weeks);
-  const currentIndex = allDays.findIndex((day) => (
-    Date.parse(day.start) <= fetchedTimestamp && fetchedTimestamp < Date.parse(day.end)
-  ));
-  if (currentIndex === -1 && (allDays.length > 0 || !complete)) {
-    throw new StarHistoryLagError(fullName, fetchedAt);
-  }
-  if (allDays.slice(currentIndex + 1).some((day) => day.stars_added !== 0)) {
+  if (allDays.some((day) => Date.parse(day.start) > fetchedTimestamp && day.stars_added !== 0)) {
     throw new Error(`GitHub star history for ${fullName} reports stars after ${fetchedAt}`);
   }
-  const days = currentIndex === -1 ? [] : allDays.slice(0, currentIndex + 1);
   return {
     schema_version: "1.0",
     full_name: fullName,
     fetched_at: fetchedAt,
-    stars,
     complete,
-    days,
+    days: allDays,
   };
 }
 
@@ -345,8 +363,6 @@ export function parseGitHubStarHistory(value: unknown): GitHubStarHistory {
     || typeof value.full_name !== "string"
     || typeof value.fetched_at !== "string"
     || !Number.isFinite(Date.parse(value.fetched_at))
-    || !Number.isInteger(value.stars)
-    || (value.stars as number) < 0
     || typeof value.complete !== "boolean"
     || !Array.isArray(value.days)
   ) {
@@ -360,12 +376,18 @@ export function parseGitHubStarHistory(value: unknown): GitHubStarHistory {
       || typeof day.start !== "string"
       || typeof day.end !== "string"
       || !Number.isInteger(day.stars_added)
+      || (day.stars_added as number) < 0
     ) {
       throw new TypeError(`GitHub star history day ${index} is invalid`);
     }
     const start = Date.parse(day.start);
     const end = Date.parse(day.end);
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || start < previousEnd) {
+    if (
+      !Number.isFinite(start)
+      || !Number.isFinite(end)
+      || end <= start
+      || (index > 0 && start !== previousEnd)
+    ) {
       throw new TypeError(`GitHub star history day ${index} is invalid`);
     }
     previousEnd = end;
@@ -373,60 +395,38 @@ export function parseGitHubStarHistory(value: unknown): GitHubStarHistory {
   return value as GitHubStarHistory;
 }
 
-/**
- * Converts daily increments into absolute star counts at the end of each
- * completed day by walking backwards from the anchored current count.
- */
-export function buildDayEndPoints(history: GitHubStarHistory): RepositoryStarPoint[] {
-  const fetchedTimestamp = Date.parse(history.fetched_at);
-  let running = history.stars;
-  const points: RepositoryStarPoint[] = [];
-  for (let index = history.days.length - 1; index >= 0; index -= 1) {
-    const day = history.days[index];
-    if (Date.parse(day.end) <= fetchedTimestamp) {
-      if (running < 0) {
-        throw new Error(`GitHub star history for ${history.full_name} produces a negative star count`);
-      }
-      points.push({ captured_at: day.end, stars: running });
-    }
-    running -= day.stars_added;
-  }
-  return points.reverse();
-}
-
-export function mergeStarSeries(
-  observed: RepositoryStarSeries,
-  history: GitHubStarHistory | null,
+export function buildRetainedAcquisitionSeries(
+  history: GitHubStarHistory,
   before: string,
   windowDays: number = STAR_SERIES_WINDOW_DAYS,
 ): RepositoryStarSeries {
-  if (history !== null && observed.full_name.toLowerCase() !== history.full_name.toLowerCase()) {
-    throw new TypeError(`GitHub star history ${history.full_name} does not match ${observed.full_name}`);
-  }
   if (!Number.isInteger(windowDays) || windowDays <= 0) {
     throw new RangeError("windowDays must be a positive integer");
   }
   const beforeTimestamp = requireTimestamp(before, "before");
-  const fromTimestamp = beforeTimestamp - windowDays * DAY_MS;
-  const inWindow = (point: RepositoryStarPoint): boolean => {
-    const timestamp = Date.parse(point.captured_at);
-    return timestamp >= fromTimestamp && timestamp <= beforeTimestamp;
-  };
-  const observedPoints = observed.points.filter(inWindow);
-  const observedTimestamps = new Set(observedPoints.map((point) => Date.parse(point.captured_at)));
-  const historyPoints = (history === null ? [] : buildDayEndPoints(history))
-    .filter(inWindow)
-    .filter((point) => !observedTimestamps.has(Date.parse(point.captured_at)));
-  const points = [...observedPoints, ...historyPoints]
-    .sort((left, right) => Date.parse(left.captured_at) - Date.parse(right.captured_at))
-    .map((point) => ({ captured_at: new Date(point.captured_at).toISOString(), stars: point.stars }));
-  return { full_name: observed.full_name, points };
+  const completedDays = history.days
+    .filter((day) => Date.parse(day.end) <= beforeTimestamp)
+    .slice(-windowDays);
+  if (completedDays.length === 0) {
+    return { full_name: history.full_name, source: "github_retained_acquisitions", points: [] };
+  }
+  let cumulative = 0;
+  const points: RepositoryStarPoint[] = [{
+    captured_at: completedDays[0].start,
+    stars: cumulative,
+  }];
+  completedDays.forEach((day) => {
+    cumulative += day.stars_added;
+    points.push({ captured_at: day.end, stars: cumulative });
+  });
+  return { full_name: history.full_name, source: "github_retained_acquisitions", points };
 }
 
 export type StarHistoryStoreOptions = {
   cacheDirectory: string;
   token: string;
   fetchImplementation?: typeof fetch;
+  hourlyRequestLimit?: number;
   now?: () => Date;
   ttlMs?: number;
   /**
@@ -436,16 +436,13 @@ export type StarHistoryStoreOptions = {
   ttlJitterMs?: number;
 };
 
-/**
- * Disk cache in front of the GitHub star history endpoint. Completed days
- * never change, so a cached history is reused until its TTL expires or a
- * request needs coverage older than the cached range.
- */
+/** Disk cache in front of the GitHub star history endpoint. */
 export class StarHistoryStore {
   private readonly cacheDirectory: string;
   private readonly token: string;
   private readonly fetchImplementation: typeof fetch;
   private readonly now: () => Date;
+  private readonly requestBudget: HourlyRequestBudget | null;
   private readonly ttlMs: number;
   private readonly ttlJitterMs: number;
   private readonly inFlight = new Map<string, Promise<GitHubStarHistory>>();
@@ -466,6 +463,9 @@ export class StarHistoryStore {
     this.token = options.token;
     this.fetchImplementation = options.fetchImplementation ?? fetch;
     this.now = options.now ?? (() => new Date());
+    this.requestBudget = options.hourlyRequestLimit === undefined
+      ? null
+      : new HourlyRequestBudget(options.hourlyRequestLimit, this.now);
     this.ttlMs = ttlMs;
     this.ttlJitterMs = ttlJitterMs;
   }
@@ -561,11 +561,16 @@ export class StarHistoryStore {
           coverFrom,
           fetchImplementation: this.fetchImplementation,
           now: this.now,
+          beforeRequest: () => this.requestBudget?.consume(),
         });
         this.writeCache(history);
         return history;
       } catch (error) {
-        if (cached !== null && this.covers(cached, coverFrom)) {
+        if (
+          isRecoverableGitHubRequestError(error)
+          && cached !== null
+          && this.covers(cached, coverFrom)
+        ) {
           process.stderr.write(
             `Serving stale star history for ${fullName}: ${error instanceof Error ? error.message : String(error)}\n`,
           );
@@ -581,10 +586,7 @@ export class StarHistoryStore {
   }
 }
 
-/**
- * Extends every observed series with GitHub's daily star history inside the
- * chart window that ends at `before`.
- */
+/** Uses retained-star acquisitions when available and observed totals otherwise. */
 export async function enrichStarSeries(
   response: StarSeriesResponse,
   before: string,
@@ -594,25 +596,26 @@ export async function enrichStarSeries(
   const beforeTimestamp = requireTimestamp(before, "before");
   const coverFrom = new Date(beforeTimestamp - windowDays * DAY_MS).toISOString();
   const series = await Promise.all(response.series.map(async (observed) => {
-    let history: GitHubStarHistory;
     try {
-      history = await store.read(observed.full_name, coverFrom);
+      const history = await store.read(observed.full_name, coverFrom);
+      const retained = buildRetainedAcquisitionSeries(history, before, windowDays);
+      if (retained.points.length >= 2) {
+        return retained;
+      }
     } catch (error) {
-      if (!(error instanceof StarHistoryLagError)) {
+      if (!isRecoverableGitHubRequestError(error)) {
         throw error;
       }
-      process.stderr.write(`${error.message}; serving observed star series only\n`);
-      return mergeStarSeries(observed, null, before, windowDays);
+      process.stderr.write(
+        `GitHub retained-star history unavailable for ${observed.full_name}: ${error instanceof Error ? error.message : String(error)}; serving observed totals\n`,
+      );
     }
-    return mergeStarSeries(observed, history, before, windowDays);
+    return { ...observed, source: "observed" as const };
   }));
   return parseStarSeriesResponse({ schema_version: "1.0", series });
 }
 
-/**
- * Reduces a fetched history to the completed day-end points the ranking
- * needs, ending no later than `capturedAt`.
- */
+/** Reduces a fetched history to completed retained-star day buckets. */
 export function summarizeStarHistory(
   history: GitHubStarHistory,
   capturedAt: string,
@@ -623,15 +626,18 @@ export function summarizeStarHistory(
     throw new RangeError("windowDays must be a positive integer");
   }
   const anchoredAt = Math.min(capturedTimestamp, Date.parse(history.fetched_at));
-  const from = anchoredAt - windowDays * DAY_MS;
-  const dayEnds = buildDayEndPoints(history).filter((point) => {
-    const timestamp = Date.parse(point.captured_at);
-    return timestamp >= from && timestamp <= anchoredAt;
-  });
+  const days = history.days
+    .filter((day) => Date.parse(day.end) <= anchoredAt)
+    .slice(-windowDays)
+    .map((day) => ({
+      start: day.start,
+      end: day.end,
+      retained_stars_added: day.stars_added,
+    }));
   return {
     full_name: history.full_name,
     captured_at: new Date(anchoredAt).toISOString(),
-    day_ends: dayEnds,
+    days,
   };
 }
 

@@ -21,6 +21,18 @@ function requirePositiveInteger(requestUrl: URL, name: string, maximum: number):
   return parsed;
 }
 
+function requirePositiveIntegerEnvironment(name: string): number {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === "") {
+    throw new Error(`${name} is required to load GitHub star history`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new RangeError(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
 function attachHistoryApi(
   middlewares: Connect.Server,
   httpServer: ViteDevServer["httpServer"] | PreviewServer["httpServer"],
@@ -35,7 +47,13 @@ function attachHistoryApi(
       if (token === undefined || token.trim() === "") {
         throw new Error("GITHUB_TOKEN is required to load GitHub star history");
       }
-      starHistory = new StarHistoryStore({ cacheDirectory: starHistoryDirectory, token });
+      starHistory = new StarHistoryStore({
+        cacheDirectory: starHistoryDirectory,
+        token,
+        hourlyRequestLimit: requirePositiveIntegerEnvironment(
+          "TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT",
+        ),
+      });
     }
     return starHistory;
   }

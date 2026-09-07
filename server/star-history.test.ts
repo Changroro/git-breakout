@@ -3,19 +3,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  buildDayEndPoints,
+  buildRetainedAcquisitionSeries,
   enrichStarSeries,
   fetchGitHubStarHistory,
-  mergeStarSeries,
   parseStarHistoryPage,
   collectStarHistories,
   DEFAULT_RATE_LIMIT_RESERVE,
   GitHubRateLimitError,
+  GitHubRequestError,
   readCoreRateLimit,
   starHistoryFetchBudget,
   STAR_HISTORY_CALLS_PER_REPOSITORY,
   RANKING_HISTORY_WINDOW_DAYS,
-  StarHistoryLagError,
   StarHistoryStore,
   summarizeStarHistory,
   type GitHubStarHistory,
@@ -69,6 +68,8 @@ describe("parseStarHistoryPage", () => {
       .toThrow(TypeError);
     expect(() => parseStarHistoryPage([{ week: WEEK_CURRENT, total: 2, days: [1, 0, 0, 0, 0, 0, 0] }], "owner/repository"))
       .toThrow("total does not match");
+    expect(() => parseStarHistoryPage([{ week: WEEK_CURRENT, total: 0, days: [-1, 1, 0, 0, 0, 0, 0] }], "owner/repository"))
+      .toThrow(TypeError);
     expect(() => parseStarHistoryPage([...sampleWeeks].reverse(), "owner/repository"))
       .toThrow("newest first");
     expect(() => parseStarHistoryPage({ weeks: [] }, "owner/repository")).toThrow(TypeError);
@@ -76,9 +77,8 @@ describe("parseStarHistoryPage", () => {
 });
 
 describe("fetchGitHubStarHistory", () => {
-  it("anchors daily increments to the current stargazer count", async () => {
+  it("reads retained-star acquisition buckets without treating them as historical totals", async () => {
     const fetchImplementation = routedFetch({
-      [REPOSITORY_URL]: () => jsonResponse({ stargazers_count: 100 }),
       [HISTORY_URL]: () => historyResponse(sampleWeeks),
     });
 
@@ -94,7 +94,6 @@ describe("fetchGitHubStarHistory", () => {
       schema_version: "1.0",
       full_name: "owner/repository",
       fetched_at: NOW.toISOString(),
-      stars: 100,
       complete: true,
     });
     expect(history.days).toHaveLength(14);
@@ -108,9 +107,9 @@ describe("fetchGitHubStarHistory", () => {
       end: "2026-09-06T00:00:00.000Z",
       stars_added: 4,
     });
-    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
     expect(fetchImplementation).toHaveBeenCalledWith(
-      REPOSITORY_URL,
+      expect.objectContaining({ href: HISTORY_URL }),
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: "Bearer token",
@@ -132,7 +131,6 @@ describe("fetchGitHubStarHistory", () => {
       days: [0, 0, 0, 0, 0, 0, 0],
     }));
     const fetchImplementation = routedFetch({
-      [REPOSITORY_URL]: () => jsonResponse({ stargazers_count: 1_000 }),
       [HISTORY_URL]: () => historyResponse(fullPage),
       [HISTORY_PAGE_2_URL]: () => historyResponse(olderPage),
     });
@@ -147,7 +145,7 @@ describe("fetchGitHubStarHistory", () => {
 
     expect(history.days).toHaveLength(60 * 7);
     expect(history.complete).toBe(false);
-    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
   });
 
   it("stops paging once the coverage window is satisfied", async () => {
@@ -157,7 +155,6 @@ describe("fetchGitHubStarHistory", () => {
       days: [0, 0, 0, 0, 0, 0, 0],
     }));
     const fetchImplementation = routedFetch({
-      [REPOSITORY_URL]: () => jsonResponse({ stargazers_count: 5 }),
       [HISTORY_URL]: () => historyResponse(fullPage),
     });
 
@@ -170,12 +167,11 @@ describe("fetchGitHubStarHistory", () => {
     });
 
     expect(history.complete).toBe(false);
-    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
   });
 
-  it("drops empty future days from the current week", async () => {
+  it("preserves GitHub-defined buckets so consumers can select completed days", async () => {
     const fetchImplementation = routedFetch({
-      [REPOSITORY_URL]: () => jsonResponse({ stargazers_count: 100 }),
       [HISTORY_URL]: () => historyResponse([
         { week: WEEK_CURRENT, total: 3, days: [1, 2, 0, 0, 0, 0, 0] },
       ]),
@@ -189,7 +185,8 @@ describe("fetchGitHubStarHistory", () => {
       now: () => new Date("2026-08-31T09:00:00.000Z"),
     });
 
-    expect(history.days).toEqual([
+    expect(history.days).toHaveLength(7);
+    expect(history.days.slice(0, 2)).toEqual([
       { start: "2026-08-30T00:00:00.000Z", end: "2026-08-31T00:00:00.000Z", stars_added: 1 },
       { start: "2026-08-31T00:00:00.000Z", end: "2026-09-01T00:00:00.000Z", stars_added: 2 },
     ]);
@@ -197,7 +194,6 @@ describe("fetchGitHubStarHistory", () => {
 
   it("rejects stars reported for days after the fetch time", async () => {
     const fetchImplementation = routedFetch({
-      [REPOSITORY_URL]: () => jsonResponse({ stargazers_count: 100 }),
       [HISTORY_URL]: () => historyResponse([
         { week: WEEK_CURRENT, total: 3, days: [1, 0, 2, 0, 0, 0, 0] },
       ]),
@@ -212,9 +208,8 @@ describe("fetchGitHubStarHistory", () => {
     })).rejects.toThrow("reports stars after");
   });
 
-  it("rejects history that does not cover the fetch time", async () => {
+  it("accepts a history response whose newest bucket predates the fetch", async () => {
     const fetchImplementation = routedFetch({
-      [REPOSITORY_URL]: () => jsonResponse({ stargazers_count: 100 }),
       [HISTORY_URL]: () => historyResponse([sampleWeeks[1]]),
     });
 
@@ -224,12 +219,12 @@ describe("fetchGitHubStarHistory", () => {
       coverFrom: "2026-08-24T00:00:00.000Z",
       fetchImplementation,
       now: () => NOW,
-    })).rejects.toThrow(StarHistoryLagError);
+    })).resolves.toMatchObject({ days: expect.any(Array) });
   });
 
   it("reports GitHub failures with the rate limit reset time", async () => {
     const fetchImplementation = routedFetch({
-      [REPOSITORY_URL]: () => jsonResponse({ message: "rate limited" }, {
+      [HISTORY_URL]: () => jsonResponse({ message: "rate limited" }, {
         status: 403,
         headers: { "x-ratelimit-reset": "1788656180" },
       }),
@@ -246,7 +241,7 @@ describe("fetchGitHubStarHistory", () => {
 
   it("raises a typed error once the hourly quota is spent", async () => {
     const fetchImplementation = routedFetch({
-      [REPOSITORY_URL]: () => jsonResponse({ message: "rate limited" }, {
+      [HISTORY_URL]: () => jsonResponse({ message: "rate limited" }, {
         status: 403,
         headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1788656180" },
       }),
@@ -280,7 +275,6 @@ function sampleHistory(): GitHubStarHistory {
     schema_version: "1.0",
     full_name: "owner/repository",
     fetched_at: NOW.toISOString(),
-    stars: 100,
     complete: true,
     days: [
       { start: "2026-09-02T00:00:00.000Z", end: "2026-09-03T00:00:00.000Z", stars_added: 10 },
@@ -291,56 +285,21 @@ function sampleHistory(): GitHubStarHistory {
   };
 }
 
-describe("buildDayEndPoints", () => {
-  it("walks back from the anchor and skips the day in progress", () => {
-    expect(buildDayEndPoints(sampleHistory())).toEqual([
-      { captured_at: "2026-09-03T00:00:00.000Z", stars: 46 },
-      { captured_at: "2026-09-04T00:00:00.000Z", stars: 66 },
-      { captured_at: "2026-09-05T00:00:00.000Z", stars: 96 },
-    ]);
-  });
-
-  it("rejects increments that exceed the anchored count", () => {
-    const history = sampleHistory();
-    history.stars = 3;
-    expect(() => buildDayEndPoints(history)).toThrow("negative star count");
-  });
-});
-
-describe("mergeStarSeries", () => {
-  it("interleaves day-end points with observations inside the window", () => {
-    const merged = mergeStarSeries(
-      {
-        full_name: "owner/repository",
-        points: [
-          { captured_at: "2026-09-03T12:00:00.000Z", stars: 55 },
-          { captured_at: "2026-09-04T00:00:00.000Z", stars: 67 },
-          { captured_at: "2026-09-04T12:00:00.000Z", stars: 80 },
-          { captured_at: "2026-09-05T02:00:00.000Z", stars: 97 },
-        ],
-      },
+describe("buildRetainedAcquisitionSeries", () => {
+  it("builds a zero-based cumulative series from completed retained-star buckets", () => {
+    expect(buildRetainedAcquisitionSeries(
       sampleHistory(),
-      "2026-09-04T12:00:00.000Z",
+      "2026-09-05T02:00:00.000Z",
       2,
-    );
-
-    expect(merged).toEqual({
+    )).toEqual({
       full_name: "owner/repository",
+      source: "github_retained_acquisitions",
       points: [
-        { captured_at: "2026-09-03T00:00:00.000Z", stars: 46 },
-        { captured_at: "2026-09-03T12:00:00.000Z", stars: 55 },
-        { captured_at: "2026-09-04T00:00:00.000Z", stars: 67 },
-        { captured_at: "2026-09-04T12:00:00.000Z", stars: 80 },
+        { captured_at: "2026-09-03T00:00:00.000Z", stars: 0 },
+        { captured_at: "2026-09-04T00:00:00.000Z", stars: 20 },
+        { captured_at: "2026-09-05T00:00:00.000Z", stars: 50 },
       ],
     });
-  });
-
-  it("rejects mismatched repositories", () => {
-    expect(() => mergeStarSeries(
-      { full_name: "other/repository", points: [] },
-      sampleHistory(),
-      "2026-09-04T12:00:00.000Z",
-    )).toThrow(TypeError);
   });
 });
 
@@ -348,7 +307,6 @@ describe("StarHistoryStore", () => {
   it("caches fetched history on disk and reuses it while fresh", async () => {
     const cacheDirectory = join(mkdtempSync(join(tmpdir(), "star-history-")), "cache");
     const fetchImplementation = routedFetch({
-      [REPOSITORY_URL]: () => jsonResponse({ stargazers_count: 100 }),
       [HISTORY_URL]: () => historyResponse(sampleWeeks),
     });
     const store = new StarHistoryStore({
@@ -362,7 +320,7 @@ describe("StarHistoryStore", () => {
     const second = await store.read("Owner/Repository", "2026-08-24T00:00:00.000Z");
 
     expect(second).toEqual(first);
-    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
     expect(readdirSync(cacheDirectory)).toHaveLength(1);
   });
 
@@ -371,10 +329,9 @@ describe("StarHistoryStore", () => {
     let current = NOW;
     let failing = false;
     const fetchImplementation = routedFetch({
-      [REPOSITORY_URL]: () => failing
+      [HISTORY_URL]: () => failing
         ? jsonResponse({ message: "down" }, { status: 502 })
-        : jsonResponse({ stargazers_count: 100 }),
-      [HISTORY_URL]: () => historyResponse(sampleWeeks),
+        : historyResponse(sampleWeeks),
     });
     const store = new StarHistoryStore({
       cacheDirectory,
@@ -391,7 +348,7 @@ describe("StarHistoryStore", () => {
     const stale = await store.read("owner/repository", "2026-08-24T00:00:00.000Z");
 
     expect(stale).toEqual(fresh);
-    expect(fetchImplementation).toHaveBeenCalledTimes(3);
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
     expect(errors).toHaveBeenCalledWith(expect.stringContaining("Serving stale star history"));
     errors.mockRestore();
   });
@@ -400,7 +357,6 @@ describe("StarHistoryStore", () => {
     const cacheDirectory = join(mkdtempSync(join(tmpdir(), "star-history-")), "cache");
     let current = NOW;
     const fetchImplementation = routedFetch({
-      [REPOSITORY_URL]: () => jsonResponse({ stargazers_count: 100 }),
       [HISTORY_URL]: () => historyResponse(sampleWeeks),
     });
     const store = new StarHistoryStore({
@@ -415,16 +371,21 @@ describe("StarHistoryStore", () => {
     await store.read("owner/repository", "2026-08-24T00:00:00.000Z");
     current = new Date(NOW.getTime() + 49_000);
     await store.read("owner/repository", "2026-08-24T00:00:00.000Z");
-    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
     current = new Date(NOW.getTime() + 100_000);
     await store.read("owner/repository", "2026-08-24T00:00:00.000Z");
-    expect(fetchImplementation).toHaveBeenCalledTimes(4);
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
     expect(() => new StarHistoryStore({
       cacheDirectory,
       token: "token",
       ttlMs: 1_000,
       ttlJitterMs: 1_000,
     })).toThrow(RangeError);
+    expect(() => new StarHistoryStore({
+      cacheDirectory,
+      token: "token",
+      hourlyRequestLimit: DEFAULT_RATE_LIMIT_RESERVE + 1,
+    })).toThrow("between 1 and 500");
   });
 
   it("surfaces GitHub failures when nothing is cached", async () => {
@@ -433,7 +394,7 @@ describe("StarHistoryStore", () => {
       cacheDirectory,
       token: "token",
       fetchImplementation: routedFetch({
-        [REPOSITORY_URL]: () => jsonResponse({ message: "missing" }, { status: 404 }),
+        [HISTORY_URL]: () => jsonResponse({ message: "missing" }, { status: 404 }),
       }),
       now: () => NOW,
     });
@@ -444,9 +405,11 @@ describe("StarHistoryStore", () => {
 });
 
 describe("enrichStarSeries", () => {
-  it("serves observed points only while GitHub has not opened the current week", async () => {
+  it("serves observed totals when GitHub history is unavailable", async () => {
     const read = vi.fn(async () => {
-      throw new StarHistoryLagError("owner/repository", NOW.toISOString());
+      throw new GitHubRequestError(
+        "GitHub repository owner/repository request failed with status 502",
+      );
     });
     const errors = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     const response = await enrichStarSeries(
@@ -465,26 +428,31 @@ describe("enrichStarSeries", () => {
       2,
     );
 
-    expect(response.series[0].points).toEqual([
-      { captured_at: "2026-09-04T02:00:00.000Z", stars: 70 },
-      { captured_at: "2026-09-05T02:00:00.000Z", stars: 97 },
-    ]);
-    expect(errors).toHaveBeenCalledWith(expect.stringContaining("serving observed star series only"));
+    expect(response.series[0]).toEqual({
+      full_name: "owner/repository",
+      source: "observed",
+      points: [
+        { captured_at: "2026-09-04T02:00:00.000Z", stars: 70 },
+        { captured_at: "2026-09-05T02:00:00.000Z", stars: 97 },
+      ],
+    });
+    expect(errors).toHaveBeenCalledWith(expect.stringContaining("serving observed totals"));
     errors.mockRestore();
   });
 
-  it("propagates other GitHub failures", async () => {
+  it("fails loudly when history data is invalid", async () => {
     const read = vi.fn(async () => {
-      throw new Error("GitHub repository owner/repository request failed with status 502");
+      throw new TypeError("GitHub star history response is invalid");
     });
+
     await expect(enrichStarSeries(
       { schema_version: "1.0", series: [{ full_name: "owner/repository", points: [] }] },
       "2026-09-05T02:00:00.000Z",
       { read },
-    )).rejects.toThrow("status 502");
+    )).rejects.toThrow("response is invalid");
   });
 
-  it("extends each observed series with GitHub day-end points", async () => {
+  it("uses retained acquisitions without mixing in observed totals", async () => {
     const read = vi.fn(async () => sampleHistory());
     const response = await enrichStarSeries(
       {
@@ -503,10 +471,11 @@ describe("enrichStarSeries", () => {
       schema_version: "1.0",
       series: [{
         full_name: "owner/repository",
+        source: "github_retained_acquisitions",
         points: [
-          { captured_at: "2026-09-04T00:00:00.000Z", stars: 66 },
-          { captured_at: "2026-09-05T00:00:00.000Z", stars: 96 },
-          { captured_at: "2026-09-05T02:00:00.000Z", stars: 97 },
+          { captured_at: "2026-09-03T00:00:00.000Z", stars: 0 },
+          { captured_at: "2026-09-04T00:00:00.000Z", stars: 20 },
+          { captured_at: "2026-09-05T00:00:00.000Z", stars: 50 },
         ],
       }],
     });
@@ -515,15 +484,23 @@ describe("enrichStarSeries", () => {
 });
 
 describe("summarizeStarHistory", () => {
-  it("keeps completed day-ends inside the ranking window ending at the capture time", () => {
+  it("keeps completed retained-star buckets inside the ranking window", () => {
     const summary = summarizeStarHistory(sampleHistory(), "2026-09-05T02:00:00.000Z", 2);
 
     expect(summary).toEqual({
       full_name: "owner/repository",
       captured_at: "2026-09-05T02:00:00.000Z",
-      day_ends: [
-        { captured_at: "2026-09-04T00:00:00.000Z", stars: 66 },
-        { captured_at: "2026-09-05T00:00:00.000Z", stars: 96 },
+      days: [
+        {
+          start: "2026-09-03T00:00:00.000Z",
+          end: "2026-09-04T00:00:00.000Z",
+          retained_stars_added: 20,
+        },
+        {
+          start: "2026-09-04T00:00:00.000Z",
+          end: "2026-09-05T00:00:00.000Z",
+          retained_stars_added: 30,
+        },
       ],
     });
     expect(RANKING_HISTORY_WINDOW_DAYS).toBe(98);
@@ -533,7 +510,11 @@ describe("summarizeStarHistory", () => {
     const summary = summarizeStarHistory(sampleHistory(), "2026-09-06T02:00:00.000Z");
 
     expect(summary.captured_at).toBe(NOW.toISOString());
-    expect(summary.day_ends.at(-1)).toEqual({ captured_at: "2026-09-05T00:00:00.000Z", stars: 96 });
+    expect(summary.days.at(-1)).toEqual({
+      start: "2026-09-04T00:00:00.000Z",
+      end: "2026-09-05T00:00:00.000Z",
+      retained_stars_added: 30,
+    });
   });
 });
 
@@ -552,16 +533,16 @@ describe("readCoreRateLimit and starHistoryFetchBudget", () => {
       remaining: 4_100,
       reset_at: "2026-09-06T00:56:20.000Z",
     });
-    expect(STAR_HISTORY_CALLS_PER_REPOSITORY).toBe(2);
-    expect(starHistoryFetchBudget(rateLimit)).toBe((4_100 - DEFAULT_RATE_LIMIT_RESERVE) / 2);
-    expect(starHistoryFetchBudget(rateLimit, 100)).toBe(2_000);
+    expect(STAR_HISTORY_CALLS_PER_REPOSITORY).toBe(1);
+    expect(starHistoryFetchBudget(rateLimit)).toBe(4_100 - DEFAULT_RATE_LIMIT_RESERVE);
+    expect(starHistoryFetchBudget(rateLimit, 100)).toBe(4_000);
   });
 
   it("never returns a negative budget and rejects an invalid reserve", () => {
     const rateLimit = { limit: 5_000, remaining: 120, reset_at: "2026-09-06T00:56:20.000Z" };
 
     expect(starHistoryFetchBudget(rateLimit)).toBe(0);
-    expect(starHistoryFetchBudget(rateLimit, 100)).toBe(10);
+    expect(starHistoryFetchBudget(rateLimit, 100)).toBe(20);
     expect(() => starHistoryFetchBudget(rateLimit, -1)).toThrow(RangeError);
   });
 

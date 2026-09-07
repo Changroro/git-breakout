@@ -35,9 +35,7 @@ function requireEnvironment(name: string): string {
 }
 
 const githubToken = requireEnvironment("GITHUB_TOKEN");
-// Completed history days only change once a day, so the collector refreshes
-// each repository roughly daily. The jitter spreads those refreshes across the
-// two-hourly runs instead of re-reading the whole candidate pool at once.
+// Refresh roughly daily and spread requests across the two-hourly runs.
 const starHistoryStore = new StarHistoryStore({
   cacheDirectory: resolve(
     process.env.TREND_RADAR_STAR_HISTORY_CACHE_DIR ?? resolve(process.cwd(), "data", "star-history"),

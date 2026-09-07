@@ -15,6 +15,7 @@ const trafficAnalytics = {
 const redirectConfig = {
   canonicalHost: "gitbreakout.imbch.dev",
   githubToken: "github-token",
+  starHistoryHourlyRequestLimit: 100,
   legacyHosts: [] as string[],
 };
 
@@ -131,6 +132,7 @@ describe("createWebServer", () => {
       ...testDirectories(),
       canonicalHost: "gitbreakout.imbch.dev",
       githubToken: "github-token",
+      starHistoryHourlyRequestLimit: 100,
       legacyHosts: ["github-trend-radar.imbch.dev"],
       internalApiUrl: "http://rest:3000",
       trafficAnalytics,
@@ -408,9 +410,6 @@ describe("createWebServer", () => {
           ],
         }],
       }), { headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ stargazers_count: 10 }), {
-        headers: { "Content-Type": "application/json" },
-      }))
       .mockResolvedValueOnce(new Response(JSON.stringify(emptyStarHistoryPage()), {
         headers: { "Content-Type": "application/json" },
       }))
@@ -435,12 +434,21 @@ describe("createWebServer", () => {
       `${baseUrl}/api/star-series?snapshot=${snapshotId}&repository=owner%2Frepository`,
     );
     expect(seriesResponse.status).toBe(200);
-    const seriesBody = await seriesResponse.json() as { series: Array<{ points: Array<{ stars: number }> }> };
+    expect(seriesResponse.headers.get("cache-control")).toBe("public, max-age=300");
+    const seriesBody = await seriesResponse.json() as {
+      series: Array<{ points: Array<{ captured_at: string; stars: number }>; source: string }>;
+    };
     expect(seriesBody.series).toHaveLength(1);
-    expect(seriesBody.series[0].points.at(-1)).toEqual({ captured_at: "2026-08-27T01:17:00.000Z", stars: 10 });
-    expect(seriesBody.series[0].points.every((point) => point.stars === 10)).toBe(true);
+    expect(seriesBody.series[0].source).toBe("github_retained_acquisitions");
+    expect(seriesBody.series[0].points.at(-1)).toEqual({
+      captured_at: "2026-08-27T00:00:00.000Z",
+      stars: 0,
+    });
+    expect(seriesBody.series[0].points.every((point) => point.stars === 0)).toBe(true);
     expect(fetchImplementation).toHaveBeenCalledWith(
-      "https://api.github.com/repos/owner/repository",
+      expect.objectContaining({
+        href: "https://api.github.com/repos/owner/repository/stargazers/history?per_page=30&page=1",
+      }),
       expect.objectContaining({
         headers: expect.objectContaining({ Authorization: "Bearer github-token" }),
       }),

@@ -14,8 +14,6 @@ export const BREAKOUT_PROVISIONAL_FRACTION = 0.1;
 const BREAKOUT_COHORT_KEY = "breakout:global";
 /** A completed history day older than this is too stale to stand in for a 24-hour window. */
 const HISTORY_DAY_MAX_AGE_MS = 36 * HOUR_MS;
-/** Day boundaries reported by GitHub are matched with this tolerance. */
-const HISTORY_DAY_TOLERANCE_MS = 2 * HOUR_MS;
 
 export type TrendPhase =
   | "spark"
@@ -53,22 +51,21 @@ export type RepositoryEventSignals = {
   };
 };
 
-export type StarHistoryPoint = {
-  /** End of a completed GitHub star history day. */
-  captured_at: string;
-  stars: number;
+export type StarHistoryDay = {
+  /** Start label derived from GitHub's returned week and day position. */
+  start: string;
+  /** End label for the derived bucket. */
+  end: string;
+  /** Stars created that day and still present when the history was fetched. */
+  retained_stars_added: number;
 };
 
-/**
- * Exact star counts at the end of completed days, derived from the GitHub
- * star history endpoint anchored to the repository's current count.
- */
 export type RepositoryStarHistory = {
   full_name: string;
-  /** Moment the history was anchored; every point precedes it. */
+  /** Moment the history was fetched; every retained day ends before it. */
   captured_at: string;
-  /** Ascending, at most one point per day. */
-  day_ends: StarHistoryPoint[];
+  /** Ascending GitHub day buckets for currently retained stars. */
+  days: StarHistoryDay[];
 };
 
 type ScoreComponents = {
@@ -153,8 +150,6 @@ type FeatureRow = {
 type HistoryFeatures = {
   /** Stars gained during the most recent completed day. */
   dailyGain: number | null;
-  /** Stars at the start of that day. */
-  dailyGainStartStars: number | null;
   /** Median daily growth over the completed weeks before the recent window. */
   priorDailyGrowth: number | null;
   priorWeeks: number;
@@ -188,23 +183,24 @@ function validateStarHistory(
   if (anchoredAt > capturedAt) {
     throw new RangeError(`Star history for ${history.full_name} cannot be anchored after capturedAt`);
   }
-  if (!Array.isArray(history.day_ends)) {
-    throw new TypeError(`star_history.${history.full_name}.day_ends must be an array`);
+  if (!Array.isArray(history.days)) {
+    throw new TypeError(`star_history.${history.full_name}.days must be an array`);
   }
-  let previous = Number.NEGATIVE_INFINITY;
-  const dayEnds = history.day_ends.map((point, index) => {
-    const timestamp = parseTimestamp(
-      point.captured_at,
-      `star_history.${history.full_name}.day_ends[${index}].captured_at`,
+  let previousEnd = Number.NEGATIVE_INFINITY;
+  const days = history.days.map((day, index) => {
+    const start = parseTimestamp(day.start, `star_history.${history.full_name}.days[${index}].start`);
+    const end = parseTimestamp(day.end, `star_history.${history.full_name}.days[${index}].end`);
+    requireNonNegativeInteger(
+      day.retained_stars_added,
+      `star_history.${history.full_name}.days[${index}].retained_stars_added`,
     );
-    requireNonNegativeInteger(point.stars, `star_history.${history.full_name}.day_ends[${index}].stars`);
-    if (timestamp <= previous || timestamp > anchoredAt) {
-      throw new RangeError(`Star history for ${history.full_name} must list completed days in ascending order`);
+    if (end <= start || end > anchoredAt || (index > 0 && start !== previousEnd)) {
+      throw new RangeError(`Star history for ${history.full_name} must list contiguous completed days in ascending order`);
     }
-    previous = timestamp;
-    return { captured_at: point.captured_at, stars: point.stars };
+    previousEnd = end;
+    return { start: day.start, end: day.end, retained_stars_added: day.retained_stars_added };
   });
-  return { full_name: history.full_name, captured_at: history.captured_at, day_ends: dayEnds };
+  return { full_name: history.full_name, captured_at: history.captured_at, days };
 }
 
 function median(values: readonly number[]): number {
@@ -213,31 +209,6 @@ function median(values: readonly number[]): number {
   return sorted.length % 2 === 0
     ? (sorted[middle - 1] + sorted[middle]) / 2
     : sorted[middle];
-}
-
-function latestPointAtOrBefore(
-  points: readonly StarHistoryPoint[],
-  timestamp: number,
-): StarHistoryPoint | null {
-  for (let index = points.length - 1; index >= 0; index -= 1) {
-    if (Date.parse(points[index].captured_at) <= timestamp) {
-      return points[index];
-    }
-  }
-  return null;
-}
-
-function pointNear(points: readonly StarHistoryPoint[], timestamp: number): StarHistoryPoint | null {
-  let best: StarHistoryPoint | null = null;
-  let bestDistance = HISTORY_DAY_TOLERANCE_MS;
-  points.forEach((point) => {
-    const distance = Math.abs(Date.parse(point.captured_at) - timestamp);
-    if (distance <= bestDistance) {
-      best = point;
-      bestDistance = distance;
-    }
-  });
-  return best;
 }
 
 /**
@@ -253,41 +224,43 @@ function historyFeatures(
 ): HistoryFeatures {
   const empty: HistoryFeatures = {
     dailyGain: null,
-    dailyGainStartStars: null,
     priorDailyGrowth: null,
     priorWeeks: 0,
   };
   if (history === null) return empty;
-  const points = history.day_ends;
-  const latest = latestPointAtOrBefore(points, capturedAt);
-  const latestTimestamp = latest === null ? null : Date.parse(latest.captured_at);
-  const dayBefore = latestTimestamp === null ? null : pointNear(points, latestTimestamp - DAY_MS);
+  const days = history.days;
+  const latest = days.at(-1) ?? null;
+  const latestEnd = latest === null ? null : Date.parse(latest.end);
   const recentDayUsable = latest !== null
-    && latestTimestamp !== null
-    && dayBefore !== null
-    && capturedAt - latestTimestamp <= HISTORY_DAY_MAX_AGE_MS;
-  const dailyGain = recentDayUsable ? Math.max(0, latest.stars - dayBefore.stars) : null;
-  const dailyGainStartStars = recentDayUsable ? dayBefore.stars : null;
+    && latestEnd !== null
+    && capturedAt - latestEnd <= HISTORY_DAY_MAX_AGE_MS;
+  const dailyGain = recentDayUsable ? latest.retained_stars_added : null;
 
   const recentWindowStart = observedDelta24 !== null
     ? capturedAt - DAY_MS
     : recentDayUsable
-      ? latestTimestamp - DAY_MS
+      ? Date.parse(latest.start)
       : null;
-  const anchor = recentWindowStart === null ? null : latestPointAtOrBefore(points, recentWindowStart);
-  const weeklyGains: number[] = [];
-  if (anchor !== null) {
-    const anchorTimestamp = Date.parse(anchor.captured_at);
-    for (let week = 1; week <= BREAKOUT_HISTORY_WEEKS; week += 1) {
-      const end = pointNear(points, anchorTimestamp - (week - 1) * 7 * DAY_MS);
-      const start = pointNear(points, anchorTimestamp - week * 7 * DAY_MS);
-      if (end === null || start === null) break;
-      weeklyGains.push(Math.max(0, end.stars - start.stars));
+  let anchorIndex = -1;
+  if (recentWindowStart !== null) {
+    for (let index = days.length - 1; index >= 0; index -= 1) {
+      if (Date.parse(days[index].end) <= recentWindowStart) {
+        anchorIndex = index;
+        break;
+      }
     }
+  }
+  const weeklyGains: number[] = [];
+  for (let week = 0; week < BREAKOUT_HISTORY_WEEKS; week += 1) {
+    const endIndex = anchorIndex - week * 7;
+    const startIndex = endIndex - 6;
+    if (startIndex < 0) break;
+    weeklyGains.push(days
+      .slice(startIndex, endIndex + 1)
+      .reduce((sum, day) => sum + day.retained_stars_added, 0));
   }
   return {
     dailyGain,
-    dailyGainStartStars,
     priorDailyGrowth: weeklyGains.length >= BREAKOUT_HISTORY_MIN_WEEKS ? median(weeklyGains) / 7 : null,
     priorWeeks: weeklyGains.length,
   };
@@ -411,9 +384,7 @@ function featureRow(
   const selectedBreakoutEvidence = (selectedStarEvidence?.hours ?? 0) >= 6
     ? selectedStarEvidence
     : null;
-  // Exact observed windows of at least six hours come first. Without one,
-  // GitHub's most recent completed day is an exact 24-hour measurement and
-  // outranks the shorter observed velocity.
+  // Observed windows come first; otherwise use GitHub's latest retained-star day.
   const breakoutStarVelocity = selectedBreakoutEvidence !== null
     ? selectedBreakoutEvidence.delta * 24 / selectedBreakoutEvidence.hours
     : historyEvidence.dailyGain !== null
@@ -467,8 +438,8 @@ function featureRow(
         ? priorStars === null
           ? null
           : selectedBreakoutEvidence.delta / priorStars * 24 / selectedBreakoutEvidence.hours
-        : historyEvidence.dailyGain !== null && historyEvidence.dailyGainStartStars !== null
-          ? historyEvidence.dailyGain / Math.max(historyEvidence.dailyGainStartStars, 1)
+        : historyEvidence.dailyGain !== null
+          ? historyEvidence.dailyGain / Math.max(stars, 1)
           : breakoutStarVelocity / Math.max(stars, 1),
     selfRelativeGrowth: recentDailyGrowth === null || historyEvidence.priorDailyGrowth === null
       ? null

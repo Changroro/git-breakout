@@ -69,6 +69,7 @@ export type WebServerConfig = {
   cacheDirectory: string;
   canonicalHost: string;
   githubToken: string;
+  starHistoryHourlyRequestLimit: number;
   internalApiUrl: string;
   legacyHosts: readonly string[];
   staticDirectory: string;
@@ -461,6 +462,7 @@ export function createWebServer(
   const starHistory = new StarHistoryStore({
     cacheDirectory: resolve(config.cacheDirectory, "star-history"),
     token: config.githubToken,
+    hourlyRequestLimit: config.starHistoryHourlyRequestLimit,
     fetchImplementation,
   });
   const snapshotCaptureTimes = new Map<string, string>();
@@ -671,7 +673,7 @@ export function createWebServer(
           response,
           200,
           await enrichStarSeries(observed, capturedAt, starHistory),
-          "public, max-age=31536000, immutable",
+          "public, max-age=300",
         );
       } catch (error) {
         sendJson(

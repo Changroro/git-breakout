@@ -16,6 +16,17 @@ const response = {
 describe("star series", () => {
   it("parses ordered repository observations", () => {
     expect(parseStarSeriesResponse(response)).toEqual(response);
+    expect(parseStarSeriesResponse({
+      ...response,
+      series: [{ ...response.series[0], source: "github_retained_acquisitions" }],
+    }).series[0].source).toBe("github_retained_acquisitions");
+  });
+
+  it("rejects an unknown series meaning", () => {
+    expect(() => parseStarSeriesResponse({
+      ...response,
+      series: [{ ...response.series[0], source: "historical_totals" }],
+    })).toThrow("source is invalid");
   });
 
   it("rejects observations that are not ordered by capture time", () => {

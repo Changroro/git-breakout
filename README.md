@@ -18,7 +18,7 @@
 
 GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하지만, 이미 알려진 저장소가 반복해서 노출되거나 성장 초기의 프로젝트를 놓칠 수 있다. Git Breakout은 Trending 목록뿐 아니라 최근 생성·푸시된 저장소와 공개 이벤트를 함께 관측하고, 누적 인기도보다 **최근의 변화**에 무게를 둔다.
 
-이 프로젝트는 GitHub 전체 저장소의 완전한 색인이 아니다. API 검색 한계 안에서 후보를 넓게 발견하고, 순위는 반복 관측한 값만 사용한다. Star 그래프는 GitHub Star History API가 제공하는 일 단위 기록과 Git Breakout의 관측을 합쳐 그린다.
+이 프로젝트는 GitHub 전체 저장소의 완전한 색인이 아니다. API 검색 한계 안에서 후보를 넓게 발견한다. Star 그래프는 GitHub API의 현재 유지 스타 획득 기록과 Git Breakout의 시점별 관측을 서로 구분해 사용한다.
 
 ## 화면
 
@@ -41,7 +41,7 @@ GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하
 - **현재 관심도**: Star 속도와 고유 참여자, 활동 종류, 단기 지속성으로 지금의 관심 집중도를 계산한다.
 - **GitHub Trending**: 수집 시점의 Daily·Weekly·Monthly 원본 순위를 별도 탭으로 보존한다.
 - **히스토리**: 2시간 단위 스냅샷 타임라인으로 과거 순위와 당시 저장소 상태를 조회한다.
-- **Star 시계열**: GitHub Star History API의 일 단위 Star 기록과 Git Breakout의 2시간 관측을 하나의 시계열로 합쳐 최근 90일 변화를 표시한다.
+- **Star 시계열**: GitHub API를 쓸 때는 최근 90일에 획득해 현재도 유지된 Star를 표시하고, API를 쓸 수 없을 때만 Git Breakout의 시점별 관측을 표시한다. 서로 의미가 다른 두 값은 한 선으로 합치지 않는다.
 - **아카이브**: 최신 후보군에서 제외된 저장소도 과거 스냅샷과 함께 보존한다.
 - **발굴 성과**: Git Breakout이 먼저 관측한 저장소가 이후 Daily Trending에 진입했는지 검증한다.
 - **탐색 UI**: 저장소 검색, 언어·토픽 필터, 페이지네이션, 읽은 항목 표시, 한·영 전환, 반응형 라이트·다크 테마를 제공한다.
@@ -71,7 +71,7 @@ GH Archive ──────┘                            │
 | GH Archive | Watch, Fork, PR, Issue, Comment, Push, Release | 이벤트가 먼저 증가한 저장소 발견과 관심 폭 측정 |
 | 이전 관측 | 14일 유지 정책을 통과한 후보 | 검색 범위를 벗어난 저장소의 연속 추적 |
 | GitHub GraphQL | Star, Fork, Issue, 언어, Topic, Push 시각 | 현재 메타데이터 검증 |
-| GitHub Star History API | 일 단위 Star 증감 | Star 시계열, 급부상 자기 기준선 (후보 발견에는 사용하지 않음) |
+| GitHub Star History API | 현재 유지된 Star의 일 단위 획득 수 | Star 시계열, 급부상 자기 기준선 (후보 발견에는 사용하지 않음) |
 
 GitHub Search는 쿼리별 최대 1,000개 결과만 반환하므로 Git Breakout의 순위를 “GitHub 전체 저장소의 완전한 순위”로 해석하면 안 된다. 후보군에서 제외된 저장소는 새 관측만 멈추며 기존 스냅샷은 삭제하지 않는다.
 
@@ -104,6 +104,7 @@ score = log1p(observedStarsPerDay) × 55
 - 최근 168시간의 집계 이벤트를 유지하고 1·6·24·72시간 구간을 계산한다.
 - 랭킹 스냅샷과 아카이브는 이벤트 보존 기간과 별도로 유지한다.
 - Star 히스토리는 실행 시작 시점의 남은 API 한도 안에서만 갱신한다. 예산을 넘는 저장소는 기존 캐시를 그대로 쓰고, 캐시도 없으면 근거 없음으로 기록한다.
+- 웹의 Star 히스토리 조회는 `TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT`로 시간당 요청 수를 강제 제한한다. 허용 범위는 1~500이고 운영값은 300이다.
 - GitHub Actions 예약 수집은 사용하지 않는다.
 
 ## 시작하기
@@ -121,7 +122,7 @@ git clone https://github.com/Changroro/git-breakout.git
 cd git-breakout
 npm ci
 GITHUB_TOKEN=your_token npm run collect
-GITHUB_TOKEN=your_token npm run dev
+GITHUB_TOKEN=your_token TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT=300 npm run dev
 ```
 
 브라우저에서 `http://localhost:5173`을 연다. 수집된 스냅샷이 없으면 화면은 데이터가 필요하다는 오류를 명시적으로 표시한다.
