@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
 import { setTimeout as wait } from "node:timers/promises";
 import { rankRepositories } from "../src/lib/ranking.ts";
 import { rankTrendIntelligence } from "../src/lib/trend-intelligence.ts";
@@ -7,6 +8,23 @@ import { BOOTSTRAP_REPOSITORY_NAMES } from "./bootstrap-repositories.ts";
 import { fetchGitHubRepositories } from "./github.ts";
 import { millisecondsUntilCollectionDue, RemoteHistoryApi } from "./remote-history.ts";
 import { selectRetainedRepositoryNames } from "./retention.ts";
+import {
+  collectStarHistories,
+  readCoreRateLimit,
+  starHistoryFetchBudget,
+  StarHistoryStore,
+} from "./star-history.ts";
+
+function readOptionalNonNegativeInteger(name: string): number | null {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === "") {
+    return null;
+  }
+  if (!/^\d+$/.test(value.trim())) {
+    throw new TypeError(`${name} must be a non-negative integer`);
+  }
+  return Number(value.trim());
+}
 
 function requireEnvironment(name: string): string {
   const value = process.env[name];
@@ -17,6 +35,15 @@ function requireEnvironment(name: string): string {
 }
 
 const githubToken = requireEnvironment("GITHUB_TOKEN");
+// Refresh roughly daily and spread requests across the two-hourly runs.
+const starHistoryStore = new StarHistoryStore({
+  cacheDirectory: resolve(
+    process.env.TREND_RADAR_STAR_HISTORY_CACHE_DIR ?? resolve(process.cwd(), "data", "star-history"),
+  ),
+  token: githubToken,
+  ttlMs: 20 * 3_600_000,
+  ttlJitterMs: 6 * 3_600_000,
+});
 const historyApi = new RemoteHistoryApi({
   baseUrl: requireEnvironment("TREND_RADAR_API_URL"),
   collectorToken: requireEnvironment("TREND_RADAR_COLLECTOR_TOKEN"),
@@ -53,6 +80,19 @@ try {
     retainedRepositoryNames,
     ghArchiveRepositoryNames: eventRepositoryNames,
   });
+  // Only refresh as many repositories as the remaining core quota covers.
+  // Everything else keeps its cached history, so a run never overspends and
+  // no backlog carries into the next one.
+  const rateLimit = await readCoreRateLimit(githubToken);
+  const reserve = readOptionalNonNegativeInteger("TREND_RADAR_STAR_HISTORY_RESERVE");
+  const fetchBudget = reserve === null
+    ? starHistoryFetchBudget(rateLimit)
+    : starHistoryFetchBudget(rateLimit, reserve);
+  const starHistory = await collectStarHistories(
+    repositories.map((repository) => repository.fullName),
+    starHistoryStore,
+    { capturedAt: new Date().toISOString(), fetchBudget },
+  );
   const capturedAt = new Date().toISOString();
   const candidates = repositories.map((repository) => createRepositoryCandidate(
     repository,
@@ -65,15 +105,7 @@ try {
     rankedRepositories,
     eventSignals,
     capturedAt,
-    context.repositories.map((repository) => ({
-      full_name: repository.fullName,
-      first_observed_at: repository.firstSeenAt,
-      first_observed_stars: repository.firstObservedStars,
-      first_observation_was_trending: repository.firstObservationWasTrending,
-      official_trending_episode_count: repository.officialTrendingEpisodeCount,
-      baseline_captured_at: repository.growthComparisonCapturedAt,
-      baseline_stars: repository.growthComparisonStars,
-    })),
+    starHistory.histories,
   );
   await historyApi.completeCollection({
     runId,
@@ -82,7 +114,7 @@ try {
     repositories: intelligentRepositories,
   });
   process.stdout.write(
-    `Collected ${intelligentRepositories.length} repositories from ${eventRepositoryNames.length} event candidates after retaining ${retainedRepositoryNames.length} of ${context.repositories.length} observed repositories in ${runId} at ${capturedAt}\n`,
+    `Collected ${intelligentRepositories.length} repositories from ${eventRepositoryNames.length} event candidates after retaining ${retainedRepositoryNames.length} of ${context.repositories.length} observed repositories in ${runId} at ${capturedAt}; star history refreshed ${starHistory.fetched}, reused ${starHistory.reused}, missing ${starHistory.skipped} within a budget of ${fetchBudget} from ${rateLimit.remaining} remaining core calls\n`,
   );
 } catch (error) {
   if (started) {

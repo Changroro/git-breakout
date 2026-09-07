@@ -17,6 +17,14 @@ function readPort(value: string): number {
   return port;
 }
 
+function readPositiveInteger(value: string, name: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new RangeError(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
 function readHostList(value: string | undefined): string[] {
   if (value === undefined || value.trim() === "") {
     return [];
@@ -33,6 +41,11 @@ const publicHost = requireEnvironment("TREND_RADAR_PUBLIC_HOST");
 const server = createWebServer({
   cacheDirectory: resolve(requireEnvironment("TREND_RADAR_WEB_CACHE_DIR")),
   canonicalHost: publicHost,
+  githubToken: requireEnvironment("GITHUB_TOKEN"),
+  starHistoryHourlyRequestLimit: readPositiveInteger(
+    requireEnvironment("TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT"),
+    "TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT",
+  ),
   internalApiUrl: requireEnvironment("TREND_RADAR_INTERNAL_API_URL"),
   legacyHosts: readHostList(process.env.TREND_RADAR_LEGACY_HOSTS),
   staticDirectory: resolve(requireEnvironment("TREND_RADAR_STATIC_DIR")),

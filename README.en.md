@@ -18,7 +18,7 @@
 
 GitHub Trending is useful for seeing what is popular now, but established repositories can appear repeatedly while early-stage growth goes unnoticed. Git Breakout combines Trending with recently created and pushed repositories plus public activity events, then emphasizes **recent change** over lifetime popularity.
 
-Git Breakout is not a complete index of every repository on GitHub. It discovers a broad candidate pool within API search limits and builds rankings and star charts only from values it has observed directly.
+Git Breakout is not a complete index of every repository on GitHub. It discovers a broad candidate pool within API search limits. Star charts keep GitHub's retained-star acquisition records separate from Git Breakout's point-in-time observations.
 
 ## Screenshots
 
@@ -36,12 +36,12 @@ Git Breakout is not a complete index of every repository on GitHub. It discovers
 
 ## Features
 
-- **Breakout** finds unusually accelerating repositories first observed below 10,000 stars with no previous Trending history.
+- **Breakout** compares recent star growth with the repository's own 12-week baseline from the GitHub Star History API and with the candidate pool, so an older repository rising again is treated like a new one.
 - **Momentum** combines observed star growth, lifetime velocity, repository scale, and recent activity for durable strength.
 - **Current heat** measures attention right now through star velocity, unique actors, activity diversity, and short-term persistence.
 - **GitHub Trending** preserves the collected Daily, Weekly, and Monthly source ranks in a separate view.
 - **History** lets visitors inspect past rankings and repository state through two-hour snapshots.
-- **Observed star series** draws sparklines from Git Breakout's own snapshots without an external graph service.
+- **Star series** shows stars acquired in the last 90 days that are still retained when GitHub history is available, and falls back to Git Breakout's point-in-time observations otherwise. The two meanings are never joined into one line.
 - **Archive** retains repositories that leave the latest candidate pool together with their historical snapshots.
 - **Track record** verifies whether repositories observed early by Git Breakout later enter GitHub Trending Daily.
 - **Discovery UI** includes repository search, language and topic filters, pagination, read-state dimming, Korean and English, responsive layouts, and light and dark themes.
@@ -71,6 +71,7 @@ GH Archive ──────┘                               │
 | GH Archive | Watch, Fork, PR, Issue, Comment, Push, and Release events | Early event discovery and breadth of attention |
 | Previous observations | Candidates that pass the 14-day retention policy | Continued tracking beyond search windows |
 | GitHub GraphQL | Stars, forks, issues, language, topics, and push time | Current metadata verification |
+| GitHub Star History API | Daily acquisitions of stars still retained | Star series and the breakout self-baseline (not used for candidate discovery) |
 
 GitHub Search returns at most 1,000 results per query, so Git Breakout must not be described as a complete ranking of every GitHub repository. Leaving the candidate pool stops new observations; it does not delete existing snapshots.
 
@@ -92,7 +93,7 @@ score = log1p(observedStarsPerDay) × 55
 - Observed star velocity begins only after measurements are at least two hours apart.
 - GitHub Trending rank is used for discovery and evidence, not added directly to momentum.
 - Missing evidence remains `insufficient_data` instead of being converted into a zero score.
-- Breakout and Current heat are stored separately under `trend-intelligence-v5-shadow`.
+- Breakout and Current heat are stored separately under `trend-intelligence-v6-shadow`.
 
 See the [public methodology](docs/methodology.md) for formulas and limitations. The question-mark control beside each ranking view also exposes the current methodology in the web app.
 
@@ -102,6 +103,8 @@ See the [public methodology](docs/methodology.md) for formulas and limitations. 
 - A server file lock and database lease prevent overlapping runs.
 - Aggregated events are retained for 168 hours and evaluated over 1, 6, 24, and 72-hour windows.
 - Ranking snapshots and archived observations are retained independently from raw event windows.
+- Star history is refreshed only within the API quota remaining when a run starts. Repositories beyond that budget keep their cached history, and those without one are recorded as missing evidence.
+- Web star-history requests are hard-capped by `TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT`; the accepted range is 1-500 and production uses 300 requests per hour.
 - Scheduled collection does not use GitHub Actions.
 
 ## Getting started
@@ -110,7 +113,7 @@ See the [public methodology](docs/methodology.md) for formulas and limitations. 
 
 - Node.js 22 or newer
 - npm
-- A GitHub API token that can read public repository metadata
+- A GitHub API token that can read public repository metadata (used by both the collector and the web server)
 
 ### Local development
 
@@ -119,7 +122,7 @@ git clone https://github.com/Changroro/git-breakout.git
 cd git-breakout
 npm ci
 GITHUB_TOKEN=your_token npm run collect
-npm run dev
+GITHUB_TOKEN=your_token TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT=300 npm run dev
 ```
 
 Open `http://localhost:5173`. If no snapshot has been collected, the UI fails loudly with a data requirement instead of silently substituting sample data.

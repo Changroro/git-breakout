@@ -772,9 +772,16 @@ function formatStarGain(series: RepositoryStarSeries, locale: Locale = "en"): st
     return translate(locale, "repository.trackingStarted");
   }
   const gain = series.points[series.points.length - 1].stars - series.points[0].stars;
-  return translate(locale, "repository.gainedSinceTracked", {
-    gain: `${gain > 0 ? "+" : ""}${formatCompactNumber(gain, locale)}`,
-  });
+  return translate(
+    locale,
+    series.source === "github_retained_acquisitions"
+      ? "repository.retainedStarsInWindow"
+      : "repository.observedGainSinceTracked",
+    {
+      days: String(series.points.length - 1),
+      gain: `${gain > 0 ? "+" : ""}${formatCompactNumber(gain, locale)}`,
+    },
+  );
 }
 
 function resolveRepositorySeries(
@@ -850,6 +857,18 @@ function RepositoryStarGrowth({
   const latest = series.points[series.points.length - 1];
   const gain = latest.stars - first.stars;
   const label = formatStarGain(series, locale);
+  const title = series.source === "github_retained_acquisitions"
+    ? t("repository.retainedStarsTitle", {
+        end: formatCapturedAt(latest.captured_at, locale),
+        gain: formatCompactNumber(gain, locale),
+        start: formatCapturedAt(first.captured_at, locale),
+      })
+    : t("repository.observedStarsTitle", {
+        end: formatCapturedAt(latest.captured_at, locale),
+        endStars: formatCompactNumber(latest.stars, locale),
+        start: formatCapturedAt(first.captured_at, locale),
+        startStars: formatCompactNumber(first.stars, locale),
+      });
   const sparkline = buildSparklinePoints(series.points, 108, 44, 4);
   const latestCoordinate = sparkline.split(" ").at(-1);
   if (latestCoordinate === undefined) {
@@ -867,7 +886,7 @@ function RepositoryStarGrowth({
         role="img"
         viewBox="0 0 108 44"
       >
-        <title>{`${formatCapturedAt(first.captured_at, locale)}: ${first.stars} stars; ${formatCapturedAt(latest.captured_at, locale)}: ${latest.stars} stars; change ${gain}`}</title>
+        <title>{title}</title>
         <line className="star-sparkline-baseline" x1="4" x2="104" y1="40" y2="40" />
         <polyline
           className="star-sparkline-line"
@@ -1476,22 +1495,21 @@ function MethodologyDialog({
               <section>
                 <div className="methodology-section-title">
                   <h3>급부상과 현재 관심도</h3>
-                  <code>trend-intelligence-v5-shadow</code>
+                  <code>trend-intelligence-v6-shadow</code>
                 </div>
                 <p>확인 가능한 구성요소의 동일 가중 평균에 100을 곱합니다. 누락된 값은 0으로 처리하지 않고 계산에서 제외합니다.</p>
                 <div className="methodology-models">
                   <div>
                     <h4>급부상</h4>
                     <p>
-                      처음 관측했을 때 스타가 1만 개 미만이고 당시 공식 Trending에 없었으며, 이전 수집 시점까지
-                      Trending 진입 이력이 없는 저장소만 계산합니다. 실제 스타 증가가 최소 6시간 동안 관측되어야 합니다.
-                      수집 공백으로 정확한 6시간 구간을 만들 수 없을 때는 2시간 이상 떨어진 두 관측값으로 계산한
-                      일일 환산 속도를 저신뢰도 근거로 사용합니다.
+                      최근 스타 증가가 양수인 후보를 절대 스타 수나 과거 Trending 이력으로 제외하지 않습니다.
+                      6시간 이상 직접 관측한 구간을 우선 사용하고, 없으면 GitHub의 최근 완료된 유지 스타 획득일,
+                      그마저 없으면 2시간 이상 떨어진 관측값의 일일 환산 속도를 임시 근거로 사용합니다.
                     </p>
                     <ul>
-                      <li>스타 속도: 선택한 구간의 증가량을 24시간 기준으로 환산해 전체 신규 후보와 비교합니다.</li>
-                      <li>상대 성장: 스타 증가량을 직전 스타 수로 나눈 뒤 24시간 기준으로 환산합니다.</li>
-                      <li>자기 성장 가속: 7일 기준점이 있으면 최근 24시간 증가량과 이전 일평균 증가량을 비교합니다.</li>
+                      <li>스타 속도: 선택한 구간의 증가량을 24시간 기준으로 환산해 전체 후보와 비교합니다.</li>
+                      <li>상대 성장: 관측 증가량은 직전 스타 수에, 유지 스타 획득량은 현재 스타 수에 비교합니다.</li>
+                      <li>자기 성장 가속: 최근 24시간 관측 또는 유지 스타 획득일을 이전 최대 12주 일평균 중앙값과 비교합니다.</li>
                       <li>스타 가속: 시간당 6시간 증가율과 24시간 증가율, 또는 1시간과 6시간 증가율을 비교합니다.</li>
                       <li>참여자 가속과 참여 폭: 최신 GitHub 이벤트가 있으면 고유 참여자의 변화와 규모를 점수에 반영합니다.</li>
                     </ul>
@@ -1591,7 +1609,7 @@ function MethodologyDialog({
           <section>
             <div className="methodology-section-title">
               <h3>Breakout and Current Heat</h3>
-              <code>trend-intelligence-v5-shadow</code>
+              <code>trend-intelligence-v6-shadow</code>
             </div>
             <p>
               Each score is 100 times the equal-weight mean of its known components. Missing
@@ -1601,15 +1619,15 @@ function MethodologyDialog({
               <div>
                 <h4>Breakout</h4>
                 <p>
-                  A repository is eligible only when it was first observed below 10k stars, was not
-                  already on official Trending, and has no prior Trending episode. At least six hours
-                  of observed star growth is required. During a collection gap, a daily rate calculated
-                  from observations at least two hours apart supplies temporary low-confidence evidence.
+                  Candidates with positive recent star growth are not excluded by absolute star count
+                  or prior Trending history. A directly observed window of at least six hours comes first,
+                  followed by GitHub's latest completed retained-star acquisition day, then a daily rate
+                  derived from observations at least two hours apart.
                 </p>
                 <ul>
-                  <li>Star velocity: selected star growth normalized to 24 hours across all emerging candidates.</li>
-                  <li>Relative growth: star delta ÷ prior stars, normalized to 24 hours.</li>
-                  <li>Self acceleration: when available, current 24h growth ÷ the preceding roughly seven-day daily average.</li>
+                  <li>Star velocity: selected star growth normalized to 24 hours across all candidates.</li>
+                  <li>Relative growth: observed deltas use prior stars; retained acquisitions use the current star count.</li>
+                  <li>Self acceleration: recent observed or retained-acquisition growth ÷ the daily median of up to 12 prior weeks.</li>
                   <li>Star acceleration: 6h/hour − 24h/hour, or 1h − 6h/hour.</li>
                   <li>Actor acceleration and organic breadth: optional evidence from fresh GitHub events.</li>
                 </ul>

@@ -1,11 +1,17 @@
+/** Days of star history shown in each sparkline, ending at the snapshot capture time. */
+export const STAR_SERIES_WINDOW_DAYS = 90;
+
 export type RepositoryStarPoint = {
   captured_at: string;
   stars: number;
 };
 
+export type RepositoryStarSeriesSource = "github_retained_acquisitions" | "observed";
+
 export type RepositoryStarSeries = {
   full_name: string;
   points: RepositoryStarPoint[];
+  source?: RepositoryStarSeriesSource;
 };
 
 export type StarSeriesResponse = {
@@ -25,6 +31,13 @@ export function parseStarSeriesResponse(value: unknown): StarSeriesResponse {
   value.series.forEach((series, seriesIndex) => {
     if (!isRecord(series) || typeof series.full_name !== "string" || !Array.isArray(series.points)) {
       throw new TypeError(`Star series ${seriesIndex} is invalid`);
+    }
+    if (
+      series.source !== undefined
+      && series.source !== "github_retained_acquisitions"
+      && series.source !== "observed"
+    ) {
+      throw new TypeError(`Star series ${seriesIndex} source is invalid`);
     }
     const key = series.full_name.toLowerCase();
     if (!/^[^/\s]+\/[^/\s]+$/.test(series.full_name) || names.has(key)) {

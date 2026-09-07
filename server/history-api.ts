@@ -3,6 +3,7 @@ import type { Connect, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { loadRepositoryCard } from "./card-cache.ts";
 import { HistoryDatabase } from "./history.ts";
 import { buildLocalRankingPage, buildLocalRepositorySearch } from "./local-ranking.ts";
+import { enrichStarSeries, StarHistoryStore } from "./star-history.ts";
 import {
   parseGitHubTrendingPeriod,
   parseRankingView,
@@ -20,12 +21,42 @@ function requirePositiveInteger(requestUrl: URL, name: string, maximum: number):
   return parsed;
 }
 
+function requirePositiveIntegerEnvironment(name: string): number {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === "") {
+    throw new Error(`${name} is required to load GitHub star history`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new RangeError(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
 function attachHistoryApi(
   middlewares: Connect.Server,
   httpServer: ViteDevServer["httpServer"] | PreviewServer["httpServer"],
 ): void {
   const database = new HistoryDatabase(resolve(process.cwd(), "data", "ranking-history.sqlite"));
   const cardCacheDirectory = resolve(process.cwd(), "data", "repository-cards");
+  const starHistoryDirectory = resolve(process.cwd(), "data", "star-history");
+  let starHistory: StarHistoryStore | null = null;
+  function requireStarHistoryStore(): StarHistoryStore {
+    if (starHistory === null) {
+      const token = process.env.GITHUB_TOKEN;
+      if (token === undefined || token.trim() === "") {
+        throw new Error("GITHUB_TOKEN is required to load GitHub star history");
+      }
+      starHistory = new StarHistoryStore({
+        cacheDirectory: starHistoryDirectory,
+        token,
+        hourlyRequestLimit: requirePositiveIntegerEnvironment(
+          "TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT",
+        ),
+      });
+    }
+    return starHistory;
+  }
   httpServer?.once("close", () => database.close());
 
   middlewares.use("/api/timeline", (request, response) => {
@@ -225,7 +256,7 @@ function attachHistoryApi(
     }
   });
 
-  middlewares.use("/api/star-series", (request, response) => {
+  middlewares.use("/api/star-series", async (request, response) => {
     response.setHeader("Content-Type", "application/json; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
     if (request.method !== "GET") {
@@ -251,8 +282,10 @@ function attachHistoryApi(
         response.end(JSON.stringify({ error: `Snapshot ${snapshotId} does not exist` }));
         return;
       }
+      const observed = database.readStarSeries(repositoryNames, snapshot.captured_at);
+      const series = await enrichStarSeries(observed, snapshot.captured_at, requireStarHistoryStore());
       response.statusCode = 200;
-      response.end(JSON.stringify(database.readStarSeries(repositoryNames, snapshot.captured_at)));
+      response.end(JSON.stringify(series));
     } catch (error) {
       response.statusCode = error instanceof TypeError ? 400 : 500;
       response.end(JSON.stringify({
