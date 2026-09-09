@@ -222,7 +222,7 @@ async function searchRepositoryNames(
   let page = 1;
   let expectedCount: number | null = null;
 
-  while (names.length < (expectedCount ?? SEARCH_RESULT_LIMIT)) {
+  while ((page - 1) * SEARCH_PAGE_SIZE < (expectedCount ?? SEARCH_RESULT_LIMIT)) {
     const url = new URL("https://api.github.com/search/repositories");
     url.search = new URLSearchParams({
       q: query,

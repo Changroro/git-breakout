@@ -160,6 +160,22 @@ describe("GitHub collection", () => {
     expect(requests.every((request) => request.searchParams.get("per_page") === "100")).toBe(true);
   });
 
+  it("stops at the GitHub search page limit when one page has fewer items", async () => {
+    const pages: number[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(String(input));
+      const page = Number(url.searchParams.get("page"));
+      pages.push(page);
+      if (page > 10) return Response.json({ message: "Only the first 1000 search results are available" }, { status: 422 });
+      const prefix = url.searchParams.get("q")?.startsWith("created:") ? "new" : "active";
+      return Response.json({ total_count: 2000, items: Array.from({ length: page === 6 ? 99 : 100 }, (_, index) => ({ full_name: `${prefix}/repository-${page}-${index}` })) });
+    });
+    const result = await searchGitHubRepositoryNames("token", "2026-09-09T00:00:00Z", fetchMock as typeof fetch);
+    expect(result).toHaveLength(1998);
+    expect(Math.max(...pages)).toBe(10);
+    expect(pages).toHaveLength(20);
+  });
+
   it("merges official, search, retained, and GH Archive sources", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input);
