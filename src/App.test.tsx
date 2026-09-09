@@ -9,6 +9,7 @@ import {
   InitialLoadingState,
   LanguageSwitcher,
   RANKING_VIEW_ORDER,
+  rankingRequestKey,
   RankingViewHeading,
   rankingViewCopy,
   RepositoryThumbnailFallback,
@@ -24,13 +25,15 @@ import { I18nProvider, translate } from "./lib/i18n";
 
 describe("ranking view guidance", () => {
   it("orders the ranking views around discovery first", () => {
-    expect(RANKING_VIEW_ORDER).toEqual(["breakout", "momentum", "current", "github"]);
+    expect(RANKING_VIEW_ORDER).toEqual(["breakout", "resurgence", "momentum", "current", "github"]);
   });
 
   it("explains each ranking model in plain language", () => {
     expect(rankingViewCopy("momentum").description).toContain("Durable overall strength");
     expect(rankingViewCopy("breakout").description).toContain("GitHub retained-star acquisition baseline");
-    expect(rankingViewCopy("breakout").description).toContain("rising again after a quiet period");
+    expect(rankingViewCopy("resurgence").description).toContain("seven quiet days");
+    expect(rankingViewCopy("breakout", "en", false).title).toBe("Earlier breakout");
+    expect(rankingViewCopy("breakout", "ko", true).title).toBe("신규 발굴");
     expect(rankingViewCopy("breakout").description).toContain("at least two hours");
     expect(rankingViewCopy("current").description).toContain("Absolute attention now");
     expect(rankingViewCopy("github").description).toContain("GitHub Trending rank");
@@ -78,7 +81,9 @@ describe("application navigation", () => {
     expect(buildArchiveHref(2, " rust ")).toBe("?page=2&query=rust");
   });
 
-  it("falls back from an empty latest Breakout view only without filters", () => {
+  it("falls back only for an empty legacy view, preserving new discovery and resurgence views", () => {
+    expect(shouldFallbackToMomentum({ isLatestSnapshot: true, view: "breakout", filters: { language: null, topic: null }, matchingCount: 0, classificationAvailable: true })).toBe(false);
+    expect(shouldFallbackToMomentum({ isLatestSnapshot: true, view: "resurgence", filters: { language: null, topic: null }, matchingCount: 0 })).toBe(false);
     expect(shouldFallbackToMomentum({
       isLatestSnapshot: true,
       view: "breakout",
@@ -256,7 +261,7 @@ describe("TrackRecordSection", () => {
     expect(markup).toContain("log1p(value) × 55");
     expect(markup).toContain("Official Trending signal");
     expect(markup).toContain("24h → 6h → 1h");
-    expect(markup).toContain("trend-intelligence-v6-shadow");
+    expect(markup).toContain("trend-intelligence-v7-shadow");
   });
 });
 
@@ -289,4 +294,9 @@ describe("DiscoveryEvidenceBadge", () => {
     expect(formatObservedLeadDuration(30)).toBe("1.3d");
     expect(() => formatObservedLeadDuration(-1)).toThrow("non-negative");
   });
+});
+
+it("recognizes the same loaded ranking despite URL ordering or sharing metadata", () => {
+  expect(rankingRequestKey("snapshot", "")).toBe(rankingRequestKey("snapshot", "?snapshot=snapshot&page=1&share_rank=3"));
+  expect(rankingRequestKey("snapshot", "?view=resurgence")).not.toBe(rankingRequestKey("snapshot", "?view=breakout"));
 });

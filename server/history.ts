@@ -1,15 +1,15 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
-import type { HistoryResponse, RankingSnapshot } from "../src/lib/history.ts";
+import type { HistoryResponse, RankingSnapshot, TimelineResponse } from "../src/lib/history.ts";
 import {
   parseArchivePageResponse,
   type ArchivePageResponse,
-  type ArchiveRepository,
 } from "../src/lib/archive.ts";
 import { rankRepositories, type RepositoryCandidate, type RankedRepository } from "../src/lib/ranking.ts";
 import {
   parseStarSeriesResponse,
+  STAR_SERIES_WINDOW_DAYS,
   type StarSeriesResponse,
 } from "../src/lib/star-series.ts";
 import {
@@ -156,6 +156,9 @@ export class HistoryDatabase {
   }
 
   private migrateLegacyRepositoryPayloads(): void {
+    const version = this.database.pragma("user_version", { simple: true });
+    if (version === 1) return;
+    if (version !== 0) throw new Error(`Unsupported history schema version ${version}`);
     const rows = this.database.prepare(`
       SELECT snapshot_id, full_name, payload_json
       FROM ranking_snapshot_repositories
@@ -185,6 +188,7 @@ export class HistoryDatabase {
           update.run(JSON.stringify(repository), row.snapshot_id, row.full_name);
         }
       });
+      this.database.pragma("user_version = 1");
     })();
   }
 
@@ -398,8 +402,9 @@ export class HistoryDatabase {
       JOIN ranking_snapshots AS snapshots ON snapshots.id = repositories.snapshot_id
       WHERE repositories.full_name COLLATE NOCASE IN (${placeholders})
         AND snapshots.captured_at <= ?
+        AND snapshots.captured_at >= ?
       ORDER BY snapshots.captured_at ASC
-    `).all(...fullNames, before) as Array<{
+    `).all(...fullNames, before, new Date(Date.parse(before) - STAR_SERIES_WINDOW_DAYS * 86_400_000).toISOString()) as Array<{
       full_name: string;
       captured_at: string;
       payload_json: string;
@@ -562,6 +567,27 @@ export class HistoryDatabase {
     });
   }
 
+  readTimeline(): TimelineResponse {
+    const snapshots = this.database.prepare(`
+      SELECT snapshots.id, snapshots.captured_at, snapshots.source,
+        (SELECT count(*) FROM ranking_snapshot_repositories repositories WHERE repositories.snapshot_id = snapshots.id) AS repository_count
+      FROM ranking_snapshots snapshots WHERE snapshots.status = 'completed'
+      ORDER BY snapshots.captured_at
+    `).all() as TimelineResponse["snapshots"];
+    if (snapshots.length === 0) throw new Error("No completed ranking snapshots are available");
+    if (snapshots.some(snapshot => snapshot.repository_count === 0)) throw new Error("Completed snapshot has no repositories");
+    return { schema_version: "1.0", snapshots };
+  }
+
+  readSnapshot(id: string): RankingSnapshot | undefined {
+    const metadata = this.database.prepare("SELECT id, captured_at, source FROM ranking_snapshots WHERE id = ? AND status = 'completed'").get(id) as SnapshotRow | undefined;
+    if (metadata === undefined) return undefined;
+    const repositories = (this.database.prepare("SELECT payload_json FROM ranking_snapshot_repositories WHERE snapshot_id = ? ORDER BY rank").all(id) as RepositoryRow[])
+      .map(row => JSON.parse(row.payload_json) as RankedRepository);
+    if (repositories.length === 0) throw new Error("Completed snapshot has no repositories");
+    return { ...metadata, repositories };
+  }
+
   readHistory(): HistoryResponse {
     const snapshotRows = this.database
       .prepare(`
@@ -604,43 +630,21 @@ export class HistoryDatabase {
     if (query !== null && query.length > 200) {
       throw new TypeError("Archive query must contain at most 200 characters");
     }
-    const history = this.readHistory();
-    const latest = history.snapshots.at(-1);
-    if (latest === undefined) {
-      throw new Error("No completed ranking snapshots are available");
-    }
-    const activeNames = new Set(
-      latest.repositories.map((repository) => repository.full_name.toLocaleLowerCase("en-US")),
-    );
-    const lastObserved = new Map<string, ArchiveRepository>();
-    history.snapshots.forEach((snapshot) => {
-      snapshot.repositories.forEach((repository) => {
-        lastObserved.set(repository.full_name.toLocaleLowerCase("en-US"), {
-          ...repository,
-          topics: [...repository.topics],
-          observation_sources: repository.observation_sources === null
-            ? null
-            : [...repository.observation_sources],
-          metrics: { ...repository.metrics },
-          official_ranks: { ...repository.official_ranks },
-          growth: { ...repository.growth },
-          momentum: {
-            ...repository.momentum,
-            reasons: [...repository.momentum.reasons],
-            components: { ...repository.momentum.components },
-          },
-          last_snapshot_id: snapshot.id,
-          last_observed_at: snapshot.captured_at,
-        });
-      });
-    });
-    const archived = [...lastObserved.entries()]
-      .filter(([name]) => !activeNames.has(name))
-      .map(([, repository]) => repository)
-      .sort((left, right) => (
-        Date.parse(right.last_observed_at) - Date.parse(left.last_observed_at)
-        || left.full_name.localeCompare(right.full_name)
-      ));
+    const latest = this.readTimeline().snapshots.at(-1)!;
+    const lastRows = this.database.prepare(`
+      SELECT snapshot_id, captured_at, payload_json FROM (
+        SELECT repositories.snapshot_id, snapshots.captured_at, repositories.payload_json,
+          row_number() over (partition by repositories.full_name COLLATE NOCASE order by snapshots.captured_at desc) AS position
+        FROM ranking_snapshot_repositories repositories
+        JOIN ranking_snapshots snapshots ON snapshots.id = repositories.snapshot_id
+      ) WHERE position = 1 AND snapshot_id <> ?
+    `).all(latest.id) as Array<{ snapshot_id: string; captured_at: string; payload_json: string }>;
+    const archived = lastRows.map(row => ({
+      ...JSON.parse(row.payload_json) as RankedRepository,
+      last_snapshot_id: row.snapshot_id,
+      last_observed_at: row.captured_at,
+    })).sort((left, right) => Date.parse(right.last_observed_at) - Date.parse(left.last_observed_at)
+      || left.full_name.localeCompare(right.full_name));
     const terms = query?.trim().toLocaleLowerCase("en-US").split(/\s+/).filter(Boolean) ?? [];
     const matching = archived.filter((repository) => {
       const searchable = [

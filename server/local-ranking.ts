@@ -16,7 +16,7 @@ import type { TrackRecord } from "../src/lib/discovery-track-record.ts";
 
 const MAX_TOPIC_FACETS = 500;
 
-function emptyTrackRecord(generatedAt: string): TrackRecord {
+export function emptyTrackRecord(generatedAt: string): TrackRecord {
   return {
     schema_version: "1.0",
     evidence_started_at: null,
@@ -57,7 +57,9 @@ function repositoriesForView(
   }
   const scoreFor = view === "breakout"
     ? (repository: typeof filtered[number]) => trendIntelligenceFor(repository)?.breakout.score ?? null
-    : (repository: typeof filtered[number]) => trendIntelligenceFor(repository)?.current_heat.score ?? null;
+    : view === "resurgence"
+      ? (repository: typeof filtered[number]) => trendIntelligenceFor(repository)?.resurgence?.score ?? null
+      : (repository: typeof filtered[number]) => trendIntelligenceFor(repository)?.current_heat.score ?? null;
   return filtered
     .flatMap((repository) => {
       const score = scoreFor(repository);
@@ -125,6 +127,7 @@ export function buildLocalRankingPage({
     ),
     languages: facets.languages,
     topics: boundedTopics(facets.topics, filters.topic),
+    classification_available: snapshot.repositories.some(repository => trendIntelligenceFor(repository)?.score_version === "trend-intelligence-v7-shadow"),
     track_record: emptyTrackRecord(snapshot.captured_at),
     repositories: candidates.slice(start, start + pageSize).map((repository) => ({
       ...repository,

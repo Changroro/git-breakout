@@ -36,7 +36,8 @@ Git Breakout is not a complete index of every repository on GitHub. It discovers
 
 ## Features
 
-- **Breakout** compares recent star growth with the repository's own 12-week baseline from the GitHub Star History API and with the candidate pool, so an older repository rising again is treated like a new one.
+- **New discoveries** compares repositories first observed below 10,000 stars without recorded or current Trending appearances.
+- **Resurgence** separately compares repositories with earlier activity, seven quiet days and renewed growth, supported by completed daily acquisition history.
 - **Momentum** combines observed star growth, lifetime velocity, repository scale, and recent activity for durable strength.
 - **Current heat** measures attention right now through star velocity, unique actors, activity diversity, and short-term persistence.
 - **GitHub Trending** preserves the collected Daily, Weekly, and Monthly source ranks in a separate view.
@@ -93,7 +94,7 @@ score = log1p(observedStarsPerDay) × 55
 - Observed star velocity begins only after measurements are at least two hours apart.
 - GitHub Trending rank is used for discovery and evidence, not added directly to momentum.
 - Missing evidence remains `insufficient_data` instead of being converted into a zero score.
-- Breakout and Current heat are stored separately under `trend-intelligence-v6-shadow`.
+- New discoveries, Resurgence and Current heat are stored separately under `trend-intelligence-v7-shadow`.
 
 See the [public methodology](docs/methodology.md) for formulas and limitations. The question-mark control beside each ranking view also exposes the current methodology in the web app.
 

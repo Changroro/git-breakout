@@ -61,17 +61,13 @@ let started = false;
 try {
   await historyApi.startCollection(runId, startedAt);
   started = true;
-  const context = await historyApi.readCollectionContext();
-  const eventSignals = await historyApi.readEventSignals();
-  const observationsByName = new Map(
-    context.repositories.map((repository) => [repository.fullName.toLowerCase(), repository.observations]),
-  );
-  const retainedRepositoryNames = context.latestCapturedAt === null
+  const [summary, eventSignals] = await Promise.all([historyApi.readCollectionSummary(), historyApi.readEventSignals()]);
+  const retainedRepositoryNames = summary.latestCapturedAt === null
     ? [...BOOTSTRAP_REPOSITORY_NAMES]
     : selectRetainedRepositoryNames(
-      context.repositories,
-      context.latestCapturedAt,
-      context.retentionPolicy,
+      summary.repositories,
+      summary.latestCapturedAt,
+      summary.retentionPolicy,
     );
   const eventRepositoryNames = eventSignals.map((signals) => signals.full_name);
   const repositories = await fetchGitHubRepositories({
@@ -83,7 +79,15 @@ try {
   // Only refresh as many repositories as the remaining core quota covers.
   // Everything else keeps its cached history, so a run never overspends and
   // no backlog carries into the next one.
-  const rateLimit = await readCoreRateLimit(githubToken);
+  const [observations, rateLimit] = await Promise.all([
+    historyApi.readRepositoryObservations(repositories.map(repository => repository.fullName)),
+    readCoreRateLimit(githubToken),
+  ]);
+  const observationsByName = new Map(observations.map(repository => [repository.fullName.toLowerCase(), repository.observations]));
+  const knownNames = new Set(summary.repositories.map(repository => repository.fullName.toLowerCase()));
+  if (repositories.some(repository => knownNames.has(repository.fullName.toLowerCase()) && !observationsByName.has(repository.fullName.toLowerCase()))) {
+    throw new Error("Known repositories are missing their requested observations");
+  }
   const reserve = readOptionalNonNegativeInteger("TREND_RADAR_STAR_HISTORY_RESERVE");
   const fetchBudget = reserve === null
     ? starHistoryFetchBudget(rateLimit)
@@ -98,14 +102,26 @@ try {
     repository,
     capturedAt,
     observationsByName.get(repository.fullName.toLowerCase()) ?? [],
-    context.intervalMinutes,
+    summary.intervalMinutes,
   ));
   const rankedRepositories = rankRepositories(candidates, capturedAt);
+  const discoveryHistory = new Map(summary.repositories.map(repository => [repository.fullName.toLowerCase(), repository]));
   const intelligentRepositories = rankTrendIntelligence(
     rankedRepositories,
     eventSignals,
     capturedAt,
     starHistory.histories,
+    rankedRepositories.map(repository => {
+      const previous = discoveryHistory.get(repository.full_name.toLowerCase());
+      const currentlyTrending = Object.values(repository.official_ranks).some(rank => rank !== null);
+      return {
+        full_name: repository.full_name,
+        first_observed_at: previous?.firstSeenAt ?? capturedAt,
+        first_observed_stars: previous?.firstObservedStars ?? repository.metrics.stars!,
+        first_observation_was_trending: previous?.firstObservationWasTrending ?? currentlyTrending,
+        official_trending_episode_count: previous?.officialTrendingEpisodeCount ?? (currentlyTrending ? 1 : 0),
+      };
+    }),
   );
   await historyApi.completeCollection({
     runId,
@@ -114,7 +130,7 @@ try {
     repositories: intelligentRepositories,
   });
   process.stdout.write(
-    `Collected ${intelligentRepositories.length} repositories from ${eventRepositoryNames.length} event candidates after retaining ${retainedRepositoryNames.length} of ${context.repositories.length} observed repositories in ${runId} at ${capturedAt}; star history refreshed ${starHistory.fetched}, reused ${starHistory.reused}, missing ${starHistory.skipped} within a budget of ${fetchBudget} from ${rateLimit.remaining} remaining core calls\n`,
+    `Collected ${intelligentRepositories.length} repositories from ${eventRepositoryNames.length} event candidates after retaining ${retainedRepositoryNames.length} of ${summary.repositories.length} observed repositories in ${runId} at ${capturedAt}; star history refreshed ${starHistory.fetched}, reused ${starHistory.reused}, missing ${starHistory.skipped} within a budget of ${fetchBudget} from ${rateLimit.remaining} remaining core calls\n`,
   );
 } catch (error) {
   if (started) {

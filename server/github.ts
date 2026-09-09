@@ -60,6 +60,7 @@ type SearchResponse = {
 
 const PERIODS: readonly TrendingPeriod[] = ["daily", "weekly", "monthly"];
 const GRAPHQL_BATCH_SIZE = 20;
+const GRAPHQL_CONCURRENCY = 2;
 const SEARCH_PAGE_SIZE = 100;
 const SEARCH_RESULT_LIMIT = 1_000;
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -532,6 +533,20 @@ async function fetchMetadataBatch(
   });
 }
 
+async function fetchMetadata(
+  repositories: readonly OfficialRepository[], token: string, fetchImplementation: typeof fetch,
+): Promise<GitHubRepositorySnapshot[]> {
+  const metadata: GitHubRepositorySnapshot[] = [];
+  for (let start = 0; start < repositories.length; start += GRAPHQL_BATCH_SIZE * GRAPHQL_CONCURRENCY) {
+    const batches = Array.from({ length: GRAPHQL_CONCURRENCY }, (_, index) => repositories.slice(
+      start + index * GRAPHQL_BATCH_SIZE, start + (index + 1) * GRAPHQL_BATCH_SIZE,
+    )).filter(batch => batch.length > 0);
+    const results = await Promise.all(batches.map(batch => fetchMetadataBatch(batch, token, fetchImplementation)));
+    results.forEach(batch => metadata.push(...batch));
+  }
+  return mergeCanonicalMetadata(metadata);
+}
+
 export async function fetchGitHubTrendingRepositories(
   token: string,
   fetchImplementation: typeof fetch = fetch,
@@ -540,17 +555,7 @@ export async function fetchGitHubTrendingRepositories(
     throw new TypeError("GITHUB_TOKEN is required");
   }
   const official = await fetchOfficialRepositories(fetchImplementation);
-  const metadata: GitHubRepositorySnapshot[] = [];
-  for (let start = 0; start < official.length; start += GRAPHQL_BATCH_SIZE) {
-    metadata.push(
-      ...await fetchMetadataBatch(
-        official.slice(start, start + GRAPHQL_BATCH_SIZE),
-        token,
-        fetchImplementation,
-      ),
-    );
-  }
-  return mergeCanonicalMetadata(metadata);
+  return fetchMetadata(official, token, fetchImplementation);
 }
 
 export async function fetchGitHubRepositories({
@@ -580,15 +585,5 @@ export async function fetchGitHubRepositories({
     retainedRepositoryNames,
     ghArchiveRepositoryNames,
   );
-  const metadata: GitHubRepositorySnapshot[] = [];
-  for (let start = 0; start < candidates.length; start += GRAPHQL_BATCH_SIZE) {
-    metadata.push(
-      ...await fetchMetadataBatch(
-        candidates.slice(start, start + GRAPHQL_BATCH_SIZE),
-        token,
-        fetchImplementation,
-      ),
-    );
-  }
-  return mergeCanonicalMetadata(metadata);
+  return fetchMetadata(candidates, token, fetchImplementation);
 }

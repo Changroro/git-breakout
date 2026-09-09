@@ -1,3 +1,4 @@
+import { parseTrackRecord, type TrackRecord } from "../src/lib/discovery-track-record.ts";
 import {
   parseRankingPageResponse,
   parseRankingSnapshot,
@@ -23,6 +24,9 @@ import {
 } from "../src/lib/archive.ts";
 
 const REQUEST_TIMEOUT_MS = 30_000;
+const READ_CACHE_TTL_MS = 30_000;
+const READ_CACHE_BYTES = 8 * 1024 * 1024;
+const CACHED_READS = new Set(["snapshot_timeline", "snapshot_page", "search_snapshot_repositories", "archive_page", "repository_star_series", "discovery_track_record"]);
 
 function validateBaseUrl(value: string): string {
   const url = URL.parse(value);
@@ -46,6 +50,9 @@ async function readJsonResponse(response: Response, operation: string): Promise<
 export class PublicHistoryApi {
   readonly baseUrl: string;
   readonly fetchImplementation: typeof fetch;
+  private readonly reads = new Map<string, { json: string; bytes: number; expiresAt: number }>();
+  private readonly pending = new Map<string, Promise<unknown>>();
+  private cachedBytes = 0;
 
   constructor({
     baseUrl,
@@ -59,6 +66,41 @@ export class PublicHistoryApi {
   }
 
   private async rpc(name: string, body: Record<string, unknown>): Promise<unknown> {
+    if (!CACHED_READS.has(name)) return this.fetchRpc(name, body);
+    const key = `${name}\n${JSON.stringify(body)}`;
+    const cached = this.reads.get(key);
+    if (cached !== undefined) {
+      this.reads.delete(key);
+      if (cached.expiresAt > Date.now()) {
+        this.reads.set(key, cached);
+        return JSON.parse(cached.json);
+      }
+      this.cachedBytes -= cached.bytes;
+    }
+    const pending = this.pending.get(key);
+    if (pending !== undefined) return structuredClone(await pending);
+    if (this.pending.size >= 64) throw new Error("History read capacity is exhausted");
+    const request = this.fetchRpc(name, body);
+    this.pending.set(key, request);
+    try {
+      const value = await request;
+      const json = JSON.stringify(value);
+      const bytes = Buffer.byteLength(json);
+      if (bytes <= READ_CACHE_BYTES / 16) {
+        while (this.reads.size >= 256 || this.cachedBytes + bytes > READ_CACHE_BYTES) {
+          const oldest = this.reads.entries().next().value;
+          if (oldest === undefined) break;
+          this.reads.delete(oldest[0]);
+          this.cachedBytes -= oldest[1].bytes;
+        }
+        this.reads.set(key, { json, bytes, expiresAt: Date.now() + READ_CACHE_TTL_MS });
+        this.cachedBytes += bytes;
+      }
+      return value;
+    } finally { this.pending.delete(key); }
+  }
+
+  private async fetchRpc(name: string, body: Record<string, unknown>): Promise<unknown> {
     const response = await this.fetchImplementation(`${this.baseUrl}/rpc/${name}`, {
       method: "POST",
       headers: {
@@ -69,6 +111,10 @@ export class PublicHistoryApi {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
     return readJsonResponse(response, `Public history ${name}`);
+  }
+
+  async readTrackRecord(): Promise<TrackRecord> {
+    return parseTrackRecord(await this.rpc("discovery_track_record", {}));
   }
 
   async readHealth(): Promise<{ status: "ok" }> {

@@ -2057,8 +2057,7 @@ h1 {
 .ranking-row-content {
   min-height: 99px;
   padding: 14px 24px;
-  animation: row-flip-in 560ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
-  animation-delay: calc(var(--row-index) * 34ms);
+  animation: row-flip-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
   backface-visibility: hidden;
   transform-origin: top center;
 }
@@ -2265,6 +2264,7 @@ h1 {
 }
 
 .trend-phase-spark,
+.trend-phase-resurgence,
 .trend-phase-breakout,
 .trend-phase-hot {
   border-color: color-mix(in srgb, var(--accent) 42%, var(--border));

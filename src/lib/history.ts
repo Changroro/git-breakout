@@ -44,6 +44,7 @@ export type RankingPageResponse = Omit<RankingSnapshot, "repositories"> & {
   page: number;
   page_size: number;
   intelligence_available: boolean;
+  classification_available?: boolean;
   track_record: TrackRecord;
   languages: RepositoryFacet[];
   topics: RepositoryFacet[];
@@ -209,6 +210,9 @@ export function parseRankingPageResponse(value: unknown): RankingPageResponse {
   if (typeof value.intelligence_available !== "boolean") {
     throw new TypeError("intelligence_available must be boolean");
   }
+  if (value.classification_available !== undefined && typeof value.classification_available !== "boolean") {
+    throw new TypeError("classification_available must be boolean");
+  }
   const repositories = metadata.repositories.map((repository, index) => {
     const payload = repository as RankedRepository & { discovery_evidence?: unknown };
     return {
@@ -228,6 +232,7 @@ export function parseRankingPageResponse(value: unknown): RankingPageResponse {
     page,
     page_size: pageSize,
     intelligence_available: value.intelligence_available,
+    classification_available: value.classification_available === true,
     track_record: parseTrackRecord(value.track_record),
     languages: parseFacets(value.languages, "languages"),
     topics: parseFacets(value.topics, "topics"),
@@ -259,4 +264,22 @@ export function resolveSnapshotId(
   }
 
   return snapshots[snapshots.length - 1].id;
+}
+
+export type RankingBootstrap = { schema_version: "1.0"; timeline: TimelineResponse; ranking: RankingPageResponse };
+export function parseRankingBootstrap(value: unknown): RankingBootstrap {
+  if (!isRecord(value) || value.schema_version !== "1.0") throw new TypeError("Invalid ranking bootstrap");
+  const timeline = parseTimelineResponse(value.timeline);
+  const ranking = parseRankingPageResponse(value.ranking);
+  const metadata = timeline.snapshots.find(snapshot => snapshot.id === ranking.id);
+  if (metadata === undefined || metadata.captured_at !== ranking.captured_at || metadata.repository_count !== ranking.repository_count) {
+    throw new Error("Bootstrap ranking does not match its timeline");
+  }
+  return { schema_version: "1.0", timeline, ranking };
+}
+
+export function timelineTickIndexes(count: number): number[] {
+  if (!Number.isInteger(count) || count < 1) throw new RangeError("Timeline count must be positive");
+  const visible = Math.min(count, 60);
+  return Array.from({ length: visible }, (_, index) => visible === 1 ? 0 : Math.round(index * (count - 1) / (visible - 1)));
 }

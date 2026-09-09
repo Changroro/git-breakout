@@ -39,7 +39,7 @@ describe("review regressions", () => {
         }],
       },
       "2026-09-05T02:00:00.000Z",
-      { read: vi.fn(async () => history()) },
+      { readCached: vi.fn(() => ({ history: history(), fresh: true })), refreshInBackground: vi.fn() },
       2,
     );
 

@@ -1,3 +1,5 @@
+import { classifyDiscovery, type DiscoveryClassification, type RepositoryDiscoveryHistory } from "./discovery-classification.js";
+import { percentileRanks } from "./percentile.js";
 import type { Confidence, RankedRepository } from "./ranking.js";
 
 const HOUR_MS = 3_600_000;
@@ -11,11 +13,11 @@ export const BREAKOUT_HISTORY_MIN_WEEKS = 2;
 export const BREAKOUT_SCORE_THRESHOLD = 70;
 export const BREAKOUT_PROVISIONAL_FRACTION = 0.1;
 
-const BREAKOUT_COHORT_KEY = "breakout:global";
 /** A completed history day older than this is too stale to stand in for a 24-hour window. */
 const HISTORY_DAY_MAX_AGE_MS = 36 * HOUR_MS;
 
 export type TrendPhase =
+  | "resurgence"
   | "spark"
   | "breakout"
   | "hot"
@@ -90,13 +92,16 @@ export type TrendIntelligence = {
     | "trend-intelligence-v3-shadow"
     | "trend-intelligence-v4-shadow"
     | "trend-intelligence-v5-shadow"
-    | "trend-intelligence-v6-shadow";
+    | "trend-intelligence-v6-shadow"
+    | "trend-intelligence-v7-shadow";
   phase: TrendPhase;
   confidence: Confidence;
   star_evidence_window_hours: 1 | 6 | 24 | null;
   event_evidence_window_hours: 1 | 6 | 24 | null;
   current_heat: TrendScore;
   breakout: TrendScore;
+  resurgence?: TrendScore;
+  classification?: DiscoveryClassification;
   cohort: {
     key: string;
     size: number;
@@ -123,6 +128,7 @@ export function trendIntelligenceFor(repository: RankedRepository): TrendIntelli
       "trend-intelligence-v4-shadow",
       "trend-intelligence-v5-shadow",
       "trend-intelligence-v6-shadow",
+      "trend-intelligence-v7-shadow",
     ].includes(String(value.score_version))
   ) {
     throw new TypeError(`Repository ${repository.full_name} has invalid trend intelligence`);
@@ -145,6 +151,7 @@ type FeatureRow = {
   organicBreadth: number | null;
   eventDiversity: number | null;
   persistence: number | null;
+  classification: DiscoveryClassification;
 };
 
 type HistoryFeatures = {
@@ -276,14 +283,6 @@ function rounded(value: number): number {
   return Math.round((value + Number.EPSILON) * 10_000) / 10_000;
 }
 
-function percentile(value: number, population: readonly number[]): number {
-  if (population.length < 2) {
-    throw new RangeError("Percentile population requires at least two values");
-  }
-  const below = population.filter((candidate) => candidate < value).length;
-  const equal = population.filter((candidate) => candidate === value).length;
-  return (below + (equal - 1) / 2) / (population.length - 1);
-}
 
 function scoreFrom(components: readonly number[]): number | null {
   if (components.length === 0) return null;
@@ -328,6 +327,7 @@ function featureRow(
   eventSignals: RepositoryEventSignals | null,
   history: RepositoryStarHistory | null,
   capturedAt: number,
+  origin: RepositoryDiscoveryHistory | null,
 ): FeatureRow {
   const missingEvidence: string[] = [];
   const selectedStarEvidence = starEvidence(repository);
@@ -424,6 +424,7 @@ function featureRow(
 
   return {
     repository,
+    classification: classifyDiscovery(repository, origin, history, new Date(capturedAt).toISOString()),
     eventSignals: freshSignals,
     missingEvidence,
     starEvidenceWindowHours: selectedStarEvidence?.hours ?? null,
@@ -508,6 +509,7 @@ export function rankTrendIntelligence(
   eventSignals: readonly RepositoryEventSignals[],
   capturedAt: string | Date,
   starHistories: readonly RepositoryStarHistory[],
+  discoveryHistories: readonly RepositoryDiscoveryHistory[],
 ): TrendRankedRepository[] {
   const capturedTimestamp = capturedAt instanceof Date
     ? capturedAt.getTime()
@@ -538,84 +540,111 @@ export function rankTrendIntelligence(
     historiesByName.set(key, validated);
   });
 
+  const origins = new Map<string, RepositoryDiscoveryHistory>();
+  for (const origin of discoveryHistories) {
+    const key = origin.full_name.toLowerCase();
+    if (origins.has(key)) throw new Error(`Duplicate discovery history for ${origin.full_name}`);
+    origins.set(key, origin);
+  }
   const rows = repositories.map((repository) => featureRow(
     repository,
     signalsByName.get(repository.full_name.toLocaleLowerCase("en-US")) ?? null,
     historiesByName.get(repository.full_name.toLocaleLowerCase("en-US")) ?? null,
     capturedTimestamp,
+    origins.get(repository.full_name.toLowerCase()) ?? null,
   ));
   const globallyScoreable = rows.filter((row) =>
     row.starVelocity !== null && row.starVelocity > 0 && row.organicBreadth !== null
   );
-  const breakoutPool = rows.filter((row) =>
-    row.breakoutStarVelocity !== null
-    && row.breakoutStarVelocity > 0
-    && row.relativeGrowth !== null
-  );
-  const breakoutStarVelocities = known(breakoutPool.map((row) => row.breakoutStarVelocity));
-  const breakoutRelativeGrowth = known(breakoutPool.map((row) => row.relativeGrowth));
-  const breakoutSelfRelativeGrowth = known(breakoutPool.map((row) => row.selfRelativeGrowth));
-  const breakoutStarAccelerations = known(breakoutPool.map((row) => row.starAcceleration));
-  const breakoutActorAccelerations = known(breakoutPool.map((row) => row.actorAcceleration));
-  const breakoutOrganicBreadth = known(breakoutPool.map((row) => row.organicBreadth));
+  const currentVelocityRanks = percentileRanks(known(globallyScoreable.map(row => row.starVelocity)));
+  const currentBreadthRanks = percentileRanks(known(globallyScoreable.map(row => row.organicBreadth)));
   const breakoutCalculations = new Map<string, {
     components: ScoreComponents;
     score: number | null;
   }>();
+  const surfacedProvisional = new Set<string>();
+  const cohortSizes = new Map<string, number>();
+  for (const category of ["discovery", "resurgence"] as const) {
+    const breakoutPool = rows.filter((row) =>
+      row.classification.category === category &&
+      row.breakoutStarVelocity !== null
+      && row.breakoutStarVelocity > 0
+      && row.relativeGrowth !== null
+    );
+    const breakoutStarVelocities = known(breakoutPool.map((row) => row.breakoutStarVelocity));
+    const breakoutStarVelocitiesRanks = percentileRanks(breakoutStarVelocities);
+    const breakoutRelativeGrowth = known(breakoutPool.map((row) => row.relativeGrowth));
+    const breakoutRelativeGrowthRanks = percentileRanks(breakoutRelativeGrowth);
+    const breakoutSelfRelativeGrowth = known(breakoutPool.map((row) => row.selfRelativeGrowth));
+    const breakoutSelfRelativeGrowthRanks = percentileRanks(breakoutSelfRelativeGrowth);
+    const breakoutStarAccelerations = known(breakoutPool.map((row) => row.starAcceleration));
+    const breakoutStarAccelerationsRanks = percentileRanks(breakoutStarAccelerations);
+    const breakoutActorAccelerations = known(breakoutPool.map((row) => row.actorAcceleration));
+    const breakoutActorAccelerationsRanks = percentileRanks(breakoutActorAccelerations);
+    const breakoutOrganicBreadth = known(breakoutPool.map((row) => row.organicBreadth));
+    const breakoutOrganicBreadthRanks = percentileRanks(breakoutOrganicBreadth);
 
-  breakoutPool.forEach((row) => {
-    const canCompare = breakoutPool.length >= 2;
-    const components: ScoreComponents = {
-      star_velocity: canCompare
-        ? percentile(row.breakoutStarVelocity as number, breakoutStarVelocities)
-        : null,
-      peer_relative_growth: canCompare
-        ? percentile(row.relativeGrowth as number, breakoutRelativeGrowth)
-        : null,
-      self_relative_growth: row.selfRelativeGrowth !== null && breakoutSelfRelativeGrowth.length >= 2
-        ? percentile(row.selfRelativeGrowth, breakoutSelfRelativeGrowth)
-        : null,
-      star_acceleration: row.starAcceleration !== null && breakoutStarAccelerations.length >= 2
-        ? percentile(row.starAcceleration, breakoutStarAccelerations)
-        : null,
-      actor_acceleration: row.actorAcceleration !== null && breakoutActorAccelerations.length >= 2
-        ? percentile(row.actorAcceleration, breakoutActorAccelerations)
-        : null,
-      organic_breadth: row.organicBreadth !== null && breakoutOrganicBreadth.length >= 2
-        ? percentile(row.organicBreadth, breakoutOrganicBreadth)
-        : null,
-      event_diversity: null,
-      persistence: null,
-    };
-    breakoutCalculations.set(row.repository.full_name, {
-      components,
-      score: scoreFrom(known(Object.values(components))),
+
+    breakoutPool.forEach((row) => {
+      const canCompare = breakoutPool.length >= 2;
+      const components: ScoreComponents = {
+        star_velocity: canCompare
+          ? breakoutStarVelocitiesRanks.get(row.breakoutStarVelocity as number)!
+          : null,
+        peer_relative_growth: canCompare
+          ? breakoutRelativeGrowthRanks.get(row.relativeGrowth as number)!
+          : null,
+        self_relative_growth: row.selfRelativeGrowth !== null && breakoutSelfRelativeGrowth.length >= 2
+          ? breakoutSelfRelativeGrowthRanks.get(row.selfRelativeGrowth)!
+          : null,
+        star_acceleration: row.starAcceleration !== null && breakoutStarAccelerations.length >= 2
+          ? breakoutStarAccelerationsRanks.get(row.starAcceleration)!
+          : null,
+        actor_acceleration: row.actorAcceleration !== null && breakoutActorAccelerations.length >= 2
+          ? breakoutActorAccelerationsRanks.get(row.actorAcceleration)!
+          : null,
+        organic_breadth: row.organicBreadth !== null && breakoutOrganicBreadth.length >= 2
+          ? breakoutOrganicBreadthRanks.get(row.organicBreadth)!
+          : null,
+        event_diversity: null,
+        persistence: null,
+      };
+      breakoutCalculations.set(row.repository.full_name, {
+        components,
+        score: scoreFrom(known(Object.values(components))),
+      });
     });
-  });
 
-  const provisionalLimit = Math.ceil(
-    breakoutPool.filter((row) => row.repository.growth.stars_delta_24h === null).length
-      * BREAKOUT_PROVISIONAL_FRACTION,
-  );
-  const surfacedProvisional = new Set(
-    breakoutPool
-      .filter((row) => row.repository.growth.stars_delta_24h === null)
-      .map((row) => ({
-        fullName: row.repository.full_name,
-        score: breakoutCalculations.get(row.repository.full_name)?.score ?? null,
-      }))
-      .filter((row): row is { fullName: string; score: number } => row.score !== null)
-      .sort((left, right) => (
-        right.score - left.score
-        || left.fullName.localeCompare(right.fullName)
-      ))
-      .slice(0, provisionalLimit)
-      .map((row) => row.fullName),
-  );
+    const provisionalLimit = Math.ceil(
+      breakoutPool.filter((row) => row.repository.growth.stars_delta_24h === null).length
+        * BREAKOUT_PROVISIONAL_FRACTION,
+    );
+    const provisional = new Set(
+      breakoutPool
+        .filter((row) => row.repository.growth.stars_delta_24h === null)
+        .map((row) => ({
+          fullName: row.repository.full_name,
+          score: breakoutCalculations.get(row.repository.full_name)?.score ?? null,
+        }))
+        .filter((row): row is { fullName: string; score: number } => row.score !== null)
+        .sort((left, right) => (
+          right.score - left.score
+          || left.fullName.localeCompare(right.fullName)
+        ))
+        .slice(0, provisionalLimit)
+        .map((row) => row.fullName),
+    );
+
+    for (const name of provisional) surfacedProvisional.add(name);
+    cohortSizes.set(category, breakoutPool.length);
+  }
 
   return rows.map((row) => {
-    const confidence = confidenceFor(row, breakoutPool.length);
+    const cohortSize = cohortSizes.get(row.classification.category ?? "") ?? 0;
+    const confidence = confidenceFor(row, cohortSize);
     const missingEvidence = [...row.missingEvidence];
+    if (row.classification.category !== null && cohortSize < 2) missingEvidence.push("comparison_cohort");
+    if (!origins.has(row.repository.full_name.toLowerCase())) missingEvidence.push("discovery_history");
 
     const canScoreCurrent = row.starVelocity !== null
       && row.starVelocity > 0
@@ -624,14 +653,14 @@ export function rankTrendIntelligence(
       && globallyScoreable.length >= 2;
     const currentComponents: ScoreComponents = {
       star_velocity: canScoreCurrent
-        ? percentile(row.starVelocity as number, known(globallyScoreable.map((item) => item.starVelocity)))
+        ? currentVelocityRanks.get(row.starVelocity as number)!
         : null,
       peer_relative_growth: null,
       self_relative_growth: null,
       star_acceleration: null,
       actor_acceleration: null,
       organic_breadth: canScoreCurrent
-        ? percentile(row.organicBreadth as number, known(globallyScoreable.map((item) => item.organicBreadth)))
+        ? currentBreadthRanks.get(row.organicBreadth as number)!
         : null,
       event_diversity: canScoreCurrent ? row.eventDiversity : null,
       persistence: canScoreCurrent ? row.persistence : null,
@@ -654,7 +683,8 @@ export function rankTrendIntelligence(
         ? calculatedBreakoutScore >= BREAKOUT_SCORE_THRESHOLD
         : surfacedProvisional.has(row.repository.full_name)
     ) ? calculatedBreakoutScore : null;
-    const phase = phaseFor(currentScore, breakoutScore, row.starAcceleration);
+    const phase = row.classification.category === "resurgence" && breakoutScore !== null
+      ? "resurgence" : phaseFor(currentScore, breakoutScore, row.starAcceleration);
     const reasons = reasonList(currentComponents, breakoutComponents);
 
     return {
@@ -672,14 +702,16 @@ export function rankTrendIntelligence(
         components: { ...row.repository.momentum.components },
       },
       trend_intelligence: {
-        score_version: "trend-intelligence-v6-shadow",
+        score_version: "trend-intelligence-v7-shadow",
         phase,
         confidence,
         star_evidence_window_hours: row.starEvidenceWindowHours,
         event_evidence_window_hours: row.eventEvidenceWindowHours,
         current_heat: { score: currentScore, components: currentComponents },
-        breakout: { score: breakoutScore, components: breakoutComponents },
-        cohort: { key: BREAKOUT_COHORT_KEY, size: breakoutPool.length },
+        breakout: { score: row.classification.category === "discovery" ? breakoutScore : null, components: breakoutComponents },
+        resurgence: { score: row.classification.category === "resurgence" ? breakoutScore : null, components: breakoutComponents },
+        classification: row.classification,
+        cohort: { key: row.classification.category ?? "unclassified", size: cohortSize },
         event_data_captured_at: row.eventSignals?.captured_at ?? null,
         missing_evidence: [...new Set(missingEvidence)],
         reasons,

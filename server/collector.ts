@@ -50,12 +50,11 @@ function deltaAtWindow(
   hours: number,
 ): number | null {
   const target = capturedAt - hours * HOUR_MS;
-  const nearest = observations
-    .map((observation) => ({
-      observation,
-      distance: Math.abs(Date.parse(observation.capturedAt) - target),
-    }))
-    .sort((left, right) => left.distance - right.distance)[0];
+  let nearest: { observation: StarObservation; distance: number } | undefined;
+  for (const observation of observations) {
+    const distance = Math.abs(Date.parse(observation.capturedAt) - target);
+    if (nearest === undefined || distance < nearest.distance) nearest = { observation, distance };
+  }
   if (nearest === undefined || nearest.distance > WINDOW_TOLERANCE_MS) {
     return null;
   }
@@ -107,9 +106,11 @@ export function calculateGrowth(
     };
   }
 
-  const baseline = validatedObservations
-    .filter(({ elapsed }) => elapsed >= observationIntervalMinutes * MINUTE_MS)
-    .sort((left, right) => left.elapsed - right.elapsed)[0];
+  let baseline: typeof validatedObservations[number] | undefined;
+  for (const observation of validatedObservations) {
+    if (observation.elapsed >= observationIntervalMinutes * MINUTE_MS
+      && (baseline === undefined || observation.elapsed < baseline.elapsed)) baseline = observation;
+  }
   if (baseline === undefined) {
     return {
       growth,

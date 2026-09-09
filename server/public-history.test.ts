@@ -249,3 +249,33 @@ describe("PublicHistoryApi", () => {
     );
   });
 });
+
+describe("Public history read cache", () => {
+  it("coalesces identical queries, expires responses and never caches health", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async () => Response.json({ status: "ok" }));
+      const api = new PublicHistoryApi({ baseUrl: "http://history.test", fetchImplementation: fetchMock as typeof fetch });
+      await api.readHealth(); await api.readHealth();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      fetchMock.mockImplementation(async () => Response.json({ schema_version: "1.0", total_count: 0, repositories: [] }));
+      await Promise.all(Array.from({ length: 10 }, () => api.searchRepositories("id", "radar", 10)));
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      await api.searchRepositories("id", "radar", 10);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      await api.searchRepositories("id", "different", 10);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      vi.advanceTimersByTime(30_001);
+      await api.searchRepositories("id", "radar", 10);
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not retain upstream failures", async () => {
+    const fetchMock = vi.fn(async () => new Response("unavailable", { status: 503 }));
+    const api = new PublicHistoryApi({ baseUrl: "http://history.test", fetchImplementation: fetchMock as typeof fetch });
+    await expect(api.searchRepositories("id", "radar", 10)).rejects.toThrow("503");
+    await expect(api.searchRepositories("id", "radar", 10)).rejects.toThrow("503");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});

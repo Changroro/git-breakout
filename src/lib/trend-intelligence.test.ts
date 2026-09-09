@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { RankedRepository } from "./ranking";
 import {
-  rankTrendIntelligence,
+  rankTrendIntelligence as rankWithHistory,
   trendIntelligenceFor,
   type RepositoryEventSignals,
   type RepositoryStarHistory,
 } from "./trend-intelligence";
+
+function rankTrendIntelligence(repositories: readonly RankedRepository[], signals: readonly RepositoryEventSignals[], capturedAt: string, histories: readonly RepositoryStarHistory[]) {
+  return rankWithHistory(repositories, signals, capturedAt, histories, repositories.map(repository => ({
+    full_name: repository.full_name, first_observed_at: "2026-08-01T00:00:00.000Z",
+    first_observed_stars: repository.metrics.stars!, first_observation_was_trending: false, official_trending_episode_count: 0,
+  })));
+}
 
 const CAPTURED_AT = "2026-08-28T12:00:00.000Z";
 
@@ -147,7 +154,7 @@ function starHistories(count: number): RepositoryStarHistory[] {
 }
 
 describe("rankTrendIntelligence", () => {
-  it("scores large and previously popular repositories like any other candidate", () => {
+  it("excludes established repositories from new discovery while retaining current heat", () => {
     const repositories = Array.from({ length: 12 }, (_, index) => repository(index, {
       delta6: 20 + index,
       delta24: 40 + index,
@@ -160,8 +167,9 @@ describe("rankTrendIntelligence", () => {
 
     const ranked = rankTrendIntelligence(repositories, signals, CAPTURED_AT, starHistories(12));
 
-    expect(ranked[11].trend_intelligence.breakout.score).not.toBeNull();
-    expect(ranked[11].trend_intelligence.cohort).toEqual({ key: "breakout:global", size: 12 });
+    expect(ranked[11].trend_intelligence.breakout.score).toBeNull();
+    expect(ranked[11].trend_intelligence.current_heat.score).not.toBeNull();
+    expect(ranked[10].trend_intelligence.cohort).toEqual({ key: "discovery", size: 11 });
     expect(ranked.every((item) => (
       item.trend_intelligence.missing_evidence.every((evidence) => !evidence.startsWith("emerging_"))
     ))).toBe(true);
@@ -412,7 +420,7 @@ describe("rankTrendIntelligence", () => {
       starHistories(10),
     );
 
-    expect(ranked[0].trend_intelligence.score_version).toBe("trend-intelligence-v6-shadow");
+    expect(ranked[0].trend_intelligence.score_version).toBe("trend-intelligence-v7-shadow");
     const historical = structuredClone(ranked[0]);
     historical.trend_intelligence.score_version = "trend-intelligence-v2-shadow";
     expect(trendIntelligenceFor(historical)?.score_version).toBe("trend-intelligence-v2-shadow");

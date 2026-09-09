@@ -328,3 +328,27 @@ describe("GitHub collection", () => {
     stderr.mockRestore();
   });
 });
+
+it("fetches metadata with bounded concurrency while preserving candidate order", async () => {
+  const names = Array.from({ length: 65 }, (_, index) => `owner/repo-${index}`);
+  let active = 0, maximum = 0, batches = 0;
+  const fetchImplementation: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.startsWith("https://github.com/trending")) return new Response(trendingHtml([names[0]]));
+    if (url.startsWith("https://api.github.com/search")) return Response.json({ total_count: 0, items: [] });
+    if (url !== "https://api.github.com/graphql") throw new Error(`Unexpected ${url}`);
+    batches += 1; active += 1; maximum = Math.max(maximum, active);
+    await new Promise(resolve => setTimeout(resolve, 5));
+    const { variables } = JSON.parse(String(init?.body));
+    const data: Record<string, ReturnType<typeof metadata>> = {};
+    for (let index = 0; variables[`owner${index}`] !== undefined; index++) {
+      data[`repository${index}`] = metadata(`${variables[`owner${index}`]}/${variables[`name${index}`]}`);
+    }
+    active -= 1;
+    return Response.json({ data });
+  };
+  const result = await fetchGitHubRepositories({ token: "mock", capturedAt: "2026-09-09T00:00:00.000Z", retainedRepositoryNames: names, ghArchiveRepositoryNames: [], fetchImplementation });
+  expect(result.map(repository => repository.fullName)).toEqual(names);
+  expect(maximum).toBe(2);
+  expect(batches).toBe(4);
+});

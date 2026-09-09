@@ -1,8 +1,9 @@
+import { loadRankingBootstrap } from "./ranking-bootstrap.ts";
 import { resolve } from "node:path";
 import type { Connect, Plugin, PreviewServer, ViteDevServer } from "vite";
-import { loadRepositoryCard } from "./card-cache.ts";
+import { RepositoryCardCache } from "./card-cache.ts";
 import { HistoryDatabase } from "./history.ts";
-import { buildLocalRankingPage, buildLocalRepositorySearch } from "./local-ranking.ts";
+import { buildLocalRankingPage, buildLocalRepositorySearch, emptyTrackRecord } from "./local-ranking.ts";
 import { enrichStarSeries, StarHistoryStore } from "./star-history.ts";
 import {
   parseGitHubTrendingPeriod,
@@ -39,6 +40,7 @@ function attachHistoryApi(
 ): void {
   const database = new HistoryDatabase(resolve(process.cwd(), "data", "ranking-history.sqlite"));
   const cardCacheDirectory = resolve(process.cwd(), "data", "repository-cards");
+  const cardCache = new RepositoryCardCache(cardCacheDirectory);
   const starHistoryDirectory = resolve(process.cwd(), "data", "star-history");
   let starHistory: StarHistoryStore | null = null;
   function requireStarHistoryStore(): StarHistoryStore {
@@ -59,6 +61,28 @@ function attachHistoryApi(
   }
   httpServer?.once("close", () => database.close());
 
+  middlewares.use("/api/bootstrap", async (request, response) => {
+    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    if (request.method !== "GET") { response.statusCode = 405; response.end(); return; }
+    try {
+      const result = await loadRankingBootstrap({
+        readTimeline: () => database.readTimeline(),
+        readRankingPage: query => {
+          const snapshot = database.readSnapshot(query.snapshotId);
+          if (snapshot === undefined) throw new RangeError("Snapshot does not exist");
+          return buildLocalRankingPage({ snapshot, page: query.page, pageSize: query.pageSize,
+            filters: { language: query.language, topic: query.topic }, view: query.view, period: query.period });
+        },
+      }, new URL(request.url ?? "", "http://localhost"));
+      response.end(JSON.stringify(result));
+    } catch (error) { response.statusCode = 400; response.end(JSON.stringify({ error: String(error) })); }
+  });
+  middlewares.use("/api/track-record", (request, response) => {
+    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    if (request.method !== "GET") { response.statusCode = 405; response.end(); return; }
+    try { response.end(JSON.stringify(emptyTrackRecord(database.readTimeline().snapshots.at(-1)!.captured_at))); }
+    catch (error) { response.statusCode = 500; response.end(JSON.stringify({ error: String(error) })); }
+  });
   middlewares.use("/api/timeline", (request, response) => {
     response.setHeader("Content-Type", "application/json; charset=utf-8");
     response.setHeader("Cache-Control", "no-store");
@@ -71,16 +95,7 @@ function attachHistoryApi(
 
     try {
       response.statusCode = 200;
-      const history = database.readHistory();
-      response.end(JSON.stringify({
-        schema_version: "1.0",
-        snapshots: history.snapshots.map((snapshot) => ({
-          id: snapshot.id,
-          captured_at: snapshot.captured_at,
-          source: snapshot.source,
-          repository_count: snapshot.repositories.length,
-        })),
-      }));
+      response.end(JSON.stringify(database.readTimeline()));
     } catch (error) {
       response.statusCode = 500;
       response.end(
@@ -106,7 +121,7 @@ function attachHistoryApi(
       return;
     }
     try {
-      const snapshot = database.readHistory().snapshots.find((item) => item.id === snapshotId);
+      const snapshot = database.readSnapshot(snapshotId);
       if (snapshot === undefined) {
         response.statusCode = 404;
         response.end(JSON.stringify({ error: `Snapshot ${snapshotId} does not exist` }));
@@ -137,7 +152,7 @@ function attachHistoryApi(
       if (snapshotId === null) {
         throw new TypeError("snapshot is required");
       }
-      const snapshot = database.readHistory().snapshots.find((item) => item.id === snapshotId);
+      const snapshot = database.readSnapshot(snapshotId);
       if (snapshot === undefined) {
         response.statusCode = 404;
         response.end(JSON.stringify({ error: `Snapshot ${snapshotId} does not exist` }));
@@ -180,7 +195,7 @@ function attachHistoryApi(
       if (snapshotId === null || query === null) {
         throw new TypeError("snapshot and query are required");
       }
-      const snapshot = database.readHistory().snapshots.find((item) => item.id === snapshotId);
+      const snapshot = database.readSnapshot(snapshotId);
       if (snapshot === undefined) {
         response.statusCode = 404;
         response.end(JSON.stringify({ error: `Snapshot ${snapshotId} does not exist` }));
@@ -242,7 +257,7 @@ function attachHistoryApi(
       if (imageUrl === null) {
         throw new TypeError("Card URL is required");
       }
-      const card = await loadRepositoryCard(repositoryName, imageUrl, cardCacheDirectory);
+      const card = await cardCache.read(repositoryName, imageUrl);
       response.statusCode = 200;
       response.setHeader("Content-Type", card.contentType);
       response.setHeader("Cache-Control", "public, max-age=21600, immutable");
@@ -276,7 +291,7 @@ function attachHistoryApi(
     }
 
     try {
-      const snapshot = database.readHistory().snapshots.find((item) => item.id === snapshotId);
+      const snapshot = database.readSnapshot(snapshotId);
       if (snapshot === undefined) {
         response.statusCode = 404;
         response.end(JSON.stringify({ error: `Snapshot ${snapshotId} does not exist` }));

@@ -98,6 +98,7 @@ describe("HistoryDatabase", () => {
       1,
       JSON.stringify({ full_name: "owner/repository", rank: 1 }),
     );
+    database.database.pragma("user_version = 0");
     database.close();
 
     const reopened = new HistoryDatabase(databasePath);

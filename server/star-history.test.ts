@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -406,12 +406,8 @@ describe("StarHistoryStore", () => {
 
 describe("enrichStarSeries", () => {
   it("serves observed totals when GitHub history is unavailable", async () => {
-    const read = vi.fn(async () => {
-      throw new GitHubRequestError(
-        "GitHub repository owner/repository request failed with status 502",
-      );
-    });
-    const errors = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const readCached = vi.fn(() => null);
+    const refreshInBackground = vi.fn();
     const response = await enrichStarSeries(
       {
         schema_version: "1.0",
@@ -424,7 +420,7 @@ describe("enrichStarSeries", () => {
         }],
       },
       "2026-09-05T02:00:00.000Z",
-      { read },
+      { readCached, refreshInBackground },
       2,
     );
 
@@ -436,24 +432,23 @@ describe("enrichStarSeries", () => {
         { captured_at: "2026-09-05T02:00:00.000Z", stars: 97 },
       ],
     });
-    expect(errors).toHaveBeenCalledWith(expect.stringContaining("serving observed totals"));
-    errors.mockRestore();
+    expect(refreshInBackground).toHaveBeenCalledOnce();
   });
 
   it("fails loudly when history data is invalid", async () => {
-    const read = vi.fn(async () => {
+    const readCached = vi.fn(() => {
       throw new TypeError("GitHub star history response is invalid");
     });
 
     await expect(enrichStarSeries(
       { schema_version: "1.0", series: [{ full_name: "owner/repository", points: [] }] },
       "2026-09-05T02:00:00.000Z",
-      { read },
+      { readCached, refreshInBackground: vi.fn() },
     )).rejects.toThrow("response is invalid");
   });
 
   it("uses retained acquisitions without mixing in observed totals", async () => {
-    const read = vi.fn(async () => sampleHistory());
+    const readCached = vi.fn(() => ({ history: sampleHistory(), fresh: true }));
     const response = await enrichStarSeries(
       {
         schema_version: "1.0",
@@ -463,7 +458,7 @@ describe("enrichStarSeries", () => {
         }],
       },
       "2026-09-05T02:00:00.000Z",
-      { read },
+      { readCached, refreshInBackground: vi.fn() },
       2,
     );
 
@@ -479,7 +474,7 @@ describe("enrichStarSeries", () => {
         ],
       }],
     });
-    expect(read).toHaveBeenCalledWith("owner/repository", "2026-09-03T02:00:00.000Z");
+    expect(readCached).toHaveBeenCalledWith("owner/repository", "2026-09-03T02:00:00.000Z");
   });
 });
 
@@ -722,5 +717,28 @@ describe("collectStarHistories", () => {
     await expect(collectStarHistories(["owner/a"], store, { ...options, fetchBudget: -1 }))
       .rejects.toThrow(RangeError);
     errors.mockRestore();
+  });
+});
+
+describe("collector cache persistence", () => {
+  it("reuses history in a new store without spending another request", async () => {
+    const cacheDirectory = mkdtempSync(join(tmpdir(), "collector-history-persistence-"));
+    try {
+      const fetchImplementation = routedFetch({ [HISTORY_URL]: () => historyResponse(sampleWeeks) });
+      const options = { cacheDirectory, token: "synthetic", fetchImplementation, now: () => NOW,
+        ttlMs: 20 * 3_600_000, ttlJitterMs: 6 * 3_600_000 };
+      const first = await collectStarHistories(["owner/repository"], new StarHistoryStore(options), {
+        capturedAt: NOW.toISOString(), fetchBudget: 1,
+      });
+      const second = await collectStarHistories(["owner/repository"], new StarHistoryStore(options), {
+        capturedAt: NOW.toISOString(), fetchBudget: 1,
+      });
+      expect(first.fetched).toBe(1);
+      expect(second.fetched).toBe(0);
+      expect(second.reused).toBe(1);
+      expect(fetchImplementation).toHaveBeenCalledOnce();
+    } finally {
+      rmSync(cacheDirectory, { recursive: true });
+    }
   });
 });
