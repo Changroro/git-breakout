@@ -380,6 +380,31 @@ export class RemoteHistoryApi {
     return parseCollectionSchedule(await this.rpc("collection_schedule", {}));
   }
 
+  async readCollectionSummary(): Promise<CollectionContext> {
+    return parseCollectionContext(await this.rpc("collection_summary", {}));
+  }
+
+  async readRepositoryObservations(fullNames: readonly string[]): Promise<Array<{ fullName: string; observations: StarObservation[] }>> {
+    if (fullNames.length < 1 || fullNames.length > 10_000) throw new RangeError("Repository observations require 1-10000 names");
+    fullNames.forEach(name => requireFullName(name, "Repository observation name"));
+    const response = requireRecord(await this.rpc("repository_observations", { p_full_names: fullNames }), "Repository observations");
+    if (!Array.isArray(response.repositories)) throw new TypeError("Repository observations must be an array");
+    const requested = new Set(fullNames.map(name => name.toLowerCase()));
+    const seen = new Set<string>();
+    return response.repositories.map(value => {
+      const repository = requireRecord(value, "Repository observations entry");
+      const fullName = requireFullName(repository.full_name, "Repository observation name");
+      const key = fullName.toLowerCase();
+      if (!requested.has(key) || seen.has(key)) throw new Error("Unexpected or duplicate repository observations");
+      seen.add(key);
+      if (!Array.isArray(repository.observations) || repository.observations.length < 1 || repository.observations.length > 20) throw new TypeError("Observations must contain 1-20 points");
+      return { fullName, observations: repository.observations.map(value => {
+        const observation = requireRecord(value, "Observation");
+        return { capturedAt: requireTimestamp(observation.captured_at, "Observation timestamp"), stars: requireNonNegativeInteger(observation.stars, "Observation stars") };
+      }) };
+    });
+  }
+
   async readCollectionContext(): Promise<CollectionContext> {
     return parseCollectionContext(await this.rpc("collection_context", {}));
   }

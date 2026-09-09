@@ -288,7 +288,7 @@ describe("createWebServer", () => {
     expect(JSON.stringify(payload)).not.toContain("test-token");
   });
 
-  it("does not cache mutable ranking pages and serves bounded search results", async () => {
+  it("briefly caches ranking pages and serves bounded search results", async () => {
     const repository = {
       full_name: "owner/repository",
       open_graph_image_url: "https://opengraph.githubassets.com/example/owner/repository",
@@ -363,7 +363,7 @@ describe("createWebServer", () => {
       `${baseUrl}/api/ranking?snapshot=${snapshotId}&page=1&page_size=10&view=github&period=weekly`,
     );
     expect(ranking.status).toBe(200);
-    expect(ranking.headers.get("cache-control")).toBe("no-store");
+    expect(ranking.headers.get("cache-control")).toBe("public, max-age=30");
     expect((await ranking.json() as { repositories: unknown[] }).repositories).toHaveLength(1);
     const search = await fetch(
       `${baseUrl}/api/search?snapshot=${snapshotId}&query=owner&limit=10`,
@@ -372,50 +372,26 @@ describe("createWebServer", () => {
     expect(search.headers.get("cache-control")).toContain("immutable");
     const archive = await fetch(`${baseUrl}/api/archive?page=1&page_size=10&query=owner`);
     expect(archive.status).toBe(200);
-    expect(archive.headers.get("cache-control")).toBe("no-store");
+    expect(archive.headers.get("cache-control")).toBe("public, max-age=30");
     expect((await archive.json() as { repositories: unknown[] }).repositories).toHaveLength(1);
   });
 
   it("serves timeline, one snapshot, and proxies RPC requests", async () => {
-    const fetchImplementation = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(JSON.stringify([{
-        id: snapshotId,
-        captured_at: "2026-08-27T01:17:00.000Z",
-        source: "github_combined",
-        repository_count: 1,
-      }]), { headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify([{
-        id: snapshotId,
-        captured_at: "2026-08-27T01:17:00.000Z",
-        source: "github_combined",
-        repository_count: 1,
-      }]), { headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify([{
-        full_name: "owner/repository",
-        open_graph_image_url: "https://opengraph.githubassets.com/example/owner/repository",
-        observation_sources: null,
-      }]), { headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify([{
-        id: snapshotId,
-        captured_at: "2026-08-27T01:17:00.000Z",
-        source: "github_combined",
-        repository_count: 1,
-      }]), { headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        schema_version: "1.0",
-        series: [{
-          full_name: "owner/repository",
-          points: [
-            { captured_at: "2026-08-27T01:17:00.000Z", stars: 10 },
-          ],
-        }],
-      }), { headers: { "Content-Type": "application/json" } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(emptyStarHistoryPage()), {
-        headers: { "Content-Type": "application/json" },
-      }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ status: "ok" }), {
-        headers: { "Content-Type": "application/json" },
-      }));
+    const fetchImplementation = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/rpc/snapshot_timeline")) return Response.json([{
+        id: snapshotId, captured_at: "2026-08-27T01:17:00.000Z", source: "github_combined", repository_count: 1,
+      }]);
+      if (url.endsWith("/rpc/snapshot_repositories")) return Response.json([{
+        full_name: "owner/repository", open_graph_image_url: "https://opengraph.githubassets.com/example/owner/repository", observation_sources: null,
+      }]);
+      if (url.endsWith("/rpc/repository_star_series")) return Response.json({ schema_version: "1.0", series: [{
+        full_name: "owner/repository", points: [{ captured_at: "2026-08-27T01:17:00.000Z", stars: 10 }],
+      }] });
+      if (url.includes("/stargazers/history?")) return Response.json(emptyStarHistoryPage());
+      if (url.endsWith("/rpc/health")) return Response.json({ status: "ok" });
+      throw new Error("Unexpected URL " + url);
+    });
     const server = createWebServer({
       ...testDirectories(),
       ...redirectConfig,
@@ -439,12 +415,12 @@ describe("createWebServer", () => {
       series: Array<{ points: Array<{ captured_at: string; stars: number }>; source: string }>;
     };
     expect(seriesBody.series).toHaveLength(1);
-    expect(seriesBody.series[0].source).toBe("github_retained_acquisitions");
+    expect(seriesBody.series[0].source).toBe("observed");
     expect(seriesBody.series[0].points.at(-1)).toEqual({
-      captured_at: "2026-08-27T00:00:00.000Z",
-      stars: 0,
+      captured_at: "2026-08-27T01:17:00.000Z",
+      stars: 10,
     });
-    expect(seriesBody.series[0].points.every((point) => point.stars === 0)).toBe(true);
+    expect(seriesBody.series[0].points).toHaveLength(1);
     expect(fetchImplementation).toHaveBeenCalledWith(
       expect.objectContaining({
         href: "https://api.github.com/repos/owner/repository/stargazers/history?per_page=30&page=1",

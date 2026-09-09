@@ -315,3 +315,12 @@ describe("parseSnapshotTimeline", () => {
     );
   });
 });
+
+it("loads only requested observations and rejects unexpected or empty results", async () => {
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ repositories: [{ full_name: "owner/repo", observations: [{ captured_at: "2026-09-09T00:00:00Z", stars: 5 }] }] }));
+  const api = new RemoteHistoryApi({ baseUrl: "http://fixture", collectorToken: "mock", fetchImplementation: fetchMock });
+  expect(await api.readRepositoryObservations(["owner/repo", "owner/new"])).toEqual([{ fullName: "owner/repo", observations: [{ capturedAt: "2026-09-09T00:00:00Z", stars: 5 }] }]);
+  await expect(api.readRepositoryObservations(["other/repo"])).rejects.toThrow("Unexpected");
+  fetchMock.mockImplementation(async () => Response.json({ repositories: [{ full_name: "owner/repo", observations: [] }] }));
+  await expect(api.readRepositoryObservations(["owner/repo"])).rejects.toThrow("1-20");
+});

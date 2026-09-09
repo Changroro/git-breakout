@@ -1,3 +1,4 @@
+import { timelineTickIndexes } from "./history";
 import { describe, expect, it } from "vitest";
 import {
   parseHistoryResponse,
@@ -119,4 +120,13 @@ describe("history", () => {
       }],
     })).toThrow("cannot exceed total_count");
   });
+});
+
+it("keeps timeline tick rendering bounded without losing the endpoints", () => {
+  expect(timelineTickIndexes(1)).toEqual([0]);
+  const indexes = timelineTickIndexes(6000);
+  expect(indexes).toHaveLength(60);
+  expect(indexes[0]).toBe(0);
+  expect(indexes.at(-1)).toBe(5999);
+  expect(new Set(indexes).size).toBe(indexes.length);
 });

@@ -1,7 +1,8 @@
+import { loadRankingBootstrap } from "./ranking-bootstrap.ts";
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
-import { loadRepositoryCard } from "./card-cache.ts";
+import { RepositoryCardCache } from "./card-cache.ts";
 import {
   CloudflareTrafficAnalytics,
   type CloudflareTrafficConfig,
@@ -13,6 +14,7 @@ import type {
   RankingView,
 } from "../src/lib/repository-filters.ts";
 
+const requestStarts = new WeakMap<ServerResponse, number>();
 const MAX_PROXY_BODY_BYTES = 32 * 1024 * 1024;
 const PROXY_TIMEOUT_MS = 60_000;
 const MIME_TYPES: Record<string, string> = {
@@ -45,6 +47,7 @@ const GITHUB_CARD_HOSTS = new Set([
 
 const RANKING_VIEW_NAMES: Record<RankingView, string> = {
   breakout: "Breakout",
+  resurgence: "Resurgence",
   current: "Current heat",
   github: "GitHub Trending",
   momentum: "Momentum",
@@ -92,12 +95,18 @@ function setSecurityHeaders(response: ServerResponse): void {
   response.setHeader("X-Frame-Options", "DENY");
 }
 
+function setServerTiming(response: ServerResponse): void {
+  const start = requestStarts.get(response);
+  if (start !== undefined) response.setHeader("Server-Timing", `app;dur=${(performance.now() - start).toFixed(1)}`);
+}
+
 function sendJson(
   response: ServerResponse,
   statusCode: number,
   payload: unknown,
   cacheControl = "no-store",
 ): void {
+  setServerTiming(response);
   response.statusCode = statusCode;
   response.setHeader("Content-Type", "application/json; charset=utf-8");
   response.setHeader("Cache-Control", cacheControl);
@@ -286,10 +295,10 @@ function requirePositiveIntegerParameter(
 
 function requireRankingView(requestUrl: URL): RankingView {
   const view = requestUrl.searchParams.get("view");
-  if (view === "momentum" || view === "breakout" || view === "current" || view === "github") {
+  if (view === "resurgence" || view === "momentum" || view === "breakout" || view === "current" || view === "github") {
     return view;
   }
-  throw new TypeError("view must be breakout, momentum, current, or github");
+  throw new TypeError("view must be breakout, resurgence, momentum, current, or github");
 }
 
 function requireGitHubTrendingPeriod(
@@ -459,28 +468,22 @@ export function createWebServer(
     fetchImplementation,
   });
   const cardCacheDirectory = resolve(config.cacheDirectory, "repository-cards");
+  const cardCache = new RepositoryCardCache(cardCacheDirectory, { fetchImplementation });
   const starHistory = new StarHistoryStore({
     cacheDirectory: resolve(config.cacheDirectory, "star-history"),
     token: config.githubToken,
     hourlyRequestLimit: config.starHistoryHourlyRequestLimit,
     fetchImplementation,
   });
-  const snapshotCaptureTimes = new Map<string, string>();
   async function resolveSnapshotCapturedAt(snapshotId: string): Promise<string> {
-    const known = snapshotCaptureTimes.get(snapshotId);
-    if (known !== undefined) {
-      return known;
-    }
     const timeline = await historyApi.readTimeline();
-    timeline.snapshots.forEach((snapshot) => snapshotCaptureTimes.set(snapshot.id, snapshot.captured_at));
-    const capturedAt = snapshotCaptureTimes.get(snapshotId);
-    if (capturedAt === undefined) {
-      throw new RangeError(`Snapshot ${snapshotId} does not exist`);
-    }
-    return capturedAt;
+    const snapshot = timeline.snapshots.find(snapshot => snapshot.id === snapshotId);
+    if (snapshot === undefined) throw new RangeError("Snapshot " + snapshotId + " does not exist");
+    return snapshot.captured_at;
   }
 
   const server = createServer(async (request, response) => {
+    requestStarts.set(response, performance.now());
     setSecurityHeaders(response);
     const requestUrl = new URL(request.url ?? "/", "http://localhost");
     if (redirectLegacyRequest(request, response, requestUrl, canonicalHost, legacyHosts)) {
@@ -505,6 +508,17 @@ export function createWebServer(
         sendJson(response, 200, await historyApi.readHealth());
       } catch (error) {
         sendJson(response, 503, { error: errorMessage(error) });
+      }
+      return;
+    }
+    if (requestUrl.pathname === "/api/bootstrap" || requestUrl.pathname === "/api/track-record") {
+      if (request.method !== "GET") { rejectMethod(response, "GET"); return; }
+      try {
+        const payload = requestUrl.pathname === "/api/bootstrap"
+          ? await loadRankingBootstrap(historyApi, requestUrl) : await historyApi.readTrackRecord();
+        sendJson(response, 200, payload, "public, max-age=30");
+      } catch (error) {
+        sendJson(response, error instanceof TypeError || error instanceof RangeError ? 400 : 502, { error: errorMessage(error) });
       }
       return;
     }
@@ -580,7 +594,7 @@ export function createWebServer(
           view,
           period: requireGitHubTrendingPeriod(requestUrl, view),
         });
-        sendJson(response, 200, ranking, "no-store");
+        sendJson(response, 200, ranking, "public, max-age=30");
       } catch (error) {
         sendJson(response, error instanceof TypeError || error instanceof RangeError ? 400 : 502, {
           error: errorMessage(error),
@@ -623,7 +637,7 @@ export function createWebServer(
           pageSize: requirePositiveIntegerParameter(requestUrl, "page_size", 100),
           query: requestUrl.searchParams.get("query"),
         });
-        sendJson(response, 200, archive, "no-store");
+        sendJson(response, 200, archive, "public, max-age=30");
       } catch (error) {
         sendJson(response, error instanceof TypeError || error instanceof RangeError ? 400 : 502, {
           error: errorMessage(error),
@@ -645,8 +659,9 @@ export function createWebServer(
         if (imageUrl === null) {
           throw new TypeError("Card URL is required");
         }
-        const card = await loadRepositoryCard(repositoryName, imageUrl, cardCacheDirectory, fetchImplementation);
+        const card = await cardCache.read(repositoryName, imageUrl);
         response.statusCode = 200;
+        setServerTiming(response);
         response.setHeader("Content-Type", card.contentType);
         response.setHeader("Cache-Control", "public, max-age=21600, immutable");
         response.end(card.bytes);

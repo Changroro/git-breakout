@@ -22,13 +22,15 @@ const historyApi = new RemoteHistoryApi({
 const database = new HistoryDatabase(resolve(databasePath));
 
 try {
-  const history = database.readHistory();
+  const history = database.readTimeline();
   const remoteTimeline = await historyApi.readSnapshotTimeline();
   const remoteById = new Map(remoteTimeline.map((snapshot) => [snapshot.id, snapshot]));
   const remoteByCapturedAt = new Map(
     remoteTimeline.map((snapshot) => [Date.parse(snapshot.capturedAt), snapshot]),
   );
-  for (const snapshot of history.snapshots) {
+  for (const metadata of history.snapshots) {
+    const snapshot = database.readSnapshot(metadata.id);
+    if (snapshot === undefined) throw new Error(`Snapshot ${metadata.id} disappeared during import`);
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(snapshot.id)) {
       throw new TypeError(`Snapshot ${snapshot.id} must use UUID format`);
     }

@@ -32,6 +32,8 @@ import {
 } from "@primer/octicons-react";
 import {
   parseRankingPageResponse,
+  parseRankingBootstrap,
+  timelineTickIndexes,
   parseRepositorySearchResponse,
   parseTimelineResponse,
   resolveSnapshotId,
@@ -71,10 +73,11 @@ import {
   parseReadRepositories,
   serializeReadRepositories,
 } from "./lib/repository-search";
-import type {
-  DiscoveryEvidence,
-  TrackRecord,
-  TrackRecordConversion,
+import {
+  parseTrackRecord,
+  type DiscoveryEvidence,
+  type TrackRecord,
+  type TrackRecordConversion,
 } from "./lib/discovery-track-record";
 import {
   parseArchivePageResponse,
@@ -100,9 +103,10 @@ const LEGACY_READ_REPOSITORIES_STORAGE_KEY = "github-trend-radar:read-repositori
 const LOCALE_STORAGE_KEY = "git-breakout:locale";
 const LEGACY_LOCALE_STORAGE_KEY = "github-trend-radar:locale";
 
-export const RANKING_VIEW_ORDER = ["breakout", "momentum", "current", "github"] as const;
+export const RANKING_VIEW_ORDER = ["breakout", "resurgence", "momentum", "current", "github"] as const;
 const RANKING_VIEW_LABEL_KEYS = {
   breakout: "ranking.breakout",
+  resurgence: "ranking.resurgence",
   momentum: "ranking.momentum",
   current: "ranking.currentHeat",
   github: "ranking.githubTrending",
@@ -157,13 +161,16 @@ export function shouldFallbackToMomentum({
   view,
   filters,
   matchingCount,
+  classificationAvailable = false,
 }: {
   isLatestSnapshot: boolean;
   view: RankingView;
   filters: RepositoryFilters;
   matchingCount: number;
+  classificationAvailable?: boolean;
 }): boolean {
   return isLatestSnapshot
+    && !classificationAvailable
     && view === "breakout"
     && filters.language === null
     && filters.topic === null
@@ -345,6 +352,7 @@ function phaseLabel(phase: Exclude<TrendPhase, "insufficient_data">, locale: Loc
   const keys = {
     spark: "phase.spark",
     breakout: "phase.breakout",
+    resurgence: "phase.resurgence",
     hot: "phase.hot",
     steady: "phase.steady",
     cooling: "phase.cooling",
@@ -359,13 +367,20 @@ function repositoryViewScore(repository: RankedRepository, view: RankingView): n
   if (intelligence === null) return null;
   return view === "breakout"
     ? intelligence.breakout.score
-    : intelligence.current_heat.score;
+    : view === "resurgence" ? intelligence.resurgence?.score ?? null : intelligence.current_heat.score;
 }
 
 export function rankingViewCopy(
   view: RankingView,
   locale: Locale = "en",
+  classificationAvailable = true,
 ): { title: string; description: string } {
+  if (view === "breakout" && !classificationAvailable) {
+    return { title: translate(locale, "ranking.legacyBreakout"), description: translate(locale, "ranking.legacyDescription") };
+  }
+  if (view === "resurgence") {
+    return { title: translate(locale, "ranking.resurgenceTitle"), description: translate(locale, "ranking.resurgenceDescription") };
+  }
   if (view === "breakout") {
     return {
       title: translate(locale, "ranking.breakoutTitle"),
@@ -488,7 +503,7 @@ export function RepositoryThumbnailFallback({ repositoryName }: { repositoryName
   );
 }
 
-function RepositoryCardThumbnail({ repository }: { repository: RankedRepository }) {
+function RepositoryCardThumbnail({ repository, priority = false }: { repository: RankedRepository; priority?: boolean }) {
   const [failed, setFailed] = useState(false);
   const { t } = useI18n();
 
@@ -500,7 +515,12 @@ function RepositoryCardThumbnail({ repository }: { repository: RankedRepository 
     alt={t("repository.previewAlt", { name: repository.full_name })}
     className="repository-thumbnail"
     decoding="async"
+    width={126}
+    height={63}
+    loading={priority ? "eager" : "lazy"}
+    fetchPriority={priority ? "high" : "auto"}
     src={`/api/card?${new URLSearchParams({
+      variant: "thumbnail-v2",
       repository: repository.full_name,
       url: repository.open_graph_image_url,
     }).toString()}`}
@@ -936,12 +956,11 @@ function RankingRow({
     <li className={`ranking-row ${isRead ? "ranking-row-read" : ""}`}>
       <div
         className="ranking-row-content"
-        style={{ "--row-index": rowIndex } as CSSProperties}
       >
         <span className="rank-number" aria-label={t("repository.rank", { rank: displayRank })}>
           {displayRank}
         </span>
-        <RepositoryCardThumbnail repository={repository} />
+        <RepositoryCardThumbnail repository={repository} priority={rowIndex < 3} />
         <div className="repository-copy">
           <div className="repository-title-line">
             <a
@@ -1368,10 +1387,10 @@ function Timeline({
             <Slider.Track className="timeline-track">
               <Slider.Range className="timeline-range" />
               <span className="timeline-ticks" aria-hidden="true">
-                {snapshots.map((snapshot, index) => (
+                {timelineTickIndexes(snapshots.length).map((index) => (
                   <span
                     className={`timeline-tick ${index <= previewIndex ? "timeline-tick-active" : ""}`}
-                    key={snapshot.id}
+                    key={snapshots[index].id}
                     style={{ left: `${(index / (snapshots.length - 1)) * 100}%` }}
                   />
                 ))}
@@ -1494,20 +1513,18 @@ function MethodologyDialog({
 
               <section>
                 <div className="methodology-section-title">
-                  <h3>급부상과 현재 관심도</h3>
-                  <code>trend-intelligence-v6-shadow</code>
+                  <h3>신규 발굴, 재부상과 현재 관심도</h3>
+                  <code>trend-intelligence-v7-shadow</code>
                 </div>
                 <p>확인 가능한 구성요소의 동일 가중 평균에 100을 곱합니다. 누락된 값은 0으로 처리하지 않고 계산에서 제외합니다.</p>
                 <div className="methodology-models">
                   <div>
-                    <h4>급부상</h4>
-                    <p>
-                      최근 스타 증가가 양수인 후보를 절대 스타 수나 과거 Trending 이력으로 제외하지 않습니다.
-                      6시간 이상 직접 관측한 구간을 우선 사용하고, 없으면 GitHub의 최근 완료된 유지 스타 획득일,
-                      그마저 없으면 2시간 이상 떨어진 관측값의 일일 환산 속도를 임시 근거로 사용합니다.
-                    </p>
+                    <h4>{t("ranking.breakoutTitle")}</h4>
+                    <p>{t("ranking.breakoutDescription")}</p>
+                    <h4>{t("ranking.resurgenceTitle")}</h4>
+                    <p>{t("ranking.resurgenceDescription")}</p>
                     <ul>
-                      <li>스타 속도: 선택한 구간의 증가량을 24시간 기준으로 환산해 전체 후보와 비교합니다.</li>
+                      <li>스타 속도: 선택한 구간의 증가량을 24시간 기준으로 환산해 같은 분류의 후보와 비교합니다.</li>
                       <li>상대 성장: 관측 증가량은 직전 스타 수에, 유지 스타 획득량은 현재 스타 수에 비교합니다.</li>
                       <li>자기 성장 가속: 최근 24시간 관측 또는 유지 스타 획득일을 이전 최대 12주 일평균 중앙값과 비교합니다.</li>
                       <li>스타 가속: 시간당 6시간 증가율과 24시간 증가율, 또는 1시간과 6시간 증가율을 비교합니다.</li>
@@ -1543,12 +1560,12 @@ function MethodologyDialog({
                 <p>
                   현재 관심도는 빠짐없이 수집된 가장 긴 구간을 24시간 → 6시간 → 1시간 순서로 사용합니다.
                   6시간 구간이나 2시간 이상 실제 관측 속도가 있는 초기 후보는 계산 점수 상위 10%만 보여줍니다. 24시간 데이터가 쌓이면
-                  70점 이상인 저장소를 비율 제한 없이 보여줍니다. 7일 기준점이나 GitHub 이벤트가 없으면 신뢰도는
+                  70점 이상인 저장소를 비율 제한 없이 보여줍니다. 자기 기준선이나 GitHub 이벤트가 없으면 신뢰도는
                   낮아지지만 후보에서 바로 제외되지는 않습니다. 4시간보다 오래된 이벤트는 이벤트 지표 계산에서 제외합니다.
                 </p>
                 <p>
-                  모멘텀 신뢰도는 스타 관측 구간과 저장소 지표가 얼마나 완전한지에 따라 달라집니다. v5의 신뢰도는
-                  24시간 스타 증가, 7일 자기 기준점, 이벤트 범위도 함께 반영합니다. 높은 신뢰도를 받으려면
+                  모멘텀 신뢰도는 스타 관측 구간과 저장소 지표가 얼마나 완전한지에 따라 달라집니다. 추가 지표의 신뢰도는
+                  24시간 스타 증가, 자기 성장 기준선, 이벤트 범위도 함께 반영합니다. 높은 신뢰도를 받으려면
                   1시간·6시간·24시간 스타 구간과 24시간 이벤트 구간, 이전 72시간 참여자 근거가 모두 있어야 합니다.
                 </p>
                 <p>
@@ -1608,8 +1625,8 @@ function MethodologyDialog({
 
           <section>
             <div className="methodology-section-title">
-              <h3>Breakout and Current Heat</h3>
-              <code>trend-intelligence-v6-shadow</code>
+              <h3>New discoveries, Resurgence and Current Heat</h3>
+              <code>trend-intelligence-v7-shadow</code>
             </div>
             <p>
               Each score is 100 times the equal-weight mean of its known components. Missing
@@ -1617,15 +1634,12 @@ function MethodologyDialog({
             </p>
             <div className="methodology-models">
               <div>
-                <h4>Breakout</h4>
-                <p>
-                  Candidates with positive recent star growth are not excluded by absolute star count
-                  or prior Trending history. A directly observed window of at least six hours comes first,
-                  followed by GitHub's latest completed retained-star acquisition day, then a daily rate
-                  derived from observations at least two hours apart.
-                </p>
+                <h4>{t("ranking.breakoutTitle")}</h4>
+                <p>{t("ranking.breakoutDescription")}</p>
+                <h4>{t("ranking.resurgenceTitle")}</h4>
+                <p>{t("ranking.resurgenceDescription")}</p>
                 <ul>
-                  <li>Star velocity: selected star growth normalized to 24 hours across all candidates.</li>
+                  <li>Star velocity: selected star growth normalized to 24 hours within the same discovery or resurgence cohort.</li>
                   <li>Relative growth: observed deltas use prior stars; retained acquisitions use the current star count.</li>
                   <li>Self acceleration: recent observed or retained-acquisition growth ÷ the daily median of up to 12 prior weeks.</li>
                   <li>Star acceleration: 6h/hour − 24h/hour, or 1h − 6h/hour.</li>
@@ -1665,12 +1679,12 @@ function MethodologyDialog({
               Current Heat uses the longest complete window in the order 24h → 6h → 1h. Breakout shows
               only the top 10% while candidates have a six-hour window or an observed rate spanning at
               least two hours; once 24-hour evidence exists,
-              every repository scoring at least 70 is shown. A missing seven-day baseline or GitHub event
+              every repository scoring at least 70 is shown. A missing self baseline or GitHub event
               lowers confidence instead of removing the candidate. Event evidence older than four hours is excluded.
             </p>
             <p>
               Momentum confidence depends on observed star windows and repository metric
-              completeness. v5 confidence also considers 24-hour star growth, a seven-day self baseline,
+              completeness. Trend confidence also considers 24-hour star growth, a self baseline,
               and event coverage. High confidence requires complete 1h/6h/24h star windows, a 24h event
               window, and prior 72h actor evidence.
             </p>
@@ -1877,6 +1891,26 @@ export function SiteNavigation({
   );
 }
 
+function TrackRecordLoader() {
+  const { t } = useI18n();
+  const [record, setRecord] = useState<TrackRecord | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch("/api/track-record", { headers: { Accept: "application/json" }, signal: controller.signal });
+        if (!response.ok) throw new Error("Track record request failed with status " + response.status);
+        const parsed = parseTrackRecord(await response.json());
+        if (!controller.signal.aborted) setRecord(parsed);
+      } catch (error) { if (!controller.signal.aborted) setError(String(error)); }
+    })();
+    return () => controller.abort();
+  }, []);
+  if (error !== null) return <main className="page-container"><section className="status-panel" role="alert"><h1>{t("status.historyUnavailable")}</h1><p>{error}</p></section></main>;
+  return record === null ? <InitialLoadingState /> : <TrackRecordPage trackRecord={record} />;
+}
+
 function TrackRecordPage({ trackRecord }: { trackRecord: TrackRecord }) {
   const { t } = useI18n();
   return (
@@ -1982,7 +2016,8 @@ function ArchivePage({
         if (!response.ok) {
           throw new Error(`Archive request failed with status ${response.status}`);
         }
-        setArchive(parseArchivePageResponse(await response.json()));
+        const result = parseArchivePageResponse(await response.json());
+        if (!controller.signal.aborted) setArchive(result);
       } catch (error) {
         if (!controller.signal.aborted) {
           setArchiveError(error instanceof Error ? error.message : "Unknown archive error");
@@ -2124,7 +2159,8 @@ function RankingPage({
   const repositories = selectedSnapshot.repositories;
   const starSeries = useRepositoryStarSeries(selectedSnapshot.id, repositories);
   const filterCount = activeFilterCount(filters);
-  const viewCopy = rankingViewCopy(rankingView, locale);
+  const classificationAvailable = selectedSnapshot.classification_available === true;
+  const viewCopy = rankingViewCopy(rankingView, locale, classificationAvailable);
   const intelligenceAvailable = selectedSnapshot.intelligence_available;
 
   function changeFilters(nextFilters: RepositoryFilters) {
@@ -2135,7 +2171,7 @@ function RankingPage({
   }
 
   function changeRankingView(nextView: RankingView) {
-    if ((nextView === "breakout" || nextView === "current") && !intelligenceAvailable) {
+    if ((nextView === "breakout" || nextView === "resurgence" || nextView === "current") && !intelligenceAvailable) {
       throw new Error(`Trend intelligence is unavailable for snapshot ${selectedSnapshot.id}`);
     }
     onNavigate(
@@ -2241,12 +2277,12 @@ function RankingPage({
               aria-describedby="ranking-view-description"
               aria-selected={rankingView === view}
               className={rankingView === view ? "ranking-view-active" : ""}
-              disabled={(view === "breakout" || view === "current") && !intelligenceAvailable}
+              disabled={(view === "breakout" || view === "resurgence" || view === "current") && !intelligenceAvailable}
               key={view}
               onClick={() => changeRankingView(view)}
               role="tab"
               type="button"
-            >{t(RANKING_VIEW_LABEL_KEYS[view])}</button>
+            >{view === "breakout" && !classificationAvailable ? t("ranking.legacyBreakout") : t(RANKING_VIEW_LABEL_KEYS[view])}</button>
           ))}
         </div>
 
@@ -2286,15 +2322,15 @@ function RankingPage({
               : rankingView === "momentum"
                 ? t("ranking.emptyFiltered")
                 : rankingView === "breakout"
-                  ? t("ranking.emptyBreakout")
-                  : t("ranking.emptyEvidence")}</h3>
+                  ? t(classificationAvailable ? "ranking.emptyBreakout" : "ranking.emptyLegacyBreakout")
+                  : rankingView === "resurgence" ? t("ranking.emptyResurgence") : t("ranking.emptyEvidence")}</h3>
             <p>{rankingView === "github"
               ? t("ranking.tryTrendingPeriod")
               : rankingView === "momentum"
                 ? t("ranking.tryFilters")
                 : rankingView === "breakout"
                   ? t("ranking.waitBreakout")
-                  : t("ranking.waitEvidence")}</p>
+                  : rankingView === "resurgence" ? t("ranking.waitResurgence") : t("ranking.waitEvidence")}</p>
             {filterCount > 0 ? (
               <button type="button" onClick={() => changeFilters({ language: null, topic: null })}>
                 {t("ranking.clearFilters")}
@@ -2485,6 +2521,12 @@ export function SiteFooter() {
   );
 }
 
+export function rankingRequestKey(snapshotId: string, search: string): string {
+  const view = parseRankingView(search);
+  return buildRankingHref(requestedPage(search), snapshotId, parseRepositoryFilters(search), view,
+    view === "github" ? parseGitHubTrendingPeriod(search) : "daily");
+}
+
 function AppContent({
   locale,
   onLocaleChange,
@@ -2497,6 +2539,7 @@ function AppContent({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedSnapshot, setSelectedSnapshot] = useState<RankingPageResponse | null>(null);
   const [selectedSnapshotSearch, setSelectedSnapshotSearch] = useState<string | null>(null);
+  const rankingPages = useRef(new Map<string, { value: RankingPageResponse; expiresAt: number }>());
   const [isSnapshotLoading, setIsSnapshotLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [traffic, setTraffic] = useState<TrafficState>({ status: "loading" });
@@ -2542,20 +2585,36 @@ function AppContent({
 
     async function loadTimeline() {
       try {
-        const response = await fetch("/api/timeline", {
-          headers: { Accept: "application/json" },
-          signal: controller.signal,
+        const initialPath = window.location.pathname;
+        const initialSearch = window.location.search;
+        const isRankingPage = initialPath === "/";
+        const parameters = new URLSearchParams(initialSearch);
+        parameters.set("page_size", String(PAGE_SIZE));
+        const response = await fetch(isRankingPage ? "/api/bootstrap?" + parameters : "/api/timeline", {
+          headers: { Accept: "application/json" }, signal: controller.signal,
         });
-        if (!response.ok) {
-          throw new Error(`Timeline request failed with status ${response.status}`);
+        if (!response.ok) throw new Error("Initial data request failed with status " + response.status);
+        const payload: unknown = await response.json();
+        if (controller.signal.aborted) return;
+        if (isRankingPage) {
+          const initial = parseRankingBootstrap(payload);
+          setSnapshots(initial.timeline.snapshots);
+          setSelectedId(initial.ranking.id);
+          rememberRanking(rankingRequestKey(initial.ranking.id, initialSearch), initial.ranking);
+          setSelectedSnapshot(initial.ranking);
+          setSelectedSnapshotSearch(initialSearch);
+          const view = parseRankingView(initialSearch);
+          const filters = parseRepositoryFilters(initialSearch);
+          if (window.location.pathname === initialPath && window.location.search === initialSearch && shouldFallbackToMomentum({
+            isLatestSnapshot: initial.timeline.snapshots.at(-1)?.id === initial.ranking.id,
+            view, filters, matchingCount: initial.ranking.matching_count,
+            classificationAvailable: initial.ranking.classification_available,
+          })) navigate(buildRankingHref(1, initial.ranking.id, filters, "momentum"), "replace");
+        } else {
+          const timeline = parseTimelineResponse(payload);
+          setSnapshots(timeline.snapshots);
+          setSelectedId(resolveSnapshotId(null, timeline.snapshots));
         }
-        const timeline = parseTimelineResponse(await response.json());
-        const requestedId = window.location.pathname === "/"
-          ? new URLSearchParams(window.location.search).get("snapshot")
-          : null;
-        const resolvedId = resolveSnapshotId(requestedId, timeline.snapshots);
-        setSnapshots(timeline.snapshots);
-        setSelectedId(resolvedId);
       } catch (caughtError) {
         if (!controller.signal.aborted) {
           setError(caughtError instanceof Error ? caughtError.message : "Unknown history error");
@@ -2565,6 +2624,32 @@ function AppContent({
 
     void loadTimeline();
     return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    let lastCheckedAt = Date.now();
+    let pending = false;
+    const controller = new AbortController();
+    function refreshOnFocus() {
+      if (document.visibilityState !== "visible" || pending || Date.now() - lastCheckedAt < 30_000) return;
+      pending = true;
+      lastCheckedAt = Date.now();
+      void (async () => {
+        try {
+          const response = await fetch("/api/timeline", { headers: { Accept: "application/json" }, signal: controller.signal });
+          if (!response.ok) throw new Error("Timeline refresh failed with status " + response.status);
+          const timeline = parseTimelineResponse(await response.json());
+          if (controller.signal.aborted) return;
+          setSnapshots(timeline.snapshots);
+          if (window.location.pathname === "/" && !new URLSearchParams(window.location.search).has("snapshot")) {
+            setSelectedId(timeline.snapshots.at(-1)!.id);
+          }
+        } catch (error) { if (!controller.signal.aborted) console.error(error); }
+        finally { pending = false; }
+      })();
+    }
+    window.addEventListener("focus", refreshOnFocus);
+    return () => { controller.abort(); window.removeEventListener("focus", refreshOnFocus); };
   }, []);
 
   useEffect(() => {
@@ -2586,10 +2671,19 @@ function AppContent({
   }, [snapshots]);
 
   useEffect(() => {
-    if (selectedId === null) {
+    if (selectedId === null || locationPath !== "/") return;
+    if (selectedSnapshot?.id === selectedId && selectedSnapshotSearch !== null
+      && rankingRequestKey(selectedId, selectedSnapshotSearch) === rankingRequestKey(selectedId, rankingLocationSearch)) return;
+    const snapshotId = selectedId;
+    const cacheKey = rankingRequestKey(snapshotId, rankingLocationSearch);
+    const cached = rankingPages.current.get(cacheKey);
+    if (cached !== undefined && cached.expiresAt > Date.now()) {
+      setSelectedSnapshot(cached.value);
+      setSelectedSnapshotSearch(rankingLocationSearch);
+      setIsSnapshotLoading(false);
+      setError(null);
       return;
     }
-    const snapshotId = selectedId;
     setError(null);
     const controller = new AbortController();
     setIsSnapshotLoading(true);
@@ -2630,6 +2724,7 @@ function AppContent({
           throw new Error(`Ranking request failed with status ${response.status}`);
         }
         const snapshot = parseRankingPageResponse(await response.json());
+        if (controller.signal.aborted) return;
         if (snapshot.id !== snapshotId) {
           throw new Error(`Snapshot response ${snapshot.id} does not match ${snapshotId}`);
         }
@@ -2638,6 +2733,7 @@ function AppContent({
           view,
           filters,
           matchingCount: snapshot.matching_count,
+          classificationAvailable: snapshot.classification_available,
         })) {
           navigate(
             buildRankingHref(1, snapshotId, filters, "momentum"),
@@ -2645,6 +2741,7 @@ function AppContent({
           );
           return;
         }
+        rememberRanking(cacheKey, snapshot);
         setSelectedSnapshot(snapshot);
         setSelectedSnapshotSearch(loadedSearch);
       } catch (caughtError) {
@@ -2661,6 +2758,13 @@ function AppContent({
     void loadSnapshot();
     return () => controller.abort();
   }, [locationPath, rankingLocationSearch, selectedId, snapshots]);
+
+  function rememberRanking(key: string, value: RankingPageResponse) {
+    if (value.matching_count === 0 && !value.classification_available) return;
+    rankingPages.current.delete(key);
+    rankingPages.current.set(key, { value, expiresAt: Date.now() + 30_000 });
+    while (rankingPages.current.size > 8) rankingPages.current.delete(rankingPages.current.keys().next().value!);
+  }
 
   function navigate(href: string, mode: RankingNavigationMode) {
     navigateRankingHref(window.history, href, mode);
@@ -2726,7 +2830,7 @@ function AppContent({
 
   function openArchivedSnapshot(event: MouseEvent<HTMLAnchorElement>, snapshotId: string) {
     if (snapshots === null || !snapshots.some((snapshot) => snapshot.id === snapshotId)) {
-      throw new RangeError(`Snapshot ${snapshotId} does not exist`);
+      return;
     }
     event.preventDefault();
     const href = buildRankingHref(
@@ -2750,6 +2854,7 @@ function AppContent({
     setReadRepositories(nextReadRepositories);
   }
 
+  const searchableSnapshot = locationPath === "/" ? selectedSnapshot : snapshots?.at(-1) ?? null;
   const rankingRenderSearch = resolveRankingRenderSearch(
     locationSearch,
     selectedSnapshotSearch,
@@ -2773,7 +2878,7 @@ function AppContent({
             <button
               aria-label={t("header.searchRepositories")}
               className="header-search-button"
-              disabled={selectedSnapshot === null}
+              disabled={searchableSnapshot === null}
               onClick={() => setIsSearchOpen(true)}
               type="button"
             >
@@ -2787,7 +2892,12 @@ function AppContent({
         <SiteNavigation currentPath={locationPath} onNavigate={navigatePath} />
       </header>
 
-      {error !== null && selectedSnapshot === null ? (
+      {locationPath === "/archive" ? (
+        <ArchivePage locationSearch={locationSearch} readRepositories={readRepositories}
+          onRead={markRepositoryRead} onNavigate={navigate} onOpenSnapshot={openArchivedSnapshot} />
+      ) : locationPath === "/track-record" ? (
+        <TrackRecordLoader />
+      ) : error !== null && selectedSnapshot === null ? (
         <main className="page-container">
           <section className="status-panel" role="alert">
             <h1>{t("status.historyUnavailable")}</h1>
@@ -2796,7 +2906,7 @@ function AppContent({
         </main>
       ) : snapshots === null || selectedId === null || selectedSnapshot === null ? (
         <InitialLoadingState />
-      ) : locationPath === "/" ? (
+      ) : (
         <RankingPage
           snapshots={snapshots}
           selectedId={selectedId}
@@ -2809,22 +2919,13 @@ function AppContent({
           locationSearch={rankingRenderSearch}
           onNavigate={navigate}
         />
-      ) : locationPath === "/archive" ? (
-        <ArchivePage
-          locationSearch={locationSearch}
-          readRepositories={readRepositories}
-          onRead={markRepositoryRead}
-          onNavigate={navigate}
-          onOpenSnapshot={openArchivedSnapshot}
-        />
-      ) : (
-        <TrackRecordPage trackRecord={selectedSnapshot.track_record} />
       )}
-      {selectedSnapshot === null ? null : (
+
+      {searchableSnapshot === null ? null : (
         <RepositorySearchDialog
           open={isSearchOpen}
-          snapshotId={selectedSnapshot.id}
-          repositoryCount={selectedSnapshot.repository_count}
+          snapshotId={searchableSnapshot.id}
+          repositoryCount={searchableSnapshot.repository_count}
           readRepositories={readRepositories}
           onClose={() => setIsSearchOpen(false)}
           onRead={markRepositoryRead}

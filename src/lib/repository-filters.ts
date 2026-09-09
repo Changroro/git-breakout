@@ -3,7 +3,7 @@ export type RepositoryFilters = {
   topic: string | null;
 };
 
-export type RankingView = "breakout" | "momentum" | "current" | "github";
+export type RankingView = "breakout" | "resurgence" | "momentum" | "current" | "github";
 export type GitHubTrendingPeriod = "daily" | "weekly" | "monthly";
 export const GITHUB_TRENDING_PERIODS = ["daily", "weekly", "monthly"] as const;
 
@@ -99,7 +99,7 @@ export function parseRepositoryFilters(search: string): RepositoryFilters {
 export function parseRankingView(search: string): RankingView {
   const value = new URLSearchParams(search).get("view");
   if (value === null || value === "breakout") return "breakout";
-  if (value === "momentum" || value === "current" || value === "github") return value;
+  if (value === "resurgence" || value === "momentum" || value === "current" || value === "github") return value;
   throw new TypeError(`Unknown ranking view ${value}`);
 }
 

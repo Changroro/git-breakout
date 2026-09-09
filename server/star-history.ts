@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   STAR_SERIES_WINDOW_DAYS,
@@ -423,6 +423,8 @@ export function buildRetainedAcquisitionSeries(
 }
 
 export type StarHistoryStoreOptions = {
+  maxCacheBytes?: number;
+  maxCacheEntries?: number;
   cacheDirectory: string;
   token: string;
   fetchImplementation?: typeof fetch;
@@ -439,6 +441,10 @@ export type StarHistoryStoreOptions = {
 /** Disk cache in front of the GitHub star history endpoint. */
 export class StarHistoryStore {
   private readonly cacheDirectory: string;
+  private readonly cacheFiles = new Map<string, number>();
+  private cacheBytes = 0;
+  private readonly maxCacheBytes: number;
+  private readonly maxCacheEntries: number;
   private readonly token: string;
   private readonly fetchImplementation: typeof fetch;
   private readonly now: () => Date;
@@ -446,6 +452,9 @@ export class StarHistoryStore {
   private readonly ttlMs: number;
   private readonly ttlJitterMs: number;
   private readonly inFlight = new Map<string, Promise<GitHubStarHistory>>();
+  private readonly backgroundQueue = new Map<string, { fullName: string; coverFrom: string }>();
+  private backgroundActive = 0;
+  private backgroundPausedUntil = 0;
 
   constructor(options: StarHistoryStoreOptions) {
     if (options.token.trim() === "") {
@@ -460,6 +469,11 @@ export class StarHistoryStore {
       throw new RangeError("ttlJitterMs must be non-negative and smaller than ttlMs");
     }
     this.cacheDirectory = options.cacheDirectory;
+    this.maxCacheBytes = options.maxCacheBytes ?? 128 * 1024 * 1024;
+    this.maxCacheEntries = options.maxCacheEntries ?? 5_000;
+    if (!Number.isSafeInteger(this.maxCacheBytes) || this.maxCacheBytes <= 0 || !Number.isSafeInteger(this.maxCacheEntries) || this.maxCacheEntries <= 0) {
+      throw new RangeError("Star history cache budgets must be positive integers");
+    }
     this.token = options.token;
     this.fetchImplementation = options.fetchImplementation ?? fetch;
     this.now = options.now ?? (() => new Date());
@@ -468,6 +482,25 @@ export class StarHistoryStore {
       : new HourlyRequestBudget(options.hourlyRequestLimit, this.now);
     this.ttlMs = ttlMs;
     this.ttlJitterMs = ttlJitterMs;
+    if (existsSync(this.cacheDirectory)) {
+      const files = readdirSync(this.cacheDirectory).filter(name => /^[a-f0-9]{64}\.json$/.test(name))
+        .map(name => { const path = join(this.cacheDirectory, name); const stats = statSync(path); return { path, size: stats.size, modifiedAt: stats.mtimeMs }; })
+        .sort((left, right) => left.modifiedAt - right.modifiedAt);
+      files.forEach(file => this.trackCacheFile(file.path, file.size));
+    }
+  }
+
+  private trackCacheFile(path: string, size: number): void {
+    const previous = this.cacheFiles.get(path);
+    if (previous !== undefined) { this.cacheBytes -= previous; this.cacheFiles.delete(path); }
+    this.cacheFiles.set(path, size);
+    this.cacheBytes += size;
+    while (this.cacheBytes > this.maxCacheBytes || this.cacheFiles.size > this.maxCacheEntries) {
+      const oldest = this.cacheFiles.entries().next().value!;
+      try { unlinkSync(oldest[0]); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      this.cacheFiles.delete(oldest[0]);
+      this.cacheBytes -= oldest[1];
+    }
   }
 
   private cacheKey(fullName: string): string {
@@ -500,15 +533,22 @@ export class StarHistoryStore {
     if (history.full_name.toLowerCase() !== fullName.toLowerCase()) {
       throw new Error(`Star history cache for ${fullName} contains ${history.full_name}`);
     }
+    this.trackCacheFile(this.cachePath(fullName), Buffer.byteLength(raw));
     return history;
   }
 
   private writeCache(history: GitHubStarHistory): void {
     mkdirSync(this.cacheDirectory, { recursive: true });
     const path = this.cachePath(history.full_name);
-    const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
-    writeFileSync(temporaryPath, JSON.stringify(history));
-    renameSync(temporaryPath, path);
+    const json = JSON.stringify(history);
+    const bytes = Buffer.byteLength(json);
+    if (bytes > this.maxCacheBytes) throw new RangeError("Star history exceeds the cache budget");
+    const temporaryPath = `${path}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporaryPath, json);
+      renameSync(temporaryPath, path);
+    } finally { if (existsSync(temporaryPath)) unlinkSync(temporaryPath); }
+    this.trackCacheFile(path, bytes);
   }
 
   private covers(history: GitHubStarHistory, coverFrom: string): boolean {
@@ -541,6 +581,33 @@ export class StarHistoryStore {
     return { history: cached, fresh: this.isFresh(cached) };
   }
 
+  refreshInBackground(fullName: string, coverFrom: string): void {
+    requireFullName(fullName);
+    requireTimestamp(coverFrom, "coverFrom");
+    const key = fullName.toLowerCase();
+    if (this.now().getTime() < this.backgroundPausedUntil || this.inFlight.has(key)) return;
+    const queued = this.backgroundQueue.get(key);
+    if (queued === undefined && this.backgroundQueue.size < 64 || queued !== undefined && Date.parse(coverFrom) < Date.parse(queued.coverFrom)) {
+      this.backgroundQueue.set(key, { fullName, coverFrom });
+    }
+    this.pumpBackground();
+  }
+
+  private pumpBackground(): void {
+    while (this.backgroundActive < 4 && this.backgroundQueue.size > 0
+      && this.now().getTime() >= this.backgroundPausedUntil) {
+      const [key, entry] = this.backgroundQueue.entries().next().value!;
+      this.backgroundQueue.delete(key);
+      this.backgroundActive += 1;
+      void this.read(entry.fullName, entry.coverFrom).catch(error => {
+        if (error instanceof GitHubRequestBudgetError || error instanceof GitHubRateLimitError) {
+          this.backgroundPausedUntil = this.now().getTime() + 60_000;
+        }
+        process.stderr.write("Background star history refresh failed for " + entry.fullName + ": " + String(error) + "\n");
+      }).finally(() => { this.backgroundActive -= 1; this.pumpBackground(); });
+    }
+  }
+
   async read(fullName: string, coverFrom: string): Promise<GitHubStarHistory> {
     requireFullName(fullName);
     requireTimestamp(coverFrom, "coverFrom");
@@ -548,10 +615,11 @@ export class StarHistoryStore {
     if (cached !== null && this.isFresh(cached) && this.covers(cached, coverFrom)) {
       return cached;
     }
-    const key = `${fullName.toLowerCase()}\n${coverFrom}`;
+    const key = fullName.toLowerCase();
     const pending = this.inFlight.get(key);
     if (pending !== undefined) {
-      return pending;
+      const history = await pending;
+      return this.covers(history, coverFrom) ? history : this.read(fullName, coverFrom);
     }
     const request = (async () => {
       try {
@@ -566,6 +634,9 @@ export class StarHistoryStore {
         this.writeCache(history);
         return history;
       } catch (error) {
+        if (error instanceof GitHubRequestBudgetError || error instanceof GitHubRateLimitError) {
+          this.backgroundPausedUntil = this.now().getTime() + 60_000;
+        }
         if (
           isRecoverableGitHubRequestError(error)
           && cached !== null
@@ -586,32 +657,23 @@ export class StarHistoryStore {
   }
 }
 
-/** Uses retained-star acquisitions when available and observed totals otherwise. */
 export async function enrichStarSeries(
   response: StarSeriesResponse,
   before: string,
-  store: Pick<StarHistoryStore, "read">,
+  store: Pick<StarHistoryStore, "readCached" | "refreshInBackground">,
   windowDays: number = STAR_SERIES_WINDOW_DAYS,
 ): Promise<StarSeriesResponse> {
   const beforeTimestamp = requireTimestamp(before, "before");
   const coverFrom = new Date(beforeTimestamp - windowDays * DAY_MS).toISOString();
-  const series = await Promise.all(response.series.map(async (observed) => {
-    try {
-      const history = await store.read(observed.full_name, coverFrom);
-      const retained = buildRetainedAcquisitionSeries(history, before, windowDays);
-      if (retained.points.length >= 2) {
-        return retained;
-      }
-    } catch (error) {
-      if (!isRecoverableGitHubRequestError(error)) {
-        throw error;
-      }
-      process.stderr.write(
-        `GitHub retained-star history unavailable for ${observed.full_name}: ${error instanceof Error ? error.message : String(error)}; serving observed totals\n`,
-      );
+  const series = response.series.map(observed => {
+    const cached = store.readCached(observed.full_name, coverFrom);
+    if (cached === null || !cached.fresh) store.refreshInBackground(observed.full_name, coverFrom);
+    if (cached !== null) {
+      const retained = buildRetainedAcquisitionSeries(cached.history, before, windowDays);
+      if (retained.points.length >= 2) return retained;
     }
     return { ...observed, source: "observed" as const };
-  }));
+  });
   return parseStarSeriesResponse({ schema_version: "1.0", series });
 }
 
