@@ -51,6 +51,7 @@ export type RepositoryGrowthEvidence = Record<"h1" | "h6" | "h24", GrowthWindowE
 
 export interface RepositoryCandidate {
   repository_id?: string;
+  identity_status?: "verified" | "legacy_unverified";
   full_name: string;
   url: string;
   open_graph_image_url: string;

@@ -78,6 +78,8 @@ Each ranking row offers expandable score evidence: the score's axis and confiden
 
 Public event archives are treated as lower-bound evidence because event coverage can vary over time. Direct GitHub star snapshots remain the primary source for observed point-in-time growth.
 
+A completed event hour means its archive was fully processed for valid repository names. Rows without a valid `owner/name` are excluded and counted separately; they do not invalidate observations for other, valid names. Malformed JSON, invalid actor data, timeouts and incomplete downloads still fail the hour. Sampling coverage is checked separately for each repository, so an omitted repository in a sampled hour is not treated as observed zero activity.
+
 ## Verified early discovery
 
 A repository counts as verified early only when its first recorded source was GitHub Search or public activity and it later appears in a collected GitHub Trending Daily snapshot. Lead time is the interval between the two observation timestamps, not GitHub's exact entry time.
