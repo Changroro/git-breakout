@@ -366,6 +366,7 @@ it.each(["breakout", "resurgence", "current", "momentum", "github"] as const)("d
 it("shows measured windows, baseline age, missing values and component denominator", () => {
   const repository = {
     ...rankRepositories(sampleRepositories.slice(0, 1), SAMPLE_CAPTURED_AT)[0],
+    identity_status: "legacy_unverified" as const,
     trend_intelligence: {
       score_version: "trend-intelligence-v8-shadow" as const, phase: "spark" as const, confidence: "low" as const,
       star_evidence_window_hours: 6 as const, event_evidence_window_hours: null,
@@ -382,6 +383,7 @@ it("shows measured windows, baseline age, missing values and component denominat
   expect(markup).toContain("확인할 수 없음");
   expect(markup).not.toContain("fresh_github_events");
   expect(markup).toContain("유지 스타 이력 조회 시각");
+  expect(markup).toContain("저장소 ID로 동일성이 확인되지 않았습니다");
 });
 
 const components = { star_velocity: 0.8, peer_relative_growth: 0.8, self_relative_growth: null, star_acceleration: null, actor_acceleration: null, organic_breadth: null, event_diversity: null, persistence: null };

@@ -1004,6 +1004,9 @@ export function RepositoryScoreEvidence({ repository, view }: { repository: Rank
   return <details className="score-evidence">
     <summary>{t("evidence.title")} · {score == null ? t("evidence.noScore") : number(score)} · {confidence ? t(`evidence.${confidence}`) : t("evidence.unavailable")}</summary>
     <div className="score-evidence-body">
+      {repository.identity_status === "legacy_unverified" ? <p>{locale === "ko"
+        ? "과거 이름 기반 이력은 저장소 ID로 동일성이 확인되지 않았습니다."
+        : "Earlier name-based history has not been verified against a stable repository ID."}</p> : null}
       <dl>
         <dt>{t("evidence.confidence")}</dt><dd>{confidence ? t(`evidence.${confidence}`) : t("evidence.unavailable")}</dd>
         <dt>{t("evidence.components")}</dt><dd>{components.filter(([, value]) => value !== null).length} / {components.length}</dd>

@@ -30,7 +30,7 @@ export async function collectEventHour(hour: string, candidateLimit: number, wri
     lineCount: archive.lineCount,
     rejectedLineCount: archive.rejectedLines.length,
   });
-  if (archive.rejectedLines.length > 0) process.stderr.write(`GH Archive ${hour}: rejected ${archive.rejectedLines.length} of ${archive.lineCount} lines; event coverage is incomplete\n`);
+  if (archive.rejectedLines.length > 0) process.stderr.write(`GH Archive ${hour}: excluded ${archive.rejectedLines.length} invalid repository names from ${archive.lineCount} lines\n`);
 }
 
 export async function runEventCatchup(hours: readonly string[], collect: (hour: string) => Promise<void>): Promise<void> {

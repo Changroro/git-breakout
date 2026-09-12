@@ -10,6 +10,7 @@ export type ServiceStatus = {
     latest_completed_hour: string | null;
     missing_hours: number | null;
     source_complete: boolean | null;
+    excluded_invalid_names?: number;
   };
 };
 
@@ -49,6 +50,8 @@ export function parseServiceStatus(value: unknown): ServiceStatus {
   if (events.source_complete !== null && typeof events.source_complete !== "boolean") {
     throw new TypeError("Event completeness must be boolean or unknown");
   }
+  if (events.excluded_invalid_names !== undefined && (!Number.isInteger(events.excluded_invalid_names)
+    || (events.excluded_invalid_names as number) < 0)) throw new TypeError("Excluded event names must be a nonnegative count");
   return {
     schema_version: "1.0", status: input.status,
     latest_snapshot_at: input.latest_snapshot_at === null ? null : timestamp(input.latest_snapshot_at),
@@ -60,6 +63,7 @@ export function parseServiceStatus(value: unknown): ServiceStatus {
       latest_completed_hour: events.latest_completed_hour === null ? null : timestamp(events.latest_completed_hour),
       missing_hours: events.missing_hours as number | null,
       source_complete: events.source_complete as boolean | null,
+      ...(events.excluded_invalid_names === undefined ? {} : { excluded_invalid_names: events.excluded_invalid_names as number }),
     },
   };
 }
