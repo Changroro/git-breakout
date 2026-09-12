@@ -94,7 +94,9 @@ score = log1p(observedStarsPerDay) × 55
 - 최소 2시간 떨어진 관측이 생긴 뒤부터 실제 Star 속도를 계산한다.
 - GitHub Trending 순위는 후보 발견과 증거 표시에 사용하며 모멘텀 점수에는 직접 더하지 않는다.
 - 데이터가 부족한 값은 0점으로 꾸미지 않고 `insufficient_data`로 남긴다.
-- 신규 발굴·재부상·현재 관심도는 `trend-intelligence-v7-shadow` 모델로 별도 계산한다.
+- 신규 발굴·재부상·현재 관심도는 `trend-intelligence-v8-shadow` 모델로 별도 계산한다. 관측 창의 실제 경과 시간이 기록되어 있으면 그 값으로 속도를 환산하고, 유지 Star 이력의 조회 시각과 자기 기준선의 기간·공백을 근거로 남긴다.
+
+기본 화면은 신규 발굴이며 모멘텀도 별도로 제공한다. 기본 화면 선택이 신규 점수의 예측력 검증을 뜻하지는 않는다. 발굴 성과는 수집기가 먼저 관측한 사례의 이후 Trending 진입을 측정하며, 신규 발굴 상위 목록의 유용성을 검증하는 지표와는 범위가 다르다. 반복된 Watch 활동도 관심도·지속성에 반영될 수 있으므로 점수를 조작 없는 관심이나 지속적인 개발의 증거로 해석하면 안 된다.
 
 자세한 산식과 한계는 [공개 방법론](docs/methodology.md)에 정리돼 있다. 웹 화면의 각 지표 옆 물음표에서도 현재 계산 방식을 확인할 수 있다.
 
@@ -135,6 +137,16 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+운영 SQL·백업 통합 검증은 별도 운영 번들의 `deploy/oracle`, 실행 중인 Docker daemon, 로컬 `postgres:17-alpine` 이미지가 필요하다. 준비된 운영 작업 환경에서 `npm run test:integration`으로 실행하며, 공개 저장소 clone만으로 이 검증이 제공되지는 않는다. 필요한 항목이 없으면 자동 설치하거나 검증을 건너뛰지 않고 실패한다.
+
+저장된 스냅샷으로 순위의 후속 결과를 오프라인 비교할 수 있다.
+
+```bash
+npm run evaluate:ranking -- snapshot-history.json 20 > ranking-evaluation.json
+```
+
+당시 버전별 상위 20개와 같은 후보군의 모멘텀 상위 20개를 고정해 24·72시간 후 관측 성장과 데이터 가용률을 비교한다. 누락·신뢰도·저장소 규모별 결과와 구성요소를 하나씩 뺀 민감도도 기록한다. 미래 후보를 당시 목록에 넣거나 결측을 성장 0으로 바꾸지 않는다. 합성 테스트 통과는 실제 랭킹 품질의 증명이 아니다. 입력 계약과 한계는 [공개 방법론의 오프라인 평가](docs/methodology.md#offline-ranking-evaluation)에 있다.
 
 ## 프로젝트 구조
 

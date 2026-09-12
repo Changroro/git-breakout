@@ -4,6 +4,8 @@ import {
   normalizeObservationSources,
   type RepositoryCandidate,
   type RepositoryGrowth,
+  type GrowthWindowEvidence,
+  type RepositoryGrowthEvidence,
 } from "../src/lib/ranking.ts";
 import { BOOTSTRAP_REPOSITORY_NAMES } from "./bootstrap-repositories.ts";
 import { fetchGitHubRepositories, type GitHubRepositorySnapshot } from "./github.ts";
@@ -48,7 +50,7 @@ function deltaAtWindow(
   capturedAt: number,
   observations: readonly StarObservation[],
   hours: number,
-): number | null {
+): { delta: number; evidence: GrowthWindowEvidence } | null {
   const target = capturedAt - hours * HOUR_MS;
   let nearest: { observation: StarObservation; distance: number } | undefined;
   for (const observation of observations) {
@@ -58,7 +60,14 @@ function deltaAtWindow(
   if (nearest === undefined || nearest.distance > WINDOW_TOLERANCE_MS) {
     return null;
   }
-  return Math.max(0, stars - nearest.observation.stars);
+  return {
+    delta: Math.max(0, stars - nearest.observation.stars),
+    evidence: {
+      started_at: nearest.observation.capturedAt,
+      ended_at: new Date(capturedAt).toISOString(),
+      elapsed_hours: (capturedAt - Date.parse(nearest.observation.capturedAt)) / HOUR_MS,
+    },
+  };
 }
 
 export function calculateGrowth(
@@ -68,6 +77,7 @@ export function calculateGrowth(
   observationIntervalMinutes: number,
 ): {
   growth: RepositoryGrowth;
+  growth_evidence: RepositoryGrowthEvidence;
   observedStarsPerDay: number | null;
   firstObservation: boolean;
 } {
@@ -93,35 +103,27 @@ export function calculateGrowth(
     }
     return { observation, elapsed };
   });
-  const growth = {
-    stars_delta_1h: deltaAtWindow(stars, capturedTimestamp, observations, 1),
-    stars_delta_6h: deltaAtWindow(stars, capturedTimestamp, observations, 6),
-    stars_delta_24h: deltaAtWindow(stars, capturedTimestamp, observations, 24),
-  };
-  if (observations.length === 0) {
-    return {
-      growth,
-      observedStarsPerDay: null,
-      firstObservation: true,
-    };
-  }
-
   let baseline: typeof validatedObservations[number] | undefined;
   for (const observation of validatedObservations) {
-    if (observation.elapsed >= observationIntervalMinutes * MINUTE_MS
+    if (observation.elapsed >= Math.max(120, observationIntervalMinutes) * MINUTE_MS
       && (baseline === undefined || observation.elapsed < baseline.elapsed)) baseline = observation;
   }
   if (baseline === undefined) {
     return {
-      growth,
+      growth: { stars_delta_1h: null, stars_delta_6h: null, stars_delta_24h: null },
+      growth_evidence: { h1: null, h6: null, h24: null },
       observedStarsPerDay: null,
       firstObservation: true,
     };
   }
   const observedStarsPerDay = Math.max(0, stars - baseline.observation.stars) /
     (baseline.elapsed / DAY_MS);
+  const h1 = deltaAtWindow(stars, capturedTimestamp, observations, 1);
+  const h6 = deltaAtWindow(stars, capturedTimestamp, observations, 6);
+  const h24 = deltaAtWindow(stars, capturedTimestamp, observations, 24);
   return {
-    growth,
+    growth: { stars_delta_1h: h1?.delta ?? null, stars_delta_6h: h6?.delta ?? null, stars_delta_24h: h24?.delta ?? null },
+    growth_evidence: { h1: h1?.evidence ?? null, h6: h6?.evidence ?? null, h24: h24?.evidence ?? null },
     observedStarsPerDay,
     firstObservation: false,
   };
@@ -144,6 +146,7 @@ export function createRepositoryCandidate(
     observationIntervalMinutes,
   );
   return {
+    repository_id: repository.repositoryId,
     full_name: repository.fullName,
     url: repository.url,
     open_graph_image_url: repository.openGraphImageUrl,
@@ -159,6 +162,7 @@ export function createRepositoryCandidate(
     metrics: { ...repository.metrics },
     official_ranks: { ...repository.officialRanks },
     growth: observation.growth,
+    growth_evidence: observation.growth_evidence,
     observedStarsPerDay: observation.observedStarsPerDay,
     firstObservation: observation.firstObservation,
   };

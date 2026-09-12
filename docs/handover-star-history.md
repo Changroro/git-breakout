@@ -1,5 +1,7 @@
 # 인수인계: GitHub Star History API 도입
 
+> 이 문서는 2026-09-06 당시의 v6 도입 기록이다. 아래 미머지 상태·단일 코호트·배포 전 작업은 현재 지시가 아니다. 현행 v8의 신규/재부상 분리, 실제 관측 시간, 유지 정책과 평가 범위는 [공개 방법론](methodology.md)을 기준으로 한다.
+
 작성일: 2026-09-06
 PR: `#31` (`claude/github-star-history-api-uq6mi3`, main 미머지)
 

@@ -1,4 +1,5 @@
 import { normalizeObservationSources, type RankedRepository } from "./ranking.js";
+import { trendIntelligenceFor } from "./trend-intelligence.js";
 import {
   parseDiscoveryEvidence,
   parseTrackRecord,
@@ -87,7 +88,7 @@ export function parseHistoryResponse(value: unknown): HistoryResponse {
           `History snapshot ${index} repository ${repositoryIndex} has an invalid Open Graph image`,
         );
       }
-      return {
+      const parsed = {
         ...repository,
         observation_sources: repository.observation_sources === null
           ? null
@@ -96,6 +97,8 @@ export function parseHistoryResponse(value: unknown): HistoryResponse {
             `History snapshot ${index} repository ${repositoryIndex} observation_sources`,
           ),
       } as unknown as RankedRepository;
+      trendIntelligenceFor(parsed);
+      return parsed;
     });
     return { ...snapshot, repositories } as RankingSnapshot;
   });

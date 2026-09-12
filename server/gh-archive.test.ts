@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { gzipSync } from 'node:zlib';
 import {
   aggregateGhArchiveLines,
   formatGhArchiveUrl,
   selectEventCandidateBuckets,
+  fetchGhArchiveBucket,
 } from "./gh-archive.ts";
 
 const BUCKET_AT = "2026-08-28T10:00:00.000Z";
@@ -17,6 +19,10 @@ function event(type: string, actorId: number, repository = "owner/repository"): 
 }
 
 describe("GH Archive aggregation", () => {
+  it('rejects corrupt compressed streams without an unhandled stream error', async () => {
+    const compressed = gzipSync(event('WatchEvent', 1));
+    await expect(fetchGhArchiveBucket(BUCKET_AT, async () => new Response(compressed.subarray(0, compressed.length - 6)))).rejects.toThrow();
+  });
   it("aggregates relevant event types and distinct actors per repository", () => {
     const result = aggregateGhArchiveLines([
       event("WatchEvent", 1),

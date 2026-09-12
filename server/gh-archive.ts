@@ -1,5 +1,6 @@
-import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
+import { pipeline } from 'node:stream/promises';
+import { StringDecoder } from 'node:string_decoder';
 import { createGunzip } from "node:zlib";
 
 const RELEVANT_EVENT_FIELDS = {
@@ -203,15 +204,28 @@ export async function fetchGhArchiveBucket(
   }
 
   const compressed = Readable.fromWeb(response.body);
-  const lines = createInterface({ input: compressed.pipe(createGunzip()), crlfDelay: Infinity });
   const buckets = new Map<string, MutableBucket>();
   const rejectedLines: RejectedGhArchiveLine[] = [];
   let lineNumber = 0;
-  for await (const line of lines) {
+  const consumeLine = (line: string) => {
     lineNumber += 1;
     const rejected = addLine(buckets, line, bucketAt, lineNumber);
     if (rejected !== null) rejectedLines.push(rejected);
-  }
+  };
+  await pipeline(compressed, createGunzip(), async source => {
+    const decoder = new StringDecoder('utf8');
+    let pending = '';
+    for await (const chunk of source) {
+      pending += decoder.write(chunk as Buffer);
+      let newline: number;
+      while ((newline = pending.indexOf('\n')) !== -1) {
+        consumeLine(pending.slice(0, newline).replace(/\r$/, ''));
+        pending = pending.slice(newline + 1);
+      }
+    }
+    pending += decoder.end();
+    if (pending !== '') consumeLine(pending.replace(/\r$/, ''));
+  });
   if (lineNumber === 0) {
     throw new Error(`GH Archive ${bucketAt} contained no events`);
   }

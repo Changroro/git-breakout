@@ -2943,7 +2943,7 @@ h1 {
     white-space: normal;
     display: -webkit-box;
     -webkit-box-orient: vertical;
-    -webkit-line-clamp: 1;
+    -webkit-line-clamp: 2;
   }
 
   .repository-title-line {
@@ -2951,7 +2951,7 @@ h1 {
   }
 
   .repository-copy {
-    padding-right: 38px;
+    padding-right: 30px;
   }
 
   .repository-share-button {
@@ -3094,4 +3094,135 @@ h1 {
   .loading-skeleton-block::after {
     animation: none;
   }
+}
+
+.score-evidence {
+  grid-column: 3 / -1;
+  min-width: 0;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.score-evidence summary,
+.discovery-evidence summary {
+  cursor: pointer;
+  width: fit-content;
+}
+
+.score-evidence-body,
+.discovery-evidence-body {
+  padding: 12px;
+  margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.score-evidence-body dl,
+.discovery-evidence-body dl {
+  margin: 8px 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 4px 16px;
+}
+
+.score-evidence-body dl > div {
+  display: contents;
+}
+
+.score-evidence-body dd,
+.discovery-evidence-body dd {
+  margin: 0;
+}
+
+.score-evidence-body h4,
+.score-evidence-body p,
+.discovery-evidence-body p {
+  margin: 8px 0;
+}
+
+.score-evidence-body ul {
+  padding-left: 20px;
+}
+
+.evidence-evaluated {
+  margin: 0;
+  padding: 10px 24px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.discovery-evidence {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.discovery-evidence[open] {
+  flex-basis: 100%;
+}
+
+.repository-share-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 760px) {
+  .repository-name {
+    white-space: normal;
+    overflow: visible;
+    align-items: flex-start;
+    overflow-wrap: anywhere;
+  }
+
+  .repository-name > svg {
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .repository-name > span {
+    min-width: 0;
+  }
+
+  .score-evidence {
+    grid-column: 1 / -1;
+    margin-top: 10px;
+  }
+
+  .score-evidence summary,
+  .discovery-evidence summary {
+    min-height: 32px;
+    padding-block: 6px;
+  }
+
+  .evidence-evaluated {
+    padding-inline: 18px;
+  }
+}
+
+.service-freshness {
+  margin: 16px auto;
+  padding: 12px 16px;
+  width: min(1040px, calc(100% - 32px));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.service-freshness button {
+  margin-left: 12px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
 }

@@ -25,6 +25,7 @@ const HISTORY_PAGE_WEEKS = 30;
 const HISTORY_PAGE_LIMIT = 100;
 const REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_CACHE_TTL_MS = 6 * 3_600_000;
+const FAILURE_COOLDOWN_MS = 60_000;
 const MAX_HOURLY_REQUEST_LIMIT = DEFAULT_RATE_LIMIT_RESERVE;
 const GITHUB_API_VERSION = "2026-03-10";
 const USER_AGENT = "ai-trend-radar/0.0.0";
@@ -91,16 +92,22 @@ export class GitHubRateLimitError extends Error {
 }
 
 export class GitHubRequestBudgetError extends Error {
-  constructor(limit: number) {
+  readonly resetAt: Date | null;
+
+  constructor(limit: number, resetAt: Date | null = null) {
     super(`GitHub star history hourly request limit of ${limit} is exhausted`);
     this.name = "GitHubRequestBudgetError";
+    this.resetAt = resetAt;
   }
 }
 
 export class GitHubRequestError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
+  readonly status: number | undefined;
+
+  constructor(message: string, options?: ErrorOptions & { status?: number }) {
     super(message, options);
     this.name = "GitHubRequestError";
+    this.status = options?.status;
   }
 }
 
@@ -134,28 +141,37 @@ class HourlyRequestBudget {
       this.used = 0;
     }
     if (this.used >= this.limit) {
-      throw new GitHubRequestBudgetError(this.limit);
+      throw new GitHubRequestBudgetError(this.limit, new Date(this.windowStartedAt + 3_600_000));
     }
     this.used += 1;
   }
 }
 
-function requireResponseOk(response: Response, source: string): void {
+async function requireResponseOk(response: Response, source: string, now = new Date()): Promise<void> {
   if (response.ok) {
     return;
   }
   const resetHeader = response.headers.get("x-ratelimit-reset");
   const parsedReset = resetHeader === null ? null : new Date(Number(resetHeader) * 1000);
   const resetAt = parsedReset !== null && Number.isFinite(parsedReset.getTime()) ? parsedReset : null;
+  const retryHeader = response.headers.get("retry-after");
+  const retryTimestamp = retryHeader === null ? NaN : /^\d+(\.\d+)?$/.test(retryHeader.trim())
+    ? now.getTime() + Number(retryHeader) * 1000 : Date.parse(retryHeader);
+  const body = response.status === 403 ? await response.text() : "";
   if (
-    (response.status === 403 || response.status === 429)
-    && response.headers.get("x-ratelimit-remaining") === "0"
+    response.status === 429
+    || response.status === 403 && (response.headers.get("x-ratelimit-remaining") === "0"
+      || Number.isFinite(retryTimestamp) || /secondary rate limit|rate limit exceeded|abuse detection/i.test(body))
   ) {
-    throw new GitHubRateLimitError(source, response.status, resetAt);
+    const primaryReset = response.headers.get("x-ratelimit-remaining") === "0" ? resetAt?.getTime() : undefined;
+    const retryAt = Math.max(now.getTime() + (Number.isFinite(retryTimestamp) || primaryReset !== undefined ? 0 : FAILURE_COOLDOWN_MS),
+      primaryReset ?? 0, Number.isFinite(retryTimestamp) ? retryTimestamp : 0);
+    throw new GitHubRateLimitError(source, response.status, new Date(retryAt));
   }
   const resetMessage = resetAt === null ? "" : `; rate limit resets at ${resetAt.toISOString()}`;
   throw new GitHubRequestError(
     `${source} request failed with status ${response.status}${resetMessage}`,
+    { status: response.status },
   );
 }
 
@@ -189,7 +205,7 @@ export async function readCoreRateLimit(
     headers: githubHeaders(token),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
-  requireResponseOk(response, "GitHub rate limit");
+  await requireResponseOk(response, "GitHub rate limit");
   const payload: unknown = await response.json();
   const core = isRecord(payload) && isRecord(payload.resources) ? payload.resources.core : undefined;
   if (
@@ -325,7 +341,7 @@ export async function fetchGitHubStarHistory({
         { cause: error },
       );
     }
-    requireResponseOk(response, `GitHub star history ${fullName}`);
+    await requireResponseOk(response, `GitHub star history ${fullName}`, now());
     const pageWeeks = parseStarHistoryPage(await response.json(), fullName);
     const lastWeek = weeks.at(-1);
     if (lastWeek !== undefined && pageWeeks.length > 0 && pageWeeks[0].week >= lastWeek.week) {
@@ -438,6 +454,12 @@ export type StarHistoryStoreOptions = {
   ttlJitterMs?: number;
 };
 
+export type StarHistoryRead = {
+  history: GitHubStarHistory;
+  status: "fetched" | "reused";
+  rateLimited: boolean;
+};
+
 /** Disk cache in front of the GitHub star history endpoint. */
 export class StarHistoryStore {
   private readonly cacheDirectory: string;
@@ -451,7 +473,9 @@ export class StarHistoryStore {
   private readonly requestBudget: HourlyRequestBudget | null;
   private readonly ttlMs: number;
   private readonly ttlJitterMs: number;
-  private readonly inFlight = new Map<string, Promise<GitHubStarHistory>>();
+  private readonly inFlight = new Map<string, Promise<StarHistoryRead>>();
+  private readonly missing = new Map<string, { retryAt: number; error: GitHubRequestError }>();
+  private pausedError: GitHubRateLimitError | GitHubRequestBudgetError | null = null;
   private readonly backgroundQueue = new Map<string, { fullName: string; coverFrom: string }>();
   private backgroundActive = 0;
   private backgroundPausedUntil = 0;
@@ -483,7 +507,7 @@ export class StarHistoryStore {
     this.ttlMs = ttlMs;
     this.ttlJitterMs = ttlJitterMs;
     if (existsSync(this.cacheDirectory)) {
-      const files = readdirSync(this.cacheDirectory).filter(name => /^[a-f0-9]{64}\.json$/.test(name))
+      const files = readdirSync(this.cacheDirectory).filter(name => /^[a-f0-9]{64}\.json(\.corrupt)?$/.test(name))
         .map(name => { const path = join(this.cacheDirectory, name); const stats = statSync(path); return { path, size: stats.size, modifiedAt: stats.mtimeMs }; })
         .sort((left, right) => left.modifiedAt - right.modifiedAt);
       files.forEach(file => this.trackCacheFile(file.path, file.size));
@@ -529,9 +553,21 @@ export class StarHistoryStore {
       }
       throw error;
     }
-    const history = parseGitHubStarHistory(JSON.parse(raw));
-    if (history.full_name.toLowerCase() !== fullName.toLowerCase()) {
-      throw new Error(`Star history cache for ${fullName} contains ${history.full_name}`);
+    let history: GitHubStarHistory;
+    try {
+      history = parseGitHubStarHistory(JSON.parse(raw));
+      if (history.full_name.toLowerCase() !== fullName.toLowerCase()) {
+        throw new TypeError(`Star history cache for ${fullName} contains ${history.full_name}`);
+      }
+    } catch (error) {
+      if (!(error instanceof SyntaxError || error instanceof TypeError)) throw error;
+      const path = this.cachePath(fullName);
+      renameSync(path, `${path}.corrupt`);
+      const size = this.cacheFiles.get(path);
+      if (size !== undefined) { this.cacheFiles.delete(path); this.cacheBytes -= size; }
+      this.trackCacheFile(`${path}.corrupt`, Buffer.byteLength(raw));
+      process.stderr.write(`Quarantined invalid star history cache for ${fullName}: ${error.message}\n`);
+      return null;
     }
     this.trackCacheFile(this.cachePath(fullName), Buffer.byteLength(raw));
     return history;
@@ -585,7 +621,8 @@ export class StarHistoryStore {
     requireFullName(fullName);
     requireTimestamp(coverFrom, "coverFrom");
     const key = fullName.toLowerCase();
-    if (this.now().getTime() < this.backgroundPausedUntil || this.inFlight.has(key)) return;
+    if (this.now().getTime() < this.backgroundPausedUntil || this.inFlight.has(key)
+      || this.now().getTime() < (this.missing.get(key)?.retryAt ?? 0)) return;
     const queued = this.backgroundQueue.get(key);
     if (queued === undefined && this.backgroundQueue.size < 64 || queued !== undefined && Date.parse(coverFrom) < Date.parse(queued.coverFrom)) {
       this.backgroundQueue.set(key, { fullName, coverFrom });
@@ -600,42 +637,58 @@ export class StarHistoryStore {
       this.backgroundQueue.delete(key);
       this.backgroundActive += 1;
       void this.read(entry.fullName, entry.coverFrom).catch(error => {
-        if (error instanceof GitHubRequestBudgetError || error instanceof GitHubRateLimitError) {
-          this.backgroundPausedUntil = this.now().getTime() + 60_000;
-        }
         process.stderr.write("Background star history refresh failed for " + entry.fullName + ": " + String(error) + "\n");
       }).finally(() => { this.backgroundActive -= 1; this.pumpBackground(); });
     }
   }
 
   async read(fullName: string, coverFrom: string): Promise<GitHubStarHistory> {
+    return (await this.readWithStatus(fullName, coverFrom)).history;
+  }
+
+  async readWithStatus(fullName: string, coverFrom: string): Promise<StarHistoryRead> {
     requireFullName(fullName);
     requireTimestamp(coverFrom, "coverFrom");
     const cached = this.readCache(fullName);
     if (cached !== null && this.isFresh(cached) && this.covers(cached, coverFrom)) {
-      return cached;
+      return { history: cached, status: "reused", rateLimited: false };
     }
     const key = fullName.toLowerCase();
     const pending = this.inFlight.get(key);
     if (pending !== undefined) {
-      const history = await pending;
-      return this.covers(history, coverFrom) ? history : this.read(fullName, coverFrom);
+      const result = await pending;
+      return this.covers(result.history, coverFrom) ? result : this.readWithStatus(fullName, coverFrom);
     }
-    const request = (async () => {
+    const request = (async (): Promise<StarHistoryRead> => {
       try {
+        if (this.now().getTime() < this.backgroundPausedUntil && this.pausedError !== null) throw this.pausedError;
+        const missing = this.missing.get(key);
+        if (missing !== undefined) {
+          if (this.now().getTime() < missing.retryAt) throw missing.error;
+          this.missing.delete(key);
+        }
         const history = await fetchGitHubStarHistory({
           fullName,
           token: this.token,
           coverFrom,
           fetchImplementation: this.fetchImplementation,
           now: this.now,
-          beforeRequest: () => this.requestBudget?.consume(),
+          beforeRequest: () => {
+            if (this.now().getTime() < this.backgroundPausedUntil && this.pausedError !== null) throw this.pausedError;
+            this.requestBudget?.consume();
+          },
         });
         this.writeCache(history);
-        return history;
+        return { history, status: "fetched", rateLimited: false };
       } catch (error) {
         if (error instanceof GitHubRequestBudgetError || error instanceof GitHubRateLimitError) {
-          this.backgroundPausedUntil = this.now().getTime() + 60_000;
+          if (this.pausedError !== error || this.backgroundPausedUntil <= this.now().getTime()) {
+            this.backgroundPausedUntil = Math.max(this.backgroundPausedUntil, this.now().getTime() + FAILURE_COOLDOWN_MS, error.resetAt?.getTime() ?? 0);
+            this.pausedError = error;
+          }
+        } else if (error instanceof GitHubRequestError && error.status === 404 && !this.missing.has(key)) {
+          while (this.missing.size >= this.maxCacheEntries) this.missing.delete(this.missing.keys().next().value!);
+          this.missing.set(key, { retryAt: this.now().getTime() + FAILURE_COOLDOWN_MS, error });
         }
         if (
           isRecoverableGitHubRequestError(error)
@@ -645,15 +698,13 @@ export class StarHistoryStore {
           process.stderr.write(
             `Serving stale star history for ${fullName}: ${error instanceof Error ? error.message : String(error)}\n`,
           );
-          return cached;
+          return { history: cached, status: "reused", rateLimited: error instanceof GitHubRateLimitError || error instanceof GitHubRequestBudgetError };
         }
         throw error;
-      } finally {
-        this.inFlight.delete(key);
       }
     })();
     this.inFlight.set(key, request);
-    return request;
+    try { return await request; } finally { this.inFlight.delete(key); }
   }
 }
 
@@ -698,7 +749,7 @@ export function summarizeStarHistory(
     }));
   return {
     full_name: history.full_name,
-    captured_at: new Date(anchoredAt).toISOString(),
+    captured_at: history.fetched_at,
     days,
   };
 }
@@ -707,13 +758,13 @@ export type StarHistoryCollection = {
   histories: RepositoryStarHistory[];
   /** Repositories refreshed from GitHub in this run. */
   fetched: number;
-  /** Repositories served from cache without spending quota. */
+  /** Repositories whose result came from cache, including failed refreshes. */
   reused: number;
   /** Repositories left without history: no cache and no budget, or an error. */
   skipped: number;
 };
 
-type StarHistoryReader = Pick<StarHistoryStore, "read" | "readCached">;
+type StarHistoryReader = Pick<StarHistoryStore, "readWithStatus" | "readCached">;
 
 /**
  * Loads star history for a collection run inside a fixed fetch budget.
@@ -753,14 +804,7 @@ export async function collectStarHistories(
   let reused = 0;
 
   fullNames.forEach((fullName, index) => {
-    let cached: { history: GitHubStarHistory; fresh: boolean } | null = null;
-    try {
-      cached = store.readCached(fullName, coverFrom);
-    } catch (error) {
-      process.stderr.write(
-        `Discarding unreadable star history cache for ${fullName}: ${error instanceof Error ? error.message : String(error)}\n`,
-      );
-    }
+    const cached = store.readCached(fullName, coverFrom);
     if (cached !== null && cached.fresh) {
       results[index] = summarizeStarHistory(cached.history, capturedAt, windowDays);
       reused += 1;
@@ -788,14 +832,18 @@ export async function collectStarHistories(
       const entry = selected[next];
       next += 1;
       try {
+        const result = await store.readWithStatus(entry.fullName, coverFrom);
         results[entry.index] = summarizeStarHistory(
-          await store.read(entry.fullName, coverFrom),
+          result.history,
           capturedAt,
           windowDays,
         );
-        fetched += 1;
+        if (result.status === "fetched") fetched += 1;
+        else reused += 1;
+        if (result.rateLimited) rateLimited = true;
       } catch (error) {
-        if (error instanceof GitHubRateLimitError && !rateLimited) {
+        if (!isRecoverableGitHubRequestError(error)) throw error;
+        if ((error instanceof GitHubRateLimitError || error instanceof GitHubRequestBudgetError) && !rateLimited) {
           rateLimited = true;
           process.stderr.write(
             `Stopping star history collection after ${entry.fullName}: ${error.message}; ${selected.length - next} refreshes skipped\n`,
@@ -814,7 +862,7 @@ export async function collectStarHistories(
 
   // Anything the budget did not cover keeps its stale history rather than
   // losing the signal entirely.
-  [...deferred, ...selected.slice(next)].forEach((entry) => {
+  [...deferred, ...selected].forEach((entry) => {
     if (results[entry.index] !== null || entry.cachedAt === Number.NEGATIVE_INFINITY) {
       return;
     }

@@ -3,7 +3,6 @@ import { percentileRanks } from "./percentile.js";
 import type { Confidence, RankedRepository } from "./ranking.js";
 
 const HOUR_MS = 3_600_000;
-const DAY_MS = 24 * HOUR_MS;
 
 export const MAX_EVENT_SIGNAL_AGE_HOURS = 4;
 /** Completed weeks of GitHub star history compared against the recent day. */
@@ -93,7 +92,8 @@ export type TrendIntelligence = {
     | "trend-intelligence-v4-shadow"
     | "trend-intelligence-v5-shadow"
     | "trend-intelligence-v6-shadow"
-    | "trend-intelligence-v7-shadow";
+    | "trend-intelligence-v7-shadow"
+    | "trend-intelligence-v8-shadow";
   phase: TrendPhase;
   confidence: Confidence;
   star_evidence_window_hours: 1 | 6 | 24 | null;
@@ -109,6 +109,15 @@ export type TrendIntelligence = {
   event_data_captured_at: string | null;
   missing_evidence: string[];
   reasons: string[];
+  evidence?: {
+    current_heat_component_count: number;
+    discovery_component_count: number;
+    star_window_elapsed_hours: number | null;
+    history_fetched_at: string | null;
+    baseline_started_at: string | null;
+    baseline_ended_at: string | null;
+    baseline_gap_hours: number | null;
+  };
 };
 
 export type TrendRankedRepository = RankedRepository & {
@@ -129,6 +138,7 @@ export function trendIntelligenceFor(repository: RankedRepository): TrendIntelli
       "trend-intelligence-v5-shadow",
       "trend-intelligence-v6-shadow",
       "trend-intelligence-v7-shadow",
+      "trend-intelligence-v8-shadow",
     ].includes(String(value.score_version))
   ) {
     throw new TypeError(`Repository ${repository.full_name} has invalid trend intelligence`);
@@ -152,6 +162,7 @@ type FeatureRow = {
   eventDiversity: number | null;
   persistence: number | null;
   classification: DiscoveryClassification;
+  evidence: Omit<NonNullable<TrendIntelligence["evidence"]>, "current_heat_component_count" | "discovery_component_count">;
 };
 
 type HistoryFeatures = {
@@ -160,6 +171,9 @@ type HistoryFeatures = {
   /** Median daily growth over the completed weeks before the recent window. */
   priorDailyGrowth: number | null;
   priorWeeks: number;
+  baselineStartedAt: string | null;
+  baselineEndedAt: string | null;
+  baselineGapHours: number | null;
 };
 
 function parseTimestamp(value: string, field: string): number {
@@ -227,12 +241,15 @@ function median(values: readonly number[]): number {
 function historyFeatures(
   history: RepositoryStarHistory | null,
   capturedAt: number,
-  observedDelta24: number | null,
+  observedWindowStart: number | null,
 ): HistoryFeatures {
   const empty: HistoryFeatures = {
     dailyGain: null,
     priorDailyGrowth: null,
     priorWeeks: 0,
+    baselineStartedAt: null,
+    baselineEndedAt: null,
+    baselineGapHours: null,
   };
   if (history === null) return empty;
   const days = history.days;
@@ -243,8 +260,8 @@ function historyFeatures(
     && capturedAt - latestEnd <= HISTORY_DAY_MAX_AGE_MS;
   const dailyGain = recentDayUsable ? latest.retained_stars_added : null;
 
-  const recentWindowStart = observedDelta24 !== null
-    ? capturedAt - DAY_MS
+  const recentWindowStart = observedWindowStart !== null
+    ? observedWindowStart
     : recentDayUsable
       ? Date.parse(latest.start)
       : null;
@@ -270,6 +287,11 @@ function historyFeatures(
     dailyGain,
     priorDailyGrowth: weeklyGains.length >= BREAKOUT_HISTORY_MIN_WEEKS ? median(weeklyGains) / 7 : null,
     priorWeeks: weeklyGains.length,
+    baselineStartedAt: weeklyGains.length >= BREAKOUT_HISTORY_MIN_WEEKS
+      ? days[anchorIndex - weeklyGains.length * 7 + 1].start : null,
+    baselineEndedAt: weeklyGains.length >= BREAKOUT_HISTORY_MIN_WEEKS ? days[anchorIndex].end : null,
+    baselineGapHours: weeklyGains.length >= BREAKOUT_HISTORY_MIN_WEEKS && recentWindowStart !== null
+      ? (recentWindowStart - Date.parse(days[anchorIndex].end)) / HOUR_MS : null,
   };
 }
 
@@ -302,17 +324,22 @@ function eventDiversity(window: TrendWindowSignals): number {
 function starEvidence(repository: RankedRepository): {
   delta: number;
   hours: 1 | 6 | 24;
+  elapsedHours: number;
 } | null {
   if (repository.growth.stars_delta_24h !== null) {
-    return { delta: repository.growth.stars_delta_24h, hours: 24 };
+    return { delta: repository.growth.stars_delta_24h, hours: 24, elapsedHours: observedHours(repository, 24) };
   }
   if (repository.growth.stars_delta_6h !== null) {
-    return { delta: repository.growth.stars_delta_6h, hours: 6 };
+    return { delta: repository.growth.stars_delta_6h, hours: 6, elapsedHours: observedHours(repository, 6) };
   }
   if (repository.growth.stars_delta_1h !== null) {
-    return { delta: repository.growth.stars_delta_1h, hours: 1 };
+    return { delta: repository.growth.stars_delta_1h, hours: 1, elapsedHours: observedHours(repository, 1) };
   }
   return null;
+}
+
+function observedHours(repository: RankedRepository, hours: 1 | 6 | 24): number {
+  return repository.growth_evidence?.[`h${hours}`]?.elapsed_hours ?? hours;
 }
 
 function eventEvidenceWindow(signals: RepositoryEventSignals): 1 | 6 | 24 | null {
@@ -335,7 +362,8 @@ function featureRow(
   const delta6 = repository.growth.stars_delta_6h;
   const delta24 = repository.growth.stars_delta_24h;
   const stars = repository.metrics.stars;
-  const historyEvidence = historyFeatures(history, capturedAt, delta24);
+  const historyEvidence = historyFeatures(history, capturedAt,
+    delta24 === null ? null : capturedAt - observedHours(repository, 24) * HOUR_MS);
   if (selectedStarEvidence === null) {
     missingEvidence.push(historyEvidence.dailyGain === null ? "star_growth_window" : "star_window_observed");
   } else if (selectedStarEvidence.hours < 24) {
@@ -386,15 +414,15 @@ function featureRow(
     : null;
   // Observed windows come first; otherwise use GitHub's latest retained-star day.
   const breakoutStarVelocity = selectedBreakoutEvidence !== null
-    ? selectedBreakoutEvidence.delta * 24 / selectedBreakoutEvidence.hours
+    ? selectedBreakoutEvidence.delta * 24 / selectedBreakoutEvidence.elapsedHours
     : historyEvidence.dailyGain !== null
       ? historyEvidence.dailyGain
       : repository.observedStarsPerDay;
-  const recentDailyGrowth = delta24 ?? historyEvidence.dailyGain;
+  const recentDailyGrowth = delta24 === null ? historyEvidence.dailyGain : delta24 * 24 / observedHours(repository, 24);
   const starAcceleration = delta6 !== null && delta24 !== null
-    ? delta6 / 6 - delta24 / 24
+    ? delta6 / observedHours(repository, 6) - delta24 / observedHours(repository, 24)
     : delta1 !== null && delta6 !== null
-      ? delta1 - delta6 / 6
+      ? delta1 / observedHours(repository, 1) - delta6 / observedHours(repository, 6)
       : null;
   const selectedSignals = freshSignals === null || selectedEventWindow === null
     ? null
@@ -425,20 +453,27 @@ function featureRow(
   return {
     repository,
     classification: classifyDiscovery(repository, origin, history, new Date(capturedAt).toISOString()),
+    evidence: {
+      star_window_elapsed_hours: selectedStarEvidence?.elapsedHours ?? null,
+      history_fetched_at: history?.captured_at ?? null,
+      baseline_started_at: historyEvidence.baselineStartedAt,
+      baseline_ended_at: historyEvidence.baselineEndedAt,
+      baseline_gap_hours: historyEvidence.baselineGapHours,
+    },
     eventSignals: freshSignals,
     missingEvidence,
     starEvidenceWindowHours: selectedStarEvidence?.hours ?? null,
     eventEvidenceWindowHours: selectedEventWindow,
     starVelocity: selectedStarEvidence === null
       ? null
-      : selectedStarEvidence.delta * 24 / selectedStarEvidence.hours,
+      : selectedStarEvidence.delta * 24 / selectedStarEvidence.elapsedHours,
     breakoutStarVelocity,
     relativeGrowth: stars === null || breakoutStarVelocity === null
       ? null
       : selectedBreakoutEvidence !== null
         ? priorStars === null
           ? null
-          : selectedBreakoutEvidence.delta / priorStars * 24 / selectedBreakoutEvidence.hours
+          : selectedBreakoutEvidence.delta / priorStars * 24 / selectedBreakoutEvidence.elapsedHours
         : historyEvidence.dailyGain !== null
           ? historyEvidence.dailyGain / Math.max(stars, 1)
           : breakoutStarVelocity / Math.max(stars, 1),
@@ -463,9 +498,9 @@ function reasonList(current: ScoreComponents, breakout: ScoreComponents): string
   if ((breakout.self_relative_growth ?? 0) >= 0.8) reasons.push("self_growth_acceleration");
   if ((breakout.star_acceleration ?? 0) >= 0.8) reasons.push("accelerating_stars");
   if ((breakout.actor_acceleration ?? 0) >= 0.8) reasons.push("accelerating_community");
-  if ((current.organic_breadth ?? 0) >= 0.8) reasons.push("broad_organic_interest");
+  if ((current.organic_breadth ?? 0) >= 0.8) reasons.push("broad_actor_interest");
   if ((current.event_diversity ?? 0) >= 0.75) reasons.push("multi_signal_activity");
-  if ((current.persistence ?? 0) >= 0.8) reasons.push("sustained_attention");
+  if ((current.persistence ?? 0) >= 0.8) reasons.push("recent_actor_activity");
   return reasons;
 }
 
@@ -696,13 +731,14 @@ export function rankTrendIntelligence(
       metrics: { ...row.repository.metrics },
       official_ranks: { ...row.repository.official_ranks },
       growth: { ...row.repository.growth },
+      ...(row.repository.growth_evidence === undefined ? {} : { growth_evidence: structuredClone(row.repository.growth_evidence) }),
       momentum: {
         ...row.repository.momentum,
         reasons: [...row.repository.momentum.reasons],
         components: { ...row.repository.momentum.components },
       },
       trend_intelligence: {
-        score_version: "trend-intelligence-v7-shadow",
+        score_version: "trend-intelligence-v8-shadow",
         phase,
         confidence,
         star_evidence_window_hours: row.starEvidenceWindowHours,
@@ -715,6 +751,11 @@ export function rankTrendIntelligence(
         event_data_captured_at: row.eventSignals?.captured_at ?? null,
         missing_evidence: [...new Set(missingEvidence)],
         reasons,
+        evidence: {
+          ...row.evidence,
+          current_heat_component_count: known(Object.values(currentComponents)).length,
+          discovery_component_count: known(Object.values(breakoutComponents)).length,
+        },
       },
     };
   });

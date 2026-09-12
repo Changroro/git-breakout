@@ -1,4 +1,6 @@
 import { loadRankingBootstrap } from "./ranking-bootstrap.ts";
+import { rankingResponse } from "./ranking-response.ts";
+import { localServiceStatus } from "../src/lib/service-status.ts";
 import { resolve } from "node:path";
 import type { Connect, Plugin, PreviewServer, ViteDevServer } from "vite";
 import { RepositoryCardCache } from "./card-cache.ts";
@@ -60,6 +62,26 @@ function attachHistoryApi(
     return starHistory;
   }
   httpServer?.once("close", () => database.close());
+
+  middlewares.use("/api/status", (request, response) => {
+    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    response.setHeader("Cache-Control", "no-store");
+    if (request.method !== "GET") {
+      response.statusCode = 405;
+      response.setHeader("Allow", "GET");
+      response.end(JSON.stringify({ error: "Method not allowed" }));
+      return;
+    }
+    try {
+      response.end(JSON.stringify(localServiceStatus(
+        database.readLatestCapturedAt(),
+        database.readCollectionIntervalMinutes(),
+      )));
+    } catch (error) {
+      response.statusCode = 503;
+      response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Status unavailable" }));
+    }
+  });
 
   middlewares.use("/api/bootstrap", async (request, response) => {
     response.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -160,7 +182,7 @@ function attachHistoryApi(
       }
       const view = parseRankingView(requestUrl.search);
       response.statusCode = 200;
-      response.end(JSON.stringify(buildLocalRankingPage({
+      response.end(JSON.stringify(rankingResponse(buildLocalRankingPage({
         snapshot,
         page: requirePositiveInteger(requestUrl, "page", 1_000_000),
         pageSize: requirePositiveInteger(requestUrl, "page_size", 100),
@@ -170,7 +192,7 @@ function attachHistoryApi(
         },
         view,
         period: view === "github" ? parseGitHubTrendingPeriod(requestUrl.search) : null,
-      })));
+      }), requestUrl.searchParams.get("facets"))));
     } catch (error) {
       response.statusCode = error instanceof TypeError || error instanceof RangeError ? 400 : 500;
       response.end(JSON.stringify({

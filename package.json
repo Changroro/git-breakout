@@ -16,6 +16,8 @@
     "history:import": "tsx server/import-history.ts",
     "history:import:remote": "tsx server/import-remote-history.ts",
     "test": "vitest run",
+    "test:integration": "node deploy/oracle/tests/audit-regression.mjs",
+    "evaluate:ranking": "tsx server/evaluate-ranking.ts",
     "typecheck": "tsc -b"
   },
   "dependencies": {

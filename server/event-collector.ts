@@ -36,8 +36,8 @@ export function parseEventCollectorArguments(args: readonly string[]): EventColl
     throw new TypeError("Event collector requires --limit");
   }
   const candidateLimit = Number(limitValue);
-  if (!Number.isInteger(candidateLimit) || candidateLimit <= 0) {
-    throw new RangeError("Event collector --limit must be a positive integer");
+  if (!Number.isInteger(candidateLimit) || candidateLimit <= 0 || candidateLimit > 10_000) {
+    throw new RangeError("Event collector --limit must be a positive integer no greater than 10000");
   }
   return { bucketAt, candidateLimit };
 }

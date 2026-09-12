@@ -24,6 +24,15 @@ const histories: RepositoryStarHistory[] = candidates.map((r, i) => ({ full_name
 }));
 
 describe("discovery and resurgence boards", () => {
+  it.each(["trend-intelligence-v7-shadow", "trend-intelligence-v8-shadow"] as const)("recognizes classification in %s snapshots", (version) => {
+    const repositories = rankTrendIntelligence(rankRepositories(candidates, capturedAt), [], capturedAt, histories, origins)
+      .map(repository => ({ ...repository, trend_intelligence: { ...repository.trend_intelligence, score_version: version } }));
+    const page = buildLocalRankingPage({ snapshot: { id: version, captured_at: capturedAt, source: "test", repositories },
+      view: "momentum", page: 1, pageSize: 10, filters: { language: null, topic: null }, period: null });
+    expect(page.classification_available).toBe(true);
+    expect(parseRankingPageResponse(page).repositories).toEqual(page.repositories);
+  });
+
   it("scores independent cohorts without changing baseline order", () => {
     const all = rankTrendIntelligence(rankRepositories(candidates, capturedAt), [], capturedAt, histories, origins);
     const discoveryOnly = rankTrendIntelligence(rankRepositories(candidates.slice(0,4), capturedAt), [], capturedAt, histories.slice(0,4), origins.slice(0,4));

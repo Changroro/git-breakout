@@ -39,3 +39,18 @@ describe("repository sharing", () => {
       .toThrow("must use HTTPS");
   });
 });
+
+it("shares legitimate GitHub avatar fallback cards without crashing Monthly", () => {
+  expect(() => threadsShareUrl({ ...input, imageUrl: "https://avatars.githubusercontent.com/u/130314967?v=4" })).not.toThrow();
+});
+
+it("drops unrelated filters and fragments from a bounded canonical share link", () => {
+  const url = new URL(buildRepositorySharePageUrl({
+    ...input,
+    pageUrl: `https://gitbreakout.imbch.dev/?snapshot=known&view=breakout&language=${"x".repeat(1000)}&share_repository=other/repo#${"y".repeat(1000)}`,
+  }));
+  expect(url.searchParams.get("snapshot")).toBe("known");
+  expect(url.searchParams.has("language")).toBe(false);
+  expect(url.hash).toBe("");
+  expect(() => threadsShareUrl({ ...input, pageUrl: url.toString() })).not.toThrow();
+});

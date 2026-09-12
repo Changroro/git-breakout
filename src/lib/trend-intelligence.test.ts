@@ -420,7 +420,7 @@ describe("rankTrendIntelligence", () => {
       starHistories(10),
     );
 
-    expect(ranked[0].trend_intelligence.score_version).toBe("trend-intelligence-v7-shadow");
+    expect(ranked[0].trend_intelligence.score_version).toBe("trend-intelligence-v8-shadow");
     const historical = structuredClone(ranked[0]);
     historical.trend_intelligence.score_version = "trend-intelligence-v2-shadow";
     expect(trendIntelligenceFor(historical)?.score_version).toBe("trend-intelligence-v2-shadow");

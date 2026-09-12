@@ -123,6 +123,28 @@ afterEach(async () => {
 });
 
 describe("createWebServer", () => {
+  it("reports degraded data separately from healthy process readiness", async () => {
+    const degraded = {
+      schema_version: "1.0", status: "degraded", latest_snapshot_at: "2026-09-11T00:00:00Z",
+      snapshot_age_seconds: 67500, expected_interval_minutes: 120, next_due_at: "2026-09-11T02:00:00Z",
+      last_failure: { at: "2026-09-11T18:00:00Z" },
+      events: { latest_completed_hour: "2026-09-11T15:00:00Z", missing_hours: 1, source_complete: false },
+    };
+    const upstream = vi.fn<typeof fetch>().mockImplementation(async (url) => Response.json(
+      String(url).endsWith("/service_status") ? degraded : { status: "ok" },
+    ));
+    const server = createWebServer({ ...testDirectories(), ...redirectConfig,
+      internalApiUrl: "http://rest:3000", trafficAnalytics }, { fetchImplementation: upstream });
+    const baseUrl = await listen(server);
+    const status = await fetch(`${baseUrl}/api/status`);
+    expect(status.status).toBe(200);
+    expect(status.headers.get("cache-control")).toBe("no-store");
+    expect(await status.json()).toEqual(degraded);
+    expect(await fetch(`${baseUrl}/health`).then(response => response.json())).toEqual({ status: "ok" });
+    await fetch(`${baseUrl}/api/status`);
+    expect(upstream).toHaveBeenCalledTimes(3);
+  });
+
   it("redirects legacy page requests without redirecting collector writes", async () => {
     const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValue(new Response(
       JSON.stringify({ status: "ok" }),

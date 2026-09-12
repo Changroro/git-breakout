@@ -91,8 +91,9 @@ import {
   useI18n,
   type Locale,
 } from "./lib/i18n";
+import { parseServiceStatus, type ServiceStatus } from "./lib/service-status";
 import { parsePublicTrafficResponse } from "./lib/public-traffic";
-import { threadsShareUrl } from "./lib/repository-share";
+import { threadsShareUrl, type RepositoryShareInput } from "./lib/repository-share";
 
 const PAGE_SIZE = 10;
 const DEFAULT_TOPIC_LIMIT = 12;
@@ -676,6 +677,10 @@ function RepositorySearchDialog({
         <div className="repository-search-field">
           <SearchIcon size={22} />
           <input
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={visibleResults.length > 0}
+            aria-activedescendant={visibleResults[activeIndex] ? `repository-search-result-${activeIndex}` : undefined}
             aria-controls="repository-search-results"
             aria-label={t("header.searchRepositories")}
             autoComplete="off"
@@ -736,7 +741,7 @@ function RepositorySearchDialog({
                   })
                   : t("search.resultCount", { count: formatCompactNumber(totalResults, locale) })}
               </p>
-              <ol id="repository-search-results" className="repository-search-results">
+              <ol id="repository-search-results" className="repository-search-results" role="listbox" aria-label={t("header.searchRepositories")}>
                 {visibleResults.map((repository, index) => {
                   const isRead = readRepositories.has(repository.full_name.toLocaleLowerCase("en-US"));
                   const stars = requireDisplayValue(
@@ -745,9 +750,12 @@ function RepositorySearchDialog({
                     repository.full_name,
                   );
                   return (
-                    <li key={repository.full_name}>
+                    <li key={repository.full_name} role="presentation">
                       <a
-                        aria-current={index === activeIndex ? "true" : undefined}
+                        id={`repository-search-result-${index}`}
+                        role="option"
+                        aria-selected={index === activeIndex}
+                        tabIndex={-1}
                         className={`repository-search-result ${index === activeIndex ? "repository-search-result-active" : ""} ${isRead ? "repository-search-result-read" : ""}`}
                         href={repository.url}
                         ref={(element) => { resultRefs.current[index] = element; }}
@@ -833,7 +841,7 @@ export function formatObservedLeadDuration(hours: number, locale: Locale = "en")
   return locale === "ko" ? `${formattedDays}일` : `${formattedDays}d`;
 }
 
-export function DiscoveryEvidenceBadge({ evidence }: { evidence: DiscoveryEvidence }) {
+export function DiscoveryEvidenceBadge({ evidence, evaluatedAt }: { evidence: DiscoveryEvidence; evaluatedAt?: string }) {
   const { locale, t } = useI18n();
   if (evidence.outcome !== "verified") {
     return null;
@@ -846,12 +854,17 @@ export function DiscoveryEvidenceBadge({ evidence }: { evidence: DiscoveryEviden
   }
   const lead = formatObservedLeadDuration(evidence.lead_hours, locale);
   return (
-    <span
-      className="discovery-evidence-badge"
-      title={t("repository.observedBeforeDailyTitle", { lead })}
-    >
-      <ClockIcon size={11} />{t("repository.observedBeforeDaily", { lead })}
-    </span>
+    <details className="discovery-evidence">
+      <summary className="discovery-evidence-badge"><ClockIcon size={11} />{t("repository.observedBeforeDaily", { lead })}</summary>
+      <div className="discovery-evidence-body">
+        <p>{t("repository.observedBeforeDailyTitle", { lead })}</p>
+        <dl>
+          <dt>{t("discovery.first")}</dt><dd>{evidence.first_observed_at === null ? t("evidence.unavailable") : <time dateTime={evidence.first_observed_at}>{formatCapturedAt(evidence.first_observed_at, locale)}</time>}</dd>
+          <dt>{t("discovery.daily")}</dt><dd>{evidence.first_trending_daily_at === null ? t("evidence.unavailable") : <time dateTime={evidence.first_trending_daily_at}>{formatCapturedAt(evidence.first_trending_daily_at, locale)}</time>}</dd>
+          {evaluatedAt ? <><dt>{t("discovery.evaluated")}</dt><dd><time dateTime={evaluatedAt}>{formatCapturedAt(evaluatedAt, locale)}</time></dd></> : null}
+        </dl>
+      </div>
+    </details>
   );
 }
 
@@ -919,10 +932,104 @@ function RepositoryStarGrowth({
   );
 }
 
-function RankingRow({
+export function RepositoryShareAction({ input }: { input: RepositoryShareInput }) {
+  const { t } = useI18n();
+  let href: string;
+  try {
+    href = threadsShareUrl(input);
+  } catch {
+    return <button className="repository-share-button" type="button" disabled aria-label={t("repository.shareUnavailable")} title={t("repository.shareUnavailable")}><MentionIcon size={15} /></button>;
+  }
+  return <a aria-label={t("repository.shareThreads", { name: input.fullName })} className="repository-share-button" href={href} rel="noopener noreferrer" target="_blank" title={t("repository.shareThreads", { name: input.fullName })}><MentionIcon aria-hidden="true" size={15} /></a>;
+}
+
+const EVIDENCE_LABELS: Record<string, [string, string]> = {
+  star_velocity: ["Star velocity", "스타 증가 속도"],
+  peer_relative_growth: ["Growth within the comparison group", "비교군 내 상대 성장"],
+  self_relative_growth: ["Growth against own baseline", "자체 기준 이력 대비 성장"],
+  star_acceleration: ["Star acceleration", "스타 증가 가속"],
+  actor_acceleration: ["Participant acceleration", "참여자 증가 가속"],
+  organic_breadth: ["Unique participant breadth", "고유 참여자 폭"],
+  event_diversity: ["Activity diversity", "활동 종류 다양성"],
+  persistence: ["Recent activity ratio", "최근 활동 비율"],
+  observed_growth_score: ["Observed star growth", "관측 스타 성장"],
+  lifetime_velocity_score: ["Lifetime star velocity", "생성 후 평균 스타 속도"],
+  size_score: ["Repository stars", "전체 스타 수"],
+  forks_score: ["Forks", "포크"],
+  open_issues_score: ["Open issues", "열린 이슈"],
+  recent_push_score: ["Recent push", "최근 푸시"],
+  first_observation_score: ["First observation", "첫 관측"],
+  star_growth_window: ["Star growth window", "스타 성장 관측 구간"],
+  star_window_observed: ["Observed star deltas (retained acquisitions used)", "실측 스타 증분 (유지 스타 획득 이력 사용)"],
+  star_window_24h: ["24-hour star observations", "24시간 스타 관측"],
+  star_history: ["Retained-star history", "유지 스타 이력"],
+  star_history_baseline: ["Earlier star baseline", "이전 스타 기준 이력"],
+  github_events: ["GitHub events", "GitHub 이벤트"],
+  fresh_github_events: ["Fresh GitHub events", "최신 GitHub 이벤트"],
+  event_growth_window: ["Complete event window", "완전한 이벤트 관측 구간"],
+  event_window_24h: ["24-hour event coverage", "24시간 이벤트 수집 범위"],
+  comparison_cohort: ["Sufficient comparison group", "충분한 비교군"],
+  discovery_history: ["First-observation provenance", "첫 관측 출처 이력"],
+  peer_growth_outlier: ["High growth among peers", "비교군 내 높은 성장"],
+  self_growth_acceleration: ["Growth above own baseline", "자체 기준을 웃도는 성장"],
+  accelerating_stars: ["Accelerating star growth", "빨라지는 스타 증가"],
+  accelerating_community: ["Accelerating participant activity", "빨라지는 참여자 활동"],
+  broad_organic_interest: ["Broad participant activity", "폭넓은 참여자 활동"],
+  broad_actor_interest: ["Broad participant activity", "폭넓은 참여자 활동"],
+  multi_signal_activity: ["Multiple activity types", "여러 종류의 활동"],
+  sustained_attention: ["High recent activity ratio", "높은 최근 활동 비율"],
+  recent_actor_activity: ["High recent activity ratio", "높은 최근 활동 비율"],
+  official_daily_rank: ["Observed in Trending Daily", "일간 트렌딩에서 관측"],
+  official_weekly_rank: ["Observed in Trending Weekly", "주간 트렌딩에서 관측"],
+  official_monthly_rank: ["Observed in Trending Monthly", "월간 트렌딩에서 관측"],
+  rapid_star_growth_1h: ["Rapid growth in the short window", "짧은 관측 구간의 빠른 성장"],
+  rapid_star_growth_24h: ["Rapid growth in the daily window", "일간 관측 구간의 빠른 성장"],
+  recently_active: ["Recent repository activity", "최근 저장소 활동"],
+};
+
+export function RepositoryScoreEvidence({ repository, view }: { repository: RankedRepository; view: Exclude<RankingView, "github"> }) {
+  const { locale, t } = useI18n();
+  const intelligence = trendIntelligenceFor(repository);
+  const momentum = view === "momentum";
+  const trendScore = view === "current" ? intelligence?.current_heat : view === "resurgence" ? intelligence?.resurgence : intelligence?.breakout;
+  const confidence = momentum ? repository.momentum.confidence : intelligence?.confidence;
+  const score = momentum ? repository.momentum.score : trendScore?.score;
+  const components = momentum
+    ? Object.entries(repository.momentum.components).filter(([key]) => ["observed_growth_score", "lifetime_velocity_score", "size_score", "forks_score", "open_issues_score", "recent_push_score", "first_observation_score"].includes(key))
+    : Object.entries(trendScore?.components ?? {}).filter(([key]) => (view === "current" ? ["star_velocity", "organic_breadth", "event_diversity", "persistence"] : ["star_velocity", "peer_relative_growth", "self_relative_growth", "star_acceleration", "actor_acceleration", "organic_breadth"]).includes(key));
+  const label = (key: string) => EVIDENCE_LABELS[key]?.[locale === "ko" ? 1 : 0] ?? (locale === "ko" ? `추가 근거 (${key})` : `Additional evidence (${key})`);
+  const number = (value: number) => value.toLocaleString(locale === "ko" ? "ko-KR" : "en-US", { maximumFractionDigits: 2 });
+  const hours = (value: number | null | undefined) => value == null ? t("evidence.unavailable") : t("evidence.hours", { hours: number(value) });
+  const reasons = momentum ? repository.momentum.reasons : intelligence?.reasons ?? [];
+  return <details className="score-evidence">
+    <summary>{t("evidence.title")} · {score == null ? t("evidence.noScore") : number(score)} · {confidence ? t(`evidence.${confidence}`) : t("evidence.unavailable")}</summary>
+    <div className="score-evidence-body">
+      <dl>
+        <dt>{t("evidence.confidence")}</dt><dd>{confidence ? t(`evidence.${confidence}`) : t("evidence.unavailable")}</dd>
+        <dt>{t("evidence.components")}</dt><dd>{components.filter(([, value]) => value !== null).length} / {components.length}</dd>
+        {!momentum ? <>
+          <dt>{t("evidence.starWindow")}</dt><dd>{hours(intelligence?.evidence?.star_window_elapsed_hours ?? intelligence?.star_evidence_window_hours)}</dd>
+          <dt>{t("evidence.historyFetched")}</dt><dd>{intelligence?.evidence?.history_fetched_at ? <time dateTime={intelligence.evidence.history_fetched_at}>{formatCapturedAt(intelligence.evidence.history_fetched_at, locale)}</time> : t("evidence.unavailable")}</dd>
+          <dt>{t("evidence.baseline")}</dt><dd>{intelligence?.evidence?.baseline_started_at && intelligence.evidence.baseline_ended_at ? <><time dateTime={intelligence.evidence.baseline_started_at}>{formatCapturedAt(intelligence.evidence.baseline_started_at, locale)}</time> – <time dateTime={intelligence.evidence.baseline_ended_at}>{formatCapturedAt(intelligence.evidence.baseline_ended_at, locale)}</time></> : t("evidence.unavailable")}</dd>
+          <dt>{t("evidence.gap")}</dt><dd>{hours(intelligence?.evidence?.baseline_gap_hours)}</dd>
+          <dt>{t("evidence.eventWindow")}</dt><dd>{hours(intelligence?.event_evidence_window_hours)}</dd>
+          <dt>{t("evidence.eventCaptured")}</dt><dd>{intelligence?.event_data_captured_at ? <time dateTime={intelligence.event_data_captured_at}>{formatCapturedAt(intelligence.event_data_captured_at, locale)}</time> : t("evidence.unavailable")}</dd>
+        </> : null}
+      </dl>
+      {momentum ? <dl>{Object.entries(repository.growth_evidence ?? {}).map(([key, window]) => <div key={key}><dt>{t("evidence.starWindow")} ({key.slice(1)}h)</dt><dd>{window ? <><time dateTime={window.started_at}>{formatCapturedAt(window.started_at, locale)}</time> – <time dateTime={window.ended_at}>{formatCapturedAt(window.ended_at, locale)}</time> ({hours(window.elapsed_hours)})</> : t("evidence.unavailable")}</dd></div>)}</dl> : null}
+      <p>{t(momentum ? "evidence.momentumScale" : "evidence.componentScale")}</p>
+      <dl>{components.map(([key, value]) => <div key={key}><dt>{label(key)}</dt><dd>{value === null ? t("evidence.unavailable") : number(value * (momentum ? 1 : 100))}</dd></div>)}</dl>
+      {!momentum ? <><h4>{t("evidence.missing")}</h4>{intelligence ? intelligence.missing_evidence.length ? <ul>{intelligence.missing_evidence.map(key => <li key={key}>{label(key)}</li>)}</ul> : <p>{t("evidence.noneMissing")}</p> : <p>{t("evidence.unavailable")}</p>}</> : null}
+      {reasons.length ? <><h4>{t("evidence.reason")}</h4><ul>{reasons.map(key => <li key={key}>{label(key)}</li>)}</ul></> : null}
+    </div>
+  </details>;
+}
+
+export function RankingRow({
   repository,
   displayRank,
   rankingView,
+  evaluatedAt,
   rowIndex,
   starSeries,
   isRead,
@@ -931,6 +1038,7 @@ function RankingRow({
   repository: RankingPageRepository;
   displayRank: number;
   rankingView: RankingView;
+  evaluatedAt?: string;
   rowIndex: number;
   starSeries: StarSeriesState;
   isRead: boolean;
@@ -944,13 +1052,13 @@ function RankingRow({
   const viewScore = repositoryViewScore(repository, rankingView);
   const phase = intelligence?.phase === "insufficient_data" ? null : intelligence?.phase ?? null;
 
-  const shareUrl = threadsShareUrl({
+  const shareInput = {
     fullName: repository.full_name,
     imageUrl: repository.open_graph_image_url,
     pageUrl: window.location.href,
     rank: displayRank,
     view: rankingView,
-  });
+  };
 
   return (
     <li className={`ranking-row ${isRead ? "ranking-row-read" : ""}`}>
@@ -973,26 +1081,17 @@ function RankingRow({
               <RepoIcon size={16} />
               <span>{repository.full_name}</span>
             </a>
-            <DiscoveryEvidenceBadge evidence={repository.discovery_evidence} />
+            <DiscoveryEvidenceBadge evidence={repository.discovery_evidence} evaluatedAt={evaluatedAt} />
             {rankingView === "github" || phase === null ? null : (
               <span
                 className={`trend-phase trend-phase-${phase}`}
-                title={intelligence?.reasons.join(", ") || phaseLabel(phase, locale)}
+                title={phaseLabel(phase, locale)}
               >
                 {phaseLabel(phase, locale)}
                 {rankingView === "momentum" || viewScore === null ? null : ` ${Math.round(viewScore)}`}
               </span>
             )}
-            <a
-              aria-label={t("repository.shareThreads", { name: repository.full_name })}
-              className="repository-share-button"
-              href={shareUrl}
-              rel="noopener noreferrer"
-              target="_blank"
-              title={t("repository.shareThreads", { name: repository.full_name })}
-            >
-              <MentionIcon aria-hidden="true" size={15} />
-            </a>
+            <RepositoryShareAction input={shareInput} />
           </div>
           <p>{repository.description}</p>
           <div className="mobile-meta">
@@ -1010,6 +1109,7 @@ function RankingRow({
         <span className="cell language">{language}</span>
         <span className="cell stars">{formatCompactNumber(stars, locale)}</span>
         <RepositoryStarGrowth repositoryName={repository.full_name} state={starSeries} />
+        {rankingView !== "github" ? <RepositoryScoreEvidence repository={repository} view={rankingView} /> : null}
       </div>
     </li>
   );
@@ -1533,12 +1633,12 @@ function MethodologyDialog({
                   </div>
                   <div>
                     <h4>현재 관심도</h4>
-                    <p>전체 저장소를 기준으로 스타 증가 속도와 고유 참여자 수, 활동 종류, 단기 지속성을 비교합니다.</p>
+                    <p>전체 저장소를 기준으로 스타 증가 속도와 고유 참여자 수, 활동 종류, 최근 활동 비율을 비교합니다.</p>
                     <ul>
                       <li>스타 속도: 선택한 구간의 스타 증가량을 24시간 기준으로 환산합니다.</li>
                       <li>참여 폭: 선택한 이벤트 구간의 고유 참여자 수입니다.</li>
                       <li>다양성: Watch, Fork, PR·Issue·Comment, Push·Release 중 활성 범주의 비율입니다.</li>
-                      <li>지속성: 단기 참여자를 장기 구간 기준으로 환산한 비율이며 최대 1입니다.</li>
+                      <li>최근 활동 비율: 단기 참여자를 장기 구간 기준으로 환산한 비율이며 최대 1입니다.</li>
                     </ul>
                   </div>
                 </div>
@@ -1643,20 +1743,20 @@ function MethodologyDialog({
                   <li>Relative growth: observed deltas use prior stars; retained acquisitions use the current star count.</li>
                   <li>Self acceleration: recent observed or retained-acquisition growth ÷ the daily median of up to 12 prior weeks.</li>
                   <li>Star acceleration: 6h/hour − 24h/hour, or 1h − 6h/hour.</li>
-                  <li>Actor acceleration and organic breadth: optional evidence from fresh GitHub events.</li>
+                  <li>Actor acceleration and unique participant breadth: optional evidence from fresh GitHub events.</li>
                 </ul>
               </div>
               <div>
                 <h4>Current Heat</h4>
                 <p>
                   Global star-velocity percentile, global unique-actor percentile, event-category
-                  diversity, and short-window actor persistence measure current attention.
+                  diversity, and recent actor activity ratio measure current attention.
                 </p>
                 <ul>
                   <li>Star velocity: selected star delta normalized to 24 hours.</li>
-                  <li>Organic breadth: unique actors in the selected event window.</li>
+                  <li>Unique participant breadth: unique actors in the selected event window.</li>
                   <li>Diversity: active Watch, Fork, PR/Issue/Comment, and Push/Release categories ÷ 4.</li>
-                  <li>Persistence: scaled short-window actors ÷ longer-window actors, capped at 1.</li>
+                  <li>Recent activity ratio: scaled short-window actors ÷ longer-window actors, capped at 1.</li>
                 </ul>
               </div>
             </div>
@@ -1796,6 +1896,7 @@ export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }
       </div>
 
       <div className="track-record-content">
+        <p className="evidence-evaluated">{t("discovery.evaluated")} <time dateTime={trackRecord.generated_at}>{formatCapturedAt(trackRecord.generated_at, locale)}</time></p>
         <div className="track-record-metrics">
           <TrackRecordMetric
             collecting={!verifiedReady}
@@ -2119,7 +2220,17 @@ function ArchivePage({
   );
 }
 
-function RankingPage({
+export function parseRankingWithFacets(payload: unknown, previous: RankingPageResponse | null): RankingPageResponse {
+  if (typeof payload === "object" && payload !== null && "facets_omitted" in payload && payload.facets_omitted === true) {
+    if (previous === null || !("id" in payload) || payload.id !== previous.id) {
+      throw new Error("Omitted ranking facets require the same previously loaded snapshot");
+    }
+    return parseRankingPageResponse({ ...payload, languages: previous.languages, topics: previous.topics });
+  }
+  return parseRankingPageResponse(payload);
+}
+
+export function RankingPage({
   snapshots,
   selectedId,
   selectedSnapshot,
@@ -2271,16 +2382,16 @@ function RankingPage({
           </div>
         </div>
 
-        <div className="ranking-view-tabs" role="tablist" aria-label={t("ranking.model")}>
+        <p className="evidence-evaluated">{t("discovery.evaluated")} <time dateTime={selectedSnapshot.track_record.generated_at}>{formatCapturedAt(selectedSnapshot.track_record.generated_at, locale)}</time>. {t("discovery.hindsight")}</p>
+        <div className="ranking-view-tabs" role="group" aria-label={t("ranking.model")}>
           {RANKING_VIEW_ORDER.map((view) => (
             <button
               aria-describedby="ranking-view-description"
-              aria-selected={rankingView === view}
+              aria-pressed={rankingView === view}
               className={rankingView === view ? "ranking-view-active" : ""}
               disabled={(view === "breakout" || view === "resurgence" || view === "current") && !intelligenceAvailable}
               key={view}
               onClick={() => changeRankingView(view)}
-              role="tab"
               type="button"
             >{view === "breakout" && !classificationAvailable ? t("ranking.legacyBreakout") : t(RANKING_VIEW_LABEL_KEYS[view])}</button>
           ))}
@@ -2317,14 +2428,14 @@ function RankingPage({
 
         {repositories.length === 0 ? (
           <div className="filter-empty-state">
-            <h3>{rankingView === "github"
+            <h3>{filterCount > 0 ? t("ranking.emptyFiltered") : rankingView === "github"
               ? t("ranking.emptyTrending")
               : rankingView === "momentum"
                 ? t("ranking.emptyFiltered")
                 : rankingView === "breakout"
                   ? t(classificationAvailable ? "ranking.emptyBreakout" : "ranking.emptyLegacyBreakout")
                   : rankingView === "resurgence" ? t("ranking.emptyResurgence") : t("ranking.emptyEvidence")}</h3>
-            <p>{rankingView === "github"
+            <p>{filterCount > 0 ? t("ranking.tryFilters") : rankingView === "github"
               ? t("ranking.tryTrendingPeriod")
               : rankingView === "momentum"
                 ? t("ranking.tryFilters")
@@ -2358,6 +2469,7 @@ function RankingPage({
                   )
                   : start + rowIndex + 1}
                 rankingView={rankingView}
+                evaluatedAt={selectedSnapshot.track_record.generated_at}
                 rowIndex={rowIndex}
                 starSeries={starSeries}
                 isRead={readRepositories.has(repository.full_name.toLocaleLowerCase("en-US"))}
@@ -2451,6 +2563,55 @@ export function InitialLoadingState() {
       </div>
     </main>
   );
+}
+
+export function ServiceFreshnessNotice({ status, unavailable = false, onRetry }: { status: ServiceStatus | null; unavailable?: boolean; onRetry?: () => void }) {
+  const { locale } = useI18n();
+  if (status?.status === "ok" && !unavailable) return null;
+  if (status === null && !unavailable) return null;
+  return <aside className="service-freshness" role="status">
+    {unavailable ? <span>{locale === "ko" ? "최신 수집 상태를 확인하지 못했습니다. 현재 표시된 데이터의 수집 시각을 확인하세요." : "Latest collection status could not be checked. Check the collection time of the displayed data."}</span> : <>
+      <strong>{locale === "ko" ? "최신 수집이 지연되었거나 일부 근거가 누락되었습니다." : "Latest collection is delayed or some evidence is missing."}</strong>{" "}
+      <span>{locale === "ko" ? "최근 완료: " : "Last completed: "}{status?.latest_snapshot_at ? <time dateTime={status.latest_snapshot_at}>{formatCapturedAt(status.latest_snapshot_at, locale)}</time> : (locale === "ko" ? "확인되지 않음" : "not available")}</span>
+      {status?.events.missing_hours ? <span>{locale === "ko" ? ` · 이벤트 ${status.events.missing_hours}시간 누락` : ` · ${status.events.missing_hours} event hours missing`}</span> : null}
+    </>}
+    {onRetry ? <button type="button" onClick={onRetry}>{locale === "ko" ? "상태 다시 확인" : "Check status again"}</button> : null}
+  </aside>;
+}
+
+function ServiceFreshness() {
+  const [status, setStatus] = useState<ServiceStatus | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    let lastChecked = 0;
+    let pending = false;
+    async function refresh() {
+      if (document.visibilityState !== "visible" || pending || Date.now() - lastChecked < 30_000) return;
+      pending = true;
+      lastChecked = Date.now();
+      try {
+        const response = await fetch("/api/status", { headers: { Accept: "application/json" }, cache: "no-store", signal: controller.signal });
+        if (!response.ok) throw new Error(`Service status request failed: ${response.status}`);
+        const parsed = parseServiceStatus(await response.json());
+        if (!controller.signal.aborted) { setStatus(parsed); setUnavailable(false); }
+      } catch (error) {
+        if (!controller.signal.aborted) { console.error(error); setUnavailable(true); }
+      } finally { pending = false; }
+    }
+    void refresh();
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    const timer = window.setInterval(refresh, 60_000);
+    return () => {
+      controller.abort();
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [attempt]);
+  return <ServiceFreshnessNotice status={status} unavailable={unavailable} onRetry={() => setAttempt(value => value + 1)} />;
 }
 
 export function HeaderTrafficBadge({ state }: { state: TrafficState }) {
@@ -2649,7 +2810,8 @@ function AppContent({
       })();
     }
     window.addEventListener("focus", refreshOnFocus);
-    return () => { controller.abort(); window.removeEventListener("focus", refreshOnFocus); };
+    document.addEventListener("visibilitychange", refreshOnFocus);
+    return () => { controller.abort(); window.removeEventListener("focus", refreshOnFocus); document.removeEventListener("visibilitychange", refreshOnFocus); };
   }, []);
 
   useEffect(() => {
@@ -2713,6 +2875,10 @@ function AppContent({
           page_size: String(PAGE_SIZE),
           view,
         });
+        if (selectedSnapshot?.id === snapshotId && (filters.topic === null
+          || selectedSnapshot.topics.some(topic => topic.value === filters.topic!.trim().toLocaleLowerCase("en-US")))) {
+          parameters.set("facets", "omit");
+        }
         if (period !== null) parameters.set("period", period);
         if (filters.language !== null) parameters.set("language", filters.language);
         if (filters.topic !== null) parameters.set("topic", filters.topic);
@@ -2723,7 +2889,7 @@ function AppContent({
         if (!response.ok) {
           throw new Error(`Ranking request failed with status ${response.status}`);
         }
-        const snapshot = parseRankingPageResponse(await response.json());
+        const snapshot = parseRankingWithFacets(await response.json(), selectedSnapshot);
         if (controller.signal.aborted) return;
         if (snapshot.id !== snapshotId) {
           throw new Error(`Snapshot response ${snapshot.id} does not match ${snapshotId}`);
@@ -2891,6 +3057,7 @@ function AppContent({
         </div>
         <SiteNavigation currentPath={locationPath} onNavigate={navigatePath} />
       </header>
+      <ServiceFreshness />
 
       {locationPath === "/archive" ? (
         <ArchivePage locationSearch={locationSearch} readRepositories={readRepositories}
