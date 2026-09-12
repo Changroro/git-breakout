@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 const MAX_STALE_MS = 7 * 86_400_000;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const CONTENT_TYPES = { "image/gif": "gif", "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" } as const;
-const GITHUB_IMAGE_HOSTS = new Set(["opengraph.githubassets.com", "repository-images.githubusercontent.com"]);
+const GITHUB_IMAGE_HOSTS = new Set(["opengraph.githubassets.com", "repository-images.githubusercontent.com", "avatars.githubusercontent.com"]);
 
 export type CachedCard = { bytes: Buffer; contentType: keyof typeof CONTENT_TYPES };
 type CacheEntry = { path: string; size: number; expiresAt: number; retryAt?: number; contentType: CachedCard["contentType"] };
@@ -20,6 +20,7 @@ export class RepositoryCardCache {
   private readonly maxEntries: number;
   private readonly entries = new Map<string, CacheEntry>();
   private readonly pending = new Map<string, Promise<CachedCard>>();
+  private readonly missing = new Map<string, { retryAt: number; error: Error }>();
   private bytes = 0;
 
   constructor(directory: string, options: {
@@ -113,6 +114,11 @@ export class RepositoryCardCache {
     if (cached !== undefined) this.remove(key);
     const pending = this.pending.get(key);
     if (pending !== undefined) return pending;
+    const missing = this.missing.get(key);
+    if (missing !== undefined) {
+      if (missing.retryAt > this.now()) throw missing.error;
+      this.missing.delete(key);
+    }
     if (this.pending.size >= 16) throw new RangeError("Card download capacity is exhausted");
     return this.startDownload(url, key);
   }
@@ -129,7 +135,15 @@ export class RepositoryCardCache {
       signal: AbortSignal.timeout(15_000),
       redirect: "error",
     });
-    if (!response.ok) throw new Error(`GitHub Open Graph image request failed with status ${response.status}`);
+    if (!response.ok) {
+      await response.body?.cancel();
+      const error = new Error(`GitHub Open Graph image request failed with status ${response.status}`);
+      if (response.status === 404) {
+        while (this.missing.size >= this.maxEntries) this.missing.delete(this.missing.keys().next().value!);
+        this.missing.set(key, { retryAt: this.now() + 60_000, error });
+      }
+      throw error;
+    }
     const contentType = response.headers.get("content-type")?.split(";", 1)[0];
     if (contentType === undefined || !Object.hasOwn(CONTENT_TYPES, contentType)) {
       await response.body?.cancel();

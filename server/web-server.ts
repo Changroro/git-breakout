@@ -1,4 +1,5 @@
 import { loadRankingBootstrap } from "./ranking-bootstrap.ts";
+import { rankingResponse } from "./ranking-response.ts";
 import { createReadStream, existsSync, readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, resolve, sep } from "node:path";
@@ -43,6 +44,7 @@ type RepositoryShareMetadata = DocumentMetadata & {
 const GITHUB_CARD_HOSTS = new Set([
   "opengraph.githubassets.com",
   "repository-images.githubusercontent.com",
+  "avatars.githubusercontent.com",
 ]);
 
 const RANKING_VIEW_NAMES: Record<RankingView, string> = {
@@ -482,7 +484,7 @@ export function createWebServer(
     return snapshot.captured_at;
   }
 
-  const server = createServer(async (request, response) => {
+  const handleRequest = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     requestStarts.set(response, performance.now());
     setSecurityHeaders(response);
     const requestUrl = new URL(request.url ?? "/", "http://localhost");
@@ -499,13 +501,14 @@ export function createWebServer(
     ) {
       response.setHeader("X-Robots-Tag", "noindex, nofollow");
     }
-    if (requestUrl.pathname === "/health") {
+    if (requestUrl.pathname === "/health" || requestUrl.pathname === "/api/status") {
       if (request.method !== "GET") {
         rejectMethod(response, "GET");
         return;
       }
       try {
-        sendJson(response, 200, await historyApi.readHealth());
+        sendJson(response, 200, requestUrl.pathname === "/health"
+          ? await historyApi.readHealth() : await historyApi.readServiceStatus());
       } catch (error) {
         sendJson(response, 503, { error: errorMessage(error) });
       }
@@ -594,7 +597,7 @@ export function createWebServer(
           view,
           period: requireGitHubTrendingPeriod(requestUrl, view),
         });
-        sendJson(response, 200, ranking, "public, max-age=30");
+        sendJson(response, 200, rankingResponse(ranking, requestUrl.searchParams.get("facets")), "public, max-age=30");
       } catch (error) {
         sendJson(response, error instanceof TypeError || error instanceof RangeError ? 400 : 502, {
           error: errorMessage(error),
@@ -710,6 +713,17 @@ export function createWebServer(
       return;
     }
     serveStatic(request, response, indexTemplate, canonicalHost, staticDirectory, requestUrl);
+  };
+  const server = createServer((request, response) => {
+    void handleRequest(request, response).catch((error: unknown) => {
+      if (response.destroyed || response.writableEnded) return;
+      if (response.headersSent) {
+        response.destroy();
+        return;
+      }
+      const invalid = error instanceof TypeError || error instanceof RangeError;
+      sendJson(response, invalid ? 400 : 500, { error: invalid ? "Invalid request" : "Request failed" });
+    });
   });
   return server;
 }

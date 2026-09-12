@@ -5,17 +5,20 @@ import type {
   TrendWindowSignals,
 } from "../src/lib/trend-intelligence.ts";
 import type { GhArchiveRepositoryBucket } from "./gh-archive.ts";
+import type { EventHourMetadata } from './event-catchup.ts';
 import type { StarObservation } from "./history.ts";
 import type {
   RepositoryRetentionCandidate,
   RetentionPolicy,
 } from "./retention.ts";
 
-type CollectionContext = {
+export type CollectionContext = {
   latestCapturedAt: string | null;
   intervalMinutes: number;
   retentionPolicy: RetentionPolicy;
   repositories: Array<RepositoryRetentionCandidate & {
+    repositoryId?: string;
+    identityStatus?: 'verified' | 'legacy_unverified';
     firstObservedStars: number;
     firstObservationWasTrending: boolean;
     officialTrendingEpisodeCount: number;
@@ -27,6 +30,9 @@ type CollectionContext = {
 export type CollectionSchedule = {
   nextDueAt: string;
 };
+
+export type CollectionRun = { id: string; status: 'running' | 'completed' | 'failed'; startedAt: string; finishedAt: string | null; errorMessage: string | null };
+export type RepositoryIdentityRequest = { repository_id: string; full_name: string; requested_names: string[] };
 
 export type SnapshotTimelineEntry = {
   id: string;
@@ -156,10 +162,16 @@ export function parseEventSignalContext(value: unknown): RepositoryEventSignals[
       repository.windows,
       `Event signal context.repositories[${index}].windows`,
     );
+    const repositoryCoverage = requireRecord(repository.coverage, `Event signal context.repositories[${index}].coverage`);
     return {
       full_name: fullName,
       captured_at: capturedAt,
-      coverage: { ...coverage },
+      coverage: {
+        h1: requireBoolean(repositoryCoverage.h1, 'Repository coverage.h1') && coverage.h1,
+        h6: requireBoolean(repositoryCoverage.h6, 'Repository coverage.h6') && coverage.h6,
+        h24: requireBoolean(repositoryCoverage.h24, 'Repository coverage.h24') && coverage.h24,
+        h72: requireBoolean(repositoryCoverage.h72, 'Repository coverage.h72') && coverage.h72,
+      },
       windows: {
         h1: parseEventWindow(windows.h1, `Event signal context.repositories[${index}].windows.h1`),
         h6: parseEventWindow(windows.h6, `Event signal context.repositories[${index}].windows.h6`),
@@ -285,8 +297,12 @@ export function parseCollectionContext(value: unknown): CollectionContext {
     if ((growthComparisonCapturedAt === null) !== (growthComparisonStars === null)) {
       throw new TypeError(`repositories[${repositoryIndex}] has incomplete growth comparison`);
     }
+    if (repository.repository_id !== undefined && (typeof repository.repository_id !== 'string' || !repository.repository_id.trim())) throw new TypeError('Repository identity must be a nonempty string');
+    if (repository.identity_status !== undefined && repository.identity_status !== 'verified' && repository.identity_status !== 'legacy_unverified') throw new TypeError('Invalid repository identity status');
     return {
       fullName,
+      ...(repository.repository_id === undefined ? {} : { repositoryId: repository.repository_id as string }),
+      ...(repository.identity_status === undefined ? {} : { identityStatus: repository.identity_status as 'verified' | 'legacy_unverified' }),
       firstSeenAt: requireTimestamp(
         repository.first_seen_at,
         `repositories[${repositoryIndex}].first_seen_at`,
@@ -374,6 +390,58 @@ export class RemoteHistoryApi {
 
   async startCollection(runId: string, startedAt: string): Promise<void> {
     await this.rpc("start_collection", { p_run_id: runId, p_started_at: startedAt });
+  }
+
+  async readCollectionRun(runId: string): Promise<CollectionRun | null> {
+    requireUuid(runId, 'Collection run id');
+    const value = await this.rpc('collection_run', { p_run_id: runId });
+    if (value === null) return null;
+    const run = requireRecord(value, 'Collection run');
+    const id = requireUuid(run.id, 'Collection run.id');
+    if (id !== runId) throw new Error('Collection run identity mismatch');
+    if (run.status !== 'running' && run.status !== 'completed' && run.status !== 'failed') throw new TypeError('Invalid collection run status');
+    const startedAt = requireTimestamp(run.started_at, 'Collection run.started_at');
+    const finishedAt = run.finished_at === null ? null : requireTimestamp(run.finished_at, 'Collection run.finished_at');
+    if ((run.status === 'running') !== (finishedAt === null)) throw new TypeError('Collection run status and finished_at disagree');
+    if (run.status === 'failed' ? typeof run.error_message !== 'string' || !run.error_message.trim() : run.error_message !== null) throw new TypeError('Collection run status and error_message disagree');
+    return { id, status: run.status, startedAt, finishedAt, errorMessage: run.error_message as string | null };
+  }
+
+  async readRepositoryIdentityContext(repositories: readonly RepositoryIdentityRequest[]): Promise<CollectionContext> {
+    if (repositories.length < 1 || repositories.length > 10_000) throw new RangeError('Identity context requires 1-10000 repositories');
+    const ids = new Set<string>();
+    for (const repository of repositories) {
+      if (typeof repository.repository_id !== 'string' || !repository.repository_id.trim() || ids.has(repository.repository_id)) throw new TypeError('Repository identity must be a unique nonempty string');
+      ids.add(repository.repository_id);
+      requireFullName(repository.full_name, 'Repository identity full_name');
+      if (!Array.isArray(repository.requested_names) || repository.requested_names.length > 100) throw new RangeError('Repository identity requested_names requires at most 100 names');
+      repository.requested_names.forEach(name => requireFullName(name, 'Repository identity requested name'));
+    }
+    return parseCollectionContext(await this.rpc('repository_identity_context', { p_repositories: repositories }));
+  }
+
+  async readCompletedEventHours(before: string, hours: number): Promise<string[]> {
+    requireTimestamp(before, 'Event collection before');
+    if (Date.parse(before) % 3_600_000 !== 0 || !Number.isInteger(hours) || hours < 1 || hours > 168) throw new RangeError('Event collection range requires an exact hour and 1-168 hours');
+    const value = await this.rpc('completed_event_hours', { p_before: before, p_hours: hours });
+    if (!Array.isArray(value)) throw new TypeError('Completed event hours must be an array');
+    const seen = new Set<number>();
+    return value.map(hour => {
+      const timestamp = Date.parse(requireTimestamp(hour, 'Completed event hour'));
+      if (timestamp % 3_600_000 !== 0 || timestamp > Date.parse(before) || timestamp <= Date.parse(before) - hours * 3_600_000 || seen.has(timestamp)) throw new Error('Completed event hour outside requested range or duplicated');
+      seen.add(timestamp);
+      return new Date(timestamp).toISOString();
+    });
+  }
+
+  async completeEventHour(bucketAt: string, repositories: readonly GhArchiveRepositoryBucket[], metadata: EventHourMetadata): Promise<void> {
+    requireTimestamp(bucketAt, 'Event hour');
+    if (Date.parse(bucketAt) % 3_600_000 !== 0 || repositories.length > 10_000) throw new RangeError('Event hour requires an exact hour and at most 10000 repositories');
+    requireNonNegativeInteger(metadata.sourceRepositoryCount, 'Event source repository count');
+    requirePositiveInteger(metadata.lineCount, 'Event line count');
+    requireNonNegativeInteger(metadata.rejectedLineCount, 'Event rejected line count');
+    if (metadata.sourceRepositoryCount < repositories.length || metadata.rejectedLineCount > metadata.lineCount) throw new RangeError('Event hour counts are inconsistent');
+    await this.rpc('complete_event_hour', { p_bucket_at: bucketAt, p_repositories: repositories, p_source_repository_count: metadata.sourceRepositoryCount, p_line_count: metadata.lineCount, p_rejected_line_count: metadata.rejectedLineCount });
   }
 
   async readCollectionSchedule(): Promise<CollectionSchedule> {

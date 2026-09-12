@@ -567,6 +567,13 @@ export class HistoryDatabase {
     });
   }
 
+  readLatestCapturedAt(): string | null {
+    const row = this.database.prepare(
+      "SELECT captured_at FROM ranking_snapshots WHERE status = 'completed' ORDER BY captured_at DESC LIMIT 1",
+    ).get() as { captured_at: string } | undefined;
+    return row?.captured_at ?? null;
+  }
+
   readTimeline(): TimelineResponse {
     const snapshots = this.database.prepare(`
       SELECT snapshots.id, snapshots.captured_at, snapshots.source,

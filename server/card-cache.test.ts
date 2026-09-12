@@ -30,6 +30,61 @@ function cacheDirectory(): string {
 }
 
 describe("loadRepositoryCard", () => {
+  it("renders a Monthly repository's GitHub avatar through the bounded thumbnail cache", async () => {
+    const avatar = "https://avatars.githubusercontent.com/u/130314967?s=400&v=4";
+    const fetchImplementation = vi.fn<typeof fetch>(async () => new Response(red, { headers: { "Content-Type": "image/png" } }));
+    const store = new RepositoryCardCache(cacheDirectory(), { fetchImplementation });
+    const first = await store.read("monthly/repository", avatar);
+    const second = await store.read("monthly/repository", avatar);
+    expect(first.contentType).toBe("image/webp");
+    expect(second.bytes).toEqual(first.bytes);
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+    expect(String(fetchImplementation.mock.calls[0][0])).toBe(avatar);
+    expect(fetchImplementation.mock.calls[0][1]).toMatchObject({ redirect: "error", signal: expect.any(AbortSignal) });
+  });
+
+  it.each([
+    "http://avatars.githubusercontent.com/u/130314967",
+    "https://user:password@avatars.githubusercontent.com/u/130314967",
+    "https://avatars.githubusercontent.com:444/u/130314967",
+    "https://avatars.githubusercontent.com.example.com/u/130314967",
+  ])("rejects an invalid avatar authority before fetching: %s", async avatar => {
+    const fetchImplementation = vi.fn<typeof fetch>();
+    const store = new RepositoryCardCache(cacheDirectory(), { fetchImplementation });
+    await expect(store.read("monthly/repository", avatar)).rejects.toThrow("GitHub Open Graph image host");
+    expect(fetchImplementation).not.toHaveBeenCalled();
+  });
+
+  it("refuses an avatar redirect rather than fetching its target", async () => {
+    const fetchImplementation = vi.fn<typeof fetch>(async () => new Response(null, { status: 302, headers: { Location: "https://example.com/image.png" } }));
+    const store = new RepositoryCardCache(cacheDirectory(), { fetchImplementation });
+    await expect(store.read("monthly/repository", "https://avatars.githubusercontent.com/u/130314967?s=400&v=4")).rejects.toThrow("status 302");
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+    expect(fetchImplementation.mock.calls[0][1]?.redirect).toBe("error");
+  });
+
+  it("cancels an oversized avatar stream within the existing storage budget", async () => {
+    const cancel = vi.fn();
+    const fetchImplementation = vi.fn<typeof fetch>(async () => new Response(new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array(4)); }, cancel,
+    }), { headers: { "Content-Type": "image/png" } }));
+    const store = new RepositoryCardCache(cacheDirectory(), { fetchImplementation, maxBytes: 3 });
+    await expect(store.read("monthly/repository", "https://avatars.githubusercontent.com/u/130314967?s=400&v=4")).rejects.toThrow("size limit");
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("briefly suppresses cold 404 retries across generation hashes and retries after expiry", async () => {
+    let now = Date.now();
+    const fetchImplementation = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(null, { status: 404 }))
+      .mockImplementation(async () => new Response(red, { headers: { "Content-Type": "image/png" } }));
+    const store = new RepositoryCardCache(cacheDirectory(), { now: () => now, fetchImplementation });
+    await expect(store.read("example/radar", "https://opengraph.githubassets.com/first/example/radar")).rejects.toThrow("404");
+    await expect(store.read("example/radar", "https://opengraph.githubassets.com/second/example/radar")).rejects.toThrow("404");
+    expect(fetchImplementation).toHaveBeenCalledOnce();
+    now += 60_000;
+    await expect(store.read("example/radar", "https://opengraph.githubassets.com/third/example/radar")).resolves.toMatchObject({contentType:"image/webp"});
+    expect(fetchImplementation).toHaveBeenCalledTimes(2);
+  });
   it("merges concurrent downloads and reuses files after restarting the cache", async () => {
     const fetchMock = vi.fn(async () => new Response(red, {
       headers: { "Content-Type": "image/png" },

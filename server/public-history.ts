@@ -1,4 +1,5 @@
 import { parseTrackRecord, type TrackRecord } from "../src/lib/discovery-track-record.ts";
+import { parseServiceStatus, type ServiceStatus } from "../src/lib/service-status.ts";
 import {
   parseRankingPageResponse,
   parseRankingSnapshot,
@@ -128,6 +129,10 @@ export class PublicHistoryApi {
       throw new TypeError("Public history health response must report ok");
     }
     return { status: "ok" };
+  }
+
+  async readServiceStatus(): Promise<ServiceStatus> {
+    return parseServiceStatus(await this.rpc("service_status", {}));
   }
 
   async readTimeline(): Promise<TimelineResponse> {

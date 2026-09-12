@@ -127,7 +127,10 @@ export function buildLocalRankingPage({
     ),
     languages: facets.languages,
     topics: boundedTopics(facets.topics, filters.topic),
-    classification_available: snapshot.repositories.some(repository => trendIntelligenceFor(repository)?.score_version === "trend-intelligence-v7-shadow"),
+    classification_available: snapshot.repositories.some(repository => {
+      const version = trendIntelligenceFor(repository)?.score_version;
+      return version === "trend-intelligence-v7-shadow" || version === "trend-intelligence-v8-shadow";
+    }),
     track_record: emptyTrackRecord(snapshot.captured_at),
     repositories: candidates.slice(start, start + pageSize).map((repository) => ({
       ...repository,

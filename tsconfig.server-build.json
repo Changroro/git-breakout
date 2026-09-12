@@ -19,6 +19,7 @@
     "server/serve.ts",
     "server/collect-remote.ts",
     "server/collect-events-remote.ts",
+    "server/collect-events-catchup.ts",
     "server/read-collection-schedule.ts"
   ]
 }

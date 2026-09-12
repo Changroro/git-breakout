@@ -1,7 +1,13 @@
+import { rankRepositories } from "./lib/ranking";
+import { sampleRepositories, SAMPLE_CAPTURED_AT } from "./data/repositories";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   DiscoveryEvidenceBadge,
+  RepositoryShareAction,
+  RankingPage,
+  RepositoryScoreEvidence,
+  ServiceFreshnessNotice,
   buildArchiveHref,
   formatCompactNumber,
   formatObservedLeadDuration,
@@ -10,6 +16,7 @@ import {
   LanguageSwitcher,
   RANKING_VIEW_ORDER,
   rankingRequestKey,
+  parseRankingWithFacets,
   RankingViewHeading,
   rankingViewCopy,
   RepositoryThumbnailFallback,
@@ -22,6 +29,7 @@ import {
 } from "./App";
 import type { DiscoveryEvidence, TrackRecord } from "./lib/discovery-track-record";
 import { I18nProvider, translate } from "./lib/i18n";
+import type { RankingPageResponse } from "./lib/history";
 
 describe("ranking view guidance", () => {
   it("orders the ranking views around discovery first", () => {
@@ -65,6 +73,22 @@ describe("ranking view guidance", () => {
 });
 
 describe("application navigation", () => {
+  it("reuses omitted facets only for the same known snapshot", () => {
+    const page: RankingPageResponse = {
+      schema_version: "1.0", id: "known", captured_at: SAMPLE_CAPTURED_AT, source: "fixture",
+      repositories: [], repository_count: 3, matching_count: 0, page: 1, page_size: 10,
+      intelligence_available: false, track_record: emptyTrackRecord(),
+      languages: [{ value: "rust", label: "Rust", count: 3 }],
+      topics: [{ value: "cli", label: "cli", count: 2 }],
+    };
+    const { languages: _languages, topics: _topics, ...rest } = page;
+    const compact = { ...rest, facets_omitted: true };
+    expect(parseRankingWithFacets(compact, page).languages).toEqual(page.languages);
+    expect(parseRankingWithFacets(compact, page).topics).toEqual(page.topics);
+    expect(() => parseRankingWithFacets(compact, null)).toThrow("same previously loaded snapshot");
+    expect(() => parseRankingWithFacets({ ...compact, id: "other" }, page)).toThrow("same previously loaded snapshot");
+  });
+
   it("keeps the loaded ranking query while another view is loading", () => {
     expect(resolveRankingRenderSearch(
       "?page=1&snapshot=latest&view=github&period=daily",
@@ -299,4 +323,88 @@ describe("DiscoveryEvidenceBadge", () => {
 it("recognizes the same loaded ranking despite URL ordering or sharing metadata", () => {
   expect(rankingRequestKey("snapshot", "")).toBe(rankingRequestKey("snapshot", "?snapshot=snapshot&page=1&share_rank=3"));
   expect(rankingRequestKey("snapshot", "?view=resurgence")).not.toBe(rankingRequestKey("snapshot", "?view=breakout"));
+});
+
+it("identifies the evaluation date of hindsight track-record results", () => {
+  const markup = renderToStaticMarkup(<TrackRecordSection trackRecord={emptyTrackRecord()} />);
+  expect(markup).toContain("Evaluated through");
+  expect(markup).toMatch(/datetime="2026-08-31T00:00:00.000Z"/i);
+});
+
+it("labels Korean discovery lead as an interval between Radar observations", () => {
+  expect(translate("ko", "repository.observedBeforeDailyTitle", { lead: "18시간" }))
+    .toContain("트렌딩에서 처음 관측한 시점");
+  expect(translate("ko", "repository.observedBeforeDailyTitle", { lead: "18시간" }))
+    .not.toContain("오르기");
+});
+
+it("keeps the repository content rendered when only sharing is invalid", () => {
+  const markup = renderToStaticMarkup(<article><h2>Monthly repository</h2><RepositoryShareAction input={{
+    fullName: "owner/repo", imageUrl: "https://untrusted.example/card.png", pageUrl: "https://gitbreakout.imbch.dev/", rank: 1, view: "github",
+  }} /></article>);
+  expect(markup).toContain("Monthly repository");
+  expect(markup).toContain("Sharing unavailable for this repository");
+  expect(markup).toContain('disabled=""');
+  expect(markup).not.toContain("untrusted.example");
+});
+
+it.each(["breakout", "resurgence", "current", "momentum", "github"] as const)("distinguishes filtered empty results in %s from unavailable evidence", (view) => {
+  const snapshot = {
+    id: "sample", captured_at: "2026-08-25T00:00:00.000Z", source: "sample", schema_version: "1.0" as const,
+    repository_count: 30, matching_count: 0, page: 1, page_size: 10, intelligence_available: true, classification_available: true,
+    track_record: emptyTrackRecord(), languages: [], topics: [], repositories: [],
+  };
+  const markup = renderToStaticMarkup(<RankingPage snapshots={[snapshot]} selectedId="sample" selectedSnapshot={snapshot}
+    isSnapshotLoading={false} snapshotError={null} readRepositories={new Set()} onSelect={() => undefined} onRead={() => undefined}
+    locationSearch={`?view=${view}&language=rust`} onNavigate={() => undefined} />);
+  expect(markup).toContain("No repositories match these filters");
+  expect(markup).not.toContain("Repositories remain unranked");
+  expect(markup).toContain('role="group" aria-label="Ranking model"');
+  expect(markup).not.toContain('role="tab"');
+});
+
+it("shows measured windows, baseline age, missing values and component denominator", () => {
+  const repository = {
+    ...rankRepositories(sampleRepositories.slice(0, 1), SAMPLE_CAPTURED_AT)[0],
+    trend_intelligence: {
+      score_version: "trend-intelligence-v8-shadow" as const, phase: "spark" as const, confidence: "low" as const,
+      star_evidence_window_hours: 6 as const, event_evidence_window_hours: null,
+      current_heat: { score: null, components }, breakout: { score: 80, components },
+      cohort: { key: "new", size: 2 }, event_data_captured_at: null, missing_evidence: ["fresh_github_events", "star_history_baseline"], reasons: ["broad_actor_interest"],
+      evidence: { current_heat_component_count: 2, discovery_component_count: 2, star_window_elapsed_hours: 6.5, history_fetched_at: "2026-08-01T00:00:00Z", baseline_started_at: "2026-07-01T00:00:00Z", baseline_ended_at: "2026-07-31T00:00:00Z", baseline_gap_hours: 696 },
+    },
+  };
+  const markup = renderToStaticMarkup(<I18nProvider locale="ko"><RepositoryScoreEvidence repository={repository} view="breakout" /></I18nProvider>);
+  expect(markup).toContain("6.5시간");
+  expect(markup).toContain("696시간");
+  expect(markup).toContain("2 / 6");
+  expect(markup).toContain("최신 GitHub 이벤트");
+  expect(markup).toContain("확인할 수 없음");
+  expect(markup).not.toContain("fresh_github_events");
+  expect(markup).toContain("유지 스타 이력 조회 시각");
+});
+
+const components = { star_velocity: 0.8, peer_relative_growth: 0.8, self_relative_growth: null, star_acceleration: null, actor_acceleration: null, organic_breadth: null, event_diversity: null, persistence: null };
+
+it("keeps unknown service status distinct from a confirmed delay", () => {
+  const markup = renderToStaticMarkup(<ServiceFreshnessNotice status={null} unavailable />);
+  expect(markup).toContain("could not be checked");
+  expect(markup).not.toContain("is delayed");
+});
+
+it("shows service delay independently of the selected ranking snapshot", () => {
+  const markup = renderToStaticMarkup(<ServiceFreshnessNotice status={{ schema_version: "1.0", status: "degraded", latest_snapshot_at: "2026-09-11T00:00:00Z", snapshot_age_seconds: 86400, expected_interval_minutes: 120, next_due_at: "2026-09-11T02:00:00Z", last_failure: null, events: { latest_completed_hour: null, missing_hours: 2, source_complete: false } }} />);
+  expect(markup).toContain("Latest collection is delayed");
+  expect(markup).toContain("2 event hours missing");
+});
+
+it("shows subsequent verification dates without rewriting the historical observation", () => {
+  const markup = renderToStaticMarkup(<DiscoveryEvidenceBadge evaluatedAt="2026-09-10T00:00:00Z" evidence={{
+    outcome: "verified", first_observed_at: "2026-09-01T00:00:00Z", first_trending_daily_at: "2026-09-02T00:00:00Z",
+    first_trending_daily_rank: 2, lead_hours: 24, sources: ["github_search_created"], coverage: "complete",
+  }} />);
+  expect(markup).toContain("First observed in Daily");
+  expect(markup).toContain("2026-09-01T00:00:00Z");
+  expect(markup).toContain("2026-09-02T00:00:00Z");
+  expect(markup).toContain("2026-09-10T00:00:00Z");
 });

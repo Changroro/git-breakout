@@ -15,6 +15,30 @@ const snapshots = [
 ] satisfies RankingSnapshot[];
 
 describe("history", () => {
+  it.each(["trend-intelligence-v7-shadow", "trend-intelligence-v8-shadow"])("preserves historical and current intelligence payloads: %s", (scoreVersion) => {
+    const intelligence = { score_version: scoreVersion, evidence: { star_window_elapsed_hours: 27 } };
+    const response = parseHistoryResponse({ schema_version: "1.0", snapshots: [{
+      ...snapshots[0], repositories: [{
+        full_name: "owner/repository",
+        open_graph_image_url: "https://opengraph.githubassets.com/example/owner/repository",
+        observation_sources: null,
+        trend_intelligence: intelligence,
+      }],
+    }] });
+    expect(response.snapshots[0].repositories[0]).toHaveProperty("trend_intelligence", intelligence);
+  });
+
+  it("rejects unknown intelligence versions at the history response boundary", () => {
+    expect(() => parseHistoryResponse({ schema_version: "1.0", snapshots: [{
+      ...snapshots[0], repositories: [{
+        full_name: "owner/repository",
+        open_graph_image_url: "https://opengraph.githubassets.com/example/owner/repository",
+        observation_sources: null,
+        trend_intelligence: { score_version: "unrecognized-version" },
+      }],
+    }] })).toThrow("invalid trend intelligence");
+  });
+
   it("selects a requested snapshot when it exists", () => {
     expect(resolveSnapshotId("first", snapshots)).toBe("first");
   });

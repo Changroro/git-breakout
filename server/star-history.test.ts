@@ -484,7 +484,7 @@ describe("summarizeStarHistory", () => {
 
     expect(summary).toEqual({
       full_name: "owner/repository",
-      captured_at: "2026-09-05T02:00:00.000Z",
+      captured_at: NOW.toISOString(),
       days: [
         {
           start: "2026-09-03T00:00:00.000Z",
@@ -557,12 +557,12 @@ describe("collectStarHistories", () => {
     rateLimitedAt?: string;
   } = {}) {
     const cached = options.cached ?? {};
-    const read = vi.fn(async (fullName: string) => {
+    const read = vi.fn(async (fullName: string, _coverFrom: string) => {
       if (fullName === options.rateLimitedAt) {
         throw new GitHubRateLimitError(`GitHub repository ${fullName}`, 403, NOW);
       }
       if (options.failing?.includes(fullName) === true) {
-        throw new Error(`GitHub repository ${fullName} request failed with status 404`);
+        throw new GitHubRequestError(`GitHub repository ${fullName} request failed with status 404`, { status: 404 });
       }
       return { ...sampleHistory(), full_name: fullName };
     });
@@ -576,7 +576,10 @@ describe("collectStarHistories", () => {
         fresh: entry.fresh,
       };
     });
-    return { read, readCached };
+    const readWithStatus = async (fullName: string, coverFrom: string) => ({
+      history: await read(fullName, coverFrom), status: "fetched" as const, rateLimited: false,
+    });
+    return { read, readCached, readWithStatus };
   }
 
   const options = { capturedAt: "2026-09-05T02:00:00.000Z", concurrency: 2 } as const;

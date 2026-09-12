@@ -31,6 +31,7 @@ describe("calculateGrowth", () => {
         stars_delta_6h: null,
         stars_delta_24h: null,
       },
+      growth_evidence: { h1: null, h6: null, h24: null },
       observedStarsPerDay: null,
       firstObservation: true,
     });
@@ -51,10 +52,11 @@ describe("calculateGrowth", () => {
       { capturedAt: "2026-08-24T23:00:00.000Z", stars: 129 },
     ], 120)).toEqual({
       growth: {
-        stars_delta_1h: 1,
+        stars_delta_1h: null,
         stars_delta_6h: null,
         stars_delta_24h: null,
       },
+      growth_evidence: { h1: null, h6: null, h24: null },
       observedStarsPerDay: null,
       firstObservation: true,
     });
@@ -64,6 +66,8 @@ describe("calculateGrowth", () => {
 describe("createRepositoryCandidate", () => {
   it("preserves and clones observation sources", () => {
     const repository = {
+      repositoryId: "R_fixture_repository",
+      requestedNames: ["owner/repository"],
       fullName: "owner/repository",
       url: "https://github.com/owner/repository",
       openGraphImageUrl: "https://opengraph.githubassets.com/test/owner/repository",
@@ -90,6 +94,7 @@ describe("createRepositoryCandidate", () => {
 
     expect(candidate.observation_sources).toEqual(["github_search_created", "gh_archive"]);
     expect(candidate.observation_sources).not.toBe(repository.observationSources);
+    expect(candidate.repository_id).toBe(repository.repositoryId);
   });
 });
 

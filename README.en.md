@@ -94,7 +94,9 @@ score = log1p(observedStarsPerDay) × 55
 - Observed star velocity begins only after measurements are at least two hours apart.
 - GitHub Trending rank is used for discovery and evidence, not added directly to momentum.
 - Missing evidence remains `insufficient_data` instead of being converted into a zero score.
-- New discoveries, Resurgence and Current heat are stored separately under `trend-intelligence-v7-shadow`.
+- New discoveries, Resurgence and Current heat are stored separately under `trend-intelligence-v8-shadow`. Rates use actual elapsed observation time when recorded; evidence records the history fetch timestamp and the self-baseline period and gap.
+
+New discoveries is the default view, with Momentum available separately. This navigation choice does not establish the new model's predictive quality. Track Record measures whether the collector observed a repository before a later Trending appearance; it does not specifically evaluate the usefulness of top-ranked new discoveries. Repeated Watch activity can contribute to heat and persistence, so scores do not establish organic interest or sustained development.
 
 See the [public methodology](docs/methodology.md) for formulas and limitations. The question-mark control beside each ranking view also exposes the current methodology in the web app.
 
@@ -135,6 +137,16 @@ npm test
 npm run typecheck
 npm run build
 ```
+
+Production SQL and backup integration checks require the separate operations bundle at `deploy/oracle`, a running Docker daemon and a local `postgres:17-alpine` image. Run `npm run test:integration` in that prepared operations workspace; a public clone alone does not include these checks. Missing prerequisites fail explicitly instead of being installed automatically or silently skipped.
+
+Compare subsequent outcomes from stored snapshots offline:
+
+```bash
+npm run evaluate:ranking -- snapshot-history.json 20 > ranking-evaluation.json
+```
+
+The evaluator freezes each version's top 20 and Momentum's top 20 within the same candidate pool, then compares observed growth and coverage at 24 and 72 hours. It reports evidence, confidence and star-size strata, plus sensitivity to removing individual saved score components. Future candidates cannot enter an earlier selection, and missing observations do not become zero growth. Passing synthetic tests is not proof of empirical ranking quality. See the [offline evaluation input contract and limitations](docs/methodology.md#offline-ranking-evaluation).
 
 ## Project layout
 

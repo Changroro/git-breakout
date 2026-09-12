@@ -20,6 +20,8 @@ export type SearchedRepository = {
 };
 
 export type GitHubRepositorySnapshot = {
+  repositoryId: string;
+  requestedNames: string[];
   fullName: string;
   url: string;
   openGraphImageUrl: string;
@@ -34,6 +36,8 @@ export type GitHubRepositorySnapshot = {
 };
 
 type GraphqlRepository = {
+  id: string;
+  isPrivate: boolean;
   nameWithOwner: string;
   url: string;
   openGraphImageUrl: string;
@@ -54,6 +58,7 @@ type GraphqlResponse = {
 };
 
 type SearchResponse = {
+  incomplete_results?: unknown;
   total_count?: unknown;
   items?: unknown;
 };
@@ -190,16 +195,21 @@ async function fetchOfficialRepositories(
 
 function parseSearchResponse(payload: SearchResponse, query: string): {
   totalCount: number;
+  itemCount: number;
   names: string[];
 } {
+  if (payload.incomplete_results === true) {
+    throw new Error(`GitHub Search returned incomplete results for ${query}; collection must be retried`);
+  }
   if (
+    payload.incomplete_results !== false ||
     !Number.isInteger(payload.total_count) ||
     (payload.total_count as number) < 0 ||
     !Array.isArray(payload.items)
   ) {
     throw new TypeError(`GitHub Search returned an invalid response for ${query}`);
   }
-  const names = payload.items.map((item) => {
+  const names = payload.items.flatMap((item) => {
     if (
       typeof item !== "object" ||
       item === null ||
@@ -209,9 +219,16 @@ function parseSearchResponse(payload: SearchResponse, query: string): {
       throw new TypeError(`GitHub Search returned an invalid repository for ${query}`);
     }
     validateFullName(item.full_name);
-    return item.full_name;
+    if (!("private" in item) || typeof item.private !== "boolean") {
+      throw new TypeError(`GitHub Search returned unknown repository visibility for ${query}`);
+    }
+    if (item.private) {
+      process.stderr.write(`Skipping non-public GitHub Search repository ${item.full_name}\n`);
+      return [];
+    }
+    return [item.full_name];
   });
-  return { totalCount: payload.total_count as number, names };
+  return { totalCount: payload.total_count as number, itemCount: payload.items.length, names };
 }
 
 async function searchRepositoryNames(
@@ -244,10 +261,10 @@ async function searchRepositoryNames(
     requireResponseOk(response, `GitHub Search ${query}`);
     const result = parseSearchResponse(await response.json() as SearchResponse, query);
     expectedCount ??= Math.min(result.totalCount, SEARCH_RESULT_LIMIT);
-    if (result.names.length === 0 && names.length < expectedCount) {
+    if (result.itemCount === 0 && (page - 1) * SEARCH_PAGE_SIZE < expectedCount) {
       throw new Error(`GitHub Search pagination ended early for ${query}`);
     }
-    names.push(...result.names.slice(0, expectedCount - names.length));
+    names.push(...result.names.slice(0, expectedCount - (page - 1) * SEARCH_PAGE_SIZE));
     page += 1;
   }
 
@@ -269,12 +286,12 @@ export async function searchGitHubRepositoryNames(
   const createdAfter = new Date(capturedTimestamp - 7 * 86_400_000).toISOString();
   const pushedAfter = new Date(capturedTimestamp - 86_400_000).toISOString();
   const createdNames = await searchRepositoryNames(
-    `created:>=${createdAfter}`,
+    `created:>=${createdAfter} is:public`,
     token,
     fetchImplementation,
   );
   const pushedNames = await searchRepositoryNames(
-    `pushed:>=${pushedAfter}`,
+    `pushed:>=${pushedAfter} is:public`,
     token,
     fetchImplementation,
   );
@@ -372,6 +389,8 @@ function createMetadataQuery(repositories: readonly OfficialRepository[]): {
     variables[`name${index}`] = name;
     selections.push(`
       repository${index}: repository(owner: $owner${index}, name: $name${index}) {
+        id
+        isPrivate
         nameWithOwner
         url
         openGraphImageUrl
@@ -403,6 +422,8 @@ function validateGraphqlRepository(value: GraphqlRepository, requestedName: stri
     canonicalNameIsValid = false;
   }
   if (
+    typeof value.id !== "string" ||
+    value.id.trim() === "" ||
     !canonicalNameIsValid ||
     repositoryUrl?.protocol !== "https:" ||
     repositoryUrl.pathname.toLowerCase() !== `/${value.nameWithOwner.toLowerCase()}` ||
@@ -422,13 +443,20 @@ function mergeCanonicalMetadata(
   repositories: readonly GitHubRepositorySnapshot[],
 ): GitHubRepositorySnapshot[] {
   const merged = new Map<string, GitHubRepositorySnapshot>();
+  const namesByIdentity = new Map<string, string>();
   repositories.forEach((repository) => {
     const incomingSources = normalizeObservationSources(repository.observationSources);
     const key = repository.fullName.toLowerCase();
+    const knownName = namesByIdentity.get(repository.repositoryId);
+    if (knownName !== undefined && knownName !== key) {
+      throw new Error(`GitHub repository ${repository.repositoryId} has conflicting canonical names`);
+    }
+    namesByIdentity.set(repository.repositoryId, key);
     const existing = merged.get(key);
     if (existing === undefined) {
       merged.set(key, {
         ...repository,
+        requestedNames: [...repository.requestedNames],
         topics: [...repository.topics],
         observationSources: incomingSources,
         officialRanks: { ...repository.officialRanks },
@@ -436,6 +464,10 @@ function mergeCanonicalMetadata(
       });
       return;
     }
+    if (existing.repositoryId !== repository.repositoryId) {
+      throw new Error(`Canonical repository ${repository.fullName} has conflicting GitHub identities`);
+    }
+    existing.requestedNames = [...new Set([...existing.requestedNames, ...repository.requestedNames])];
     PERIODS.forEach((period) => {
       const existingRank = existing.officialRanks[period];
       const incomingRank = repository.officialRanks[period];
@@ -511,8 +543,17 @@ async function fetchMetadataBatch(
     if (metadata === null || metadata === undefined) {
       throw new Error(`GitHub repository ${repository.fullName} is unavailable`);
     }
+    if (typeof metadata.isPrivate !== "boolean") {
+      throw new TypeError(`GitHub GraphQL returned unknown repository visibility for ${repository.fullName}`);
+    }
+    if (metadata.isPrivate) {
+      process.stderr.write(`Skipping non-public GitHub repository ${repository.fullName}\n`);
+      return [];
+    }
     validateGraphqlRepository(metadata, repository.fullName);
     return [{
+      repositoryId: metadata.id,
+      requestedNames: [repository.fullName],
       fullName: metadata.nameWithOwner,
       url: metadata.url,
       openGraphImageUrl: metadata.openGraphImageUrl,

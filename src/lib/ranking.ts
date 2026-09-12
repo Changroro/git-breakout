@@ -41,7 +41,16 @@ export interface RepositoryGrowth {
   stars_delta_24h: number | null;
 }
 
+export type GrowthWindowEvidence = {
+  started_at: string;
+  ended_at: string;
+  elapsed_hours: number;
+};
+
+export type RepositoryGrowthEvidence = Record<"h1" | "h6" | "h24", GrowthWindowEvidence | null>;
+
 export interface RepositoryCandidate {
+  repository_id?: string;
   full_name: string;
   url: string;
   open_graph_image_url: string;
@@ -54,6 +63,7 @@ export interface RepositoryCandidate {
   metrics: RepositoryMetrics;
   official_ranks: OfficialRanks;
   growth: RepositoryGrowth;
+  growth_evidence?: RepositoryGrowthEvidence;
   observedStarsPerDay: number | null;
   firstObservation: boolean;
 }
@@ -178,6 +188,9 @@ function reasonsFor(candidate: RepositoryCandidate, recentPushScore: number | nu
 }
 
 function scoreCandidate(candidate: RepositoryCandidate, capturedAt: number): RankedRepository {
+  if (candidate.repository_id !== undefined && (typeof candidate.repository_id !== "string" || candidate.repository_id.trim() === "")) {
+    throw new TypeError("repository_id must be a non-empty string");
+  }
   const openGraphImageUrl = URL.parse(candidate.open_graph_image_url);
   if (openGraphImageUrl === null || openGraphImageUrl.protocol !== "https:") {
     throw new TypeError("open_graph_image_url must be a valid HTTPS URL");
@@ -189,6 +202,23 @@ function scoreCandidate(candidate: RepositoryCandidate, capturedAt: number): Ran
   validateNullableMetric(candidate.growth.stars_delta_1h, "growth.stars_delta_1h");
   validateNullableMetric(candidate.growth.stars_delta_6h, "growth.stars_delta_6h");
   validateNullableMetric(candidate.growth.stars_delta_24h, "growth.stars_delta_24h");
+  if (candidate.growth_evidence !== undefined) {
+    for (const hours of [1, 6, 24] as const) {
+      const evidence = candidate.growth_evidence[`h${hours}`];
+      const delta = candidate.growth[`stars_delta_${hours}h`];
+      if (evidence === undefined || (evidence === null) !== (delta === null)) {
+        throw new TypeError(`growth_evidence.h${hours} must match its growth window`);
+      }
+      if (evidence !== null) {
+        const start = parseTimestamp(evidence.started_at, "growth_evidence.started_at");
+        const end = parseTimestamp(evidence.ended_at, "growth_evidence.ended_at");
+        if (end !== capturedAt || start >= end || !Number.isFinite(evidence.elapsed_hours)
+          || Math.abs(evidence.elapsed_hours - (end - start) / 3_600_000) > 1e-9) {
+          throw new RangeError(`growth_evidence.h${hours} must preserve its observation duration`);
+        }
+      }
+    }
+  }
   const observationSources = normalizeObservationSources(candidate.observation_sources);
 
   if (candidate.firstObservation) {
@@ -255,6 +285,7 @@ function scoreCandidate(candidate: RepositoryCandidate, capturedAt: number): Ran
     metrics: { ...candidate.metrics },
     official_ranks: { ...candidate.official_ranks },
     growth: { ...candidate.growth },
+    ...(candidate.growth_evidence === undefined ? {} : { growth_evidence: structuredClone(candidate.growth_evidence) }),
     rank: 0,
     momentum: {
       score: rounded(score),

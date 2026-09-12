@@ -153,6 +153,33 @@ describe("parseCollectionContext", () => {
   });
 });
 
+it('uses repository coverage instead of the global sampled hour coverage', () => {
+  const window = { watches: 0, forks: 0, pull_requests: 0, issues: 0, issue_comments: 0, pushes: 0, releases: 0, unique_actors: 0 };
+  const signals = parseEventSignalContext({ captured_at: '2026-09-12T09:00:00Z', coverage: { h1: true, h6: true, h24: true, h72: true }, repositories: [{ full_name: 'owner/repo', coverage: { h1: false, h6: false, h24: false, h72: false }, windows: { h1: window, h6: window, h24: window, h72: window } }] });
+  expect(signals[0].coverage).toEqual({ h1: false, h6: false, h24: false, h72: false });
+});
+
+it('records an empty complete event hour and validates terminal run identity', async () => {
+  const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
+  const api = new RemoteHistoryApi({ baseUrl: 'http://fixture', collectorToken: 'mock', fetchImplementation: fetchMock });
+  await api.completeEventHour('2026-09-12T08:00:00Z', [], { sourceRepositoryCount: 0, lineCount: 1, rejectedLineCount: 0 });
+  expect(fetchMock.mock.calls[0][0]).toBe('http://fixture/rpc/complete_event_hour');
+  const id = '00000000-0000-4000-8000-000000000001';
+  fetchMock.mockImplementation(async () => Response.json({ id, status: 'completed', started_at: '2026-09-12T08:00:00Z', finished_at: '2026-09-12T08:01:00Z', error_message: null }));
+  expect(await api.readCollectionRun(id)).toEqual({ id, status: 'completed', startedAt: '2026-09-12T08:00:00Z', finishedAt: '2026-09-12T08:01:00Z', errorMessage: null });
+  fetchMock.mockImplementation(async () => Response.json({ id, status: 'running', started_at: '2026-09-12T08:00:00Z', finished_at: '2026-09-12T08:01:00Z', error_message: null }));
+  await expect(api.readCollectionRun(id)).rejects.toThrow('finished_at');
+});
+
+it('accepts opaque GraphQL identities and rejects mismatched event hour ranges', async () => {
+  const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ latest_captured_at: null, interval_minutes: 120, retention_policy: { grace_days: 14, growth_days: 7, push_days: 30, repository_limit: 1000 }, repositories: [] }));
+  const api = new RemoteHistoryApi({ baseUrl: 'http://fixture', collectorToken: 'mock', fetchImplementation: fetchMock });
+  expect((await api.readRepositoryIdentityContext([{ repository_id: 'R_kgDOtest', full_name: 'owner/repo', requested_names: ['old/name'] }])).repositories).toEqual([]);
+  expect(fetchMock.mock.calls[0][0]).toBe('http://fixture/rpc/repository_identity_context');
+  fetchMock.mockImplementation(async () => Response.json(['2026-09-12T09:00:00Z']));
+  await expect(api.readCompletedEventHours('2026-09-12T08:00:00Z', 1)).rejects.toThrow('outside requested range');
+});
+
 describe("parseEventSignalContext", () => {
   it("accepts an explicitly empty event history", () => {
     expect(parseEventSignalContext({
@@ -184,6 +211,7 @@ describe("parseEventSignalContext", () => {
       coverage: { h1: true, h6: true, h24: true, h72: false },
       repositories: [{
         full_name: "owner/repository",
+        coverage: { h1: true, h6: true, h24: true, h72: false },
         windows: { h1: window, h6: window, h24: window, h72: window },
       }],
     })).toEqual([{
@@ -207,6 +235,7 @@ describe("parseEventSignalContext", () => {
     };
     const repository = {
       full_name: "owner/repository",
+      coverage: { h1: true, h6: true, h24: true, h72: true },
       windows: { h1: window, h6: window, h24: window, h72: window },
     };
     expect(() => parseEventSignalContext({

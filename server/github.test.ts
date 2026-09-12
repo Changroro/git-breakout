@@ -14,6 +14,8 @@ function trendingHtml(repositories: readonly string[]): string {
 
 function metadata(fullName: string) {
   return {
+    id: `R_${fullName.toLowerCase()}`,
+    isPrivate: false,
     nameWithOwner: fullName,
     url: `https://github.com/${fullName}`,
     openGraphImageUrl: `https://opengraph.githubassets.com/test/${fullName}`,
@@ -122,9 +124,9 @@ describe("GitHub collection", () => {
       const prefix = url.searchParams.get("q")?.startsWith("created:") ? "new" : "active";
       const count = page === 1 ? 100 : 1;
       return Response.json({
-        total_count: 101,
+        incomplete_results: false, total_count: 101,
         items: Array.from({ length: count }, (_, index) => ({
-          full_name: `${prefix}/repository-${(page - 1) * 100 + index + 1}`,
+          private: false, full_name: `${prefix}/repository-${(page - 1) * 100 + index + 1}`,
         })),
       });
     });
@@ -152,10 +154,10 @@ describe("GitHub collection", () => {
       "2",
     ]);
     expect(requests[0].searchParams.get("q")).toBe(
-      "created:>=2026-08-19T12:00:00.000Z",
+      "created:>=2026-08-19T12:00:00.000Z is:public",
     );
     expect(requests[2].searchParams.get("q")).toBe(
-      "pushed:>=2026-08-25T12:00:00.000Z",
+      "pushed:>=2026-08-25T12:00:00.000Z is:public",
     );
     expect(requests.every((request) => request.searchParams.get("per_page") === "100")).toBe(true);
   });
@@ -168,7 +170,7 @@ describe("GitHub collection", () => {
       pages.push(page);
       if (page > 10) return Response.json({ message: "Only the first 1000 search results are available" }, { status: 422 });
       const prefix = url.searchParams.get("q")?.startsWith("created:") ? "new" : "active";
-      return Response.json({ total_count: 2000, items: Array.from({ length: page === 6 ? 99 : 100 }, (_, index) => ({ full_name: `${prefix}/repository-${page}-${index}` })) });
+      return Response.json({ incomplete_results: false, total_count: 2000, items: Array.from({ length: page === 6 ? 99 : 100 }, (_, index) => ({ private: false, full_name: `${prefix}/repository-${page}-${index}` })) });
     });
     const result = await searchGitHubRepositoryNames("token", "2026-09-09T00:00:00Z", fetchMock as typeof fetch);
     expect(result).toHaveLength(1998);
@@ -185,10 +187,10 @@ describe("GitHub collection", () => {
       if (url.startsWith("https://api.github.com/search/repositories")) {
         const query = new URL(url).searchParams.get("q");
         return Response.json({
-          total_count: 2,
+          incomplete_results: false, total_count: 2,
           items: query?.startsWith("created:")
-            ? [{ full_name: "beta/two" }, { full_name: "ALPHA/ONE" }]
-            : [{ full_name: "gamma/three" }, { full_name: "beta/two" }],
+            ? [{ private: false, full_name: "beta/two" }, { private: false, full_name: "ALPHA/ONE" }]
+            : [{ private: false, full_name: "gamma/three" }, { private: false, full_name: "beta/two" }],
         });
       }
       if (url === "https://api.github.com/graphql") {
@@ -241,8 +243,8 @@ describe("GitHub collection", () => {
       }
       if (url.startsWith("https://api.github.com/search/repositories")) {
         return Response.json({
-          total_count: 1,
-          items: [{ full_name: "new-owner/new-name" }],
+          incomplete_results: false, total_count: 1,
+          items: [{ private: false, full_name: "new-owner/new-name" }],
         });
       }
       if (url === "https://api.github.com/graphql") {
@@ -268,6 +270,8 @@ describe("GitHub collection", () => {
 
     expect(repositories).toHaveLength(1);
     expect(repositories[0].fullName).toBe("new-owner/new-name");
+    expect(repositories[0].repositoryId).toBe("R_new-owner/new-name");
+    expect(repositories[0].requestedNames).toEqual(["old-owner/old-name", "new-owner/new-name"]);
     expect(repositories[0].officialRanks).toEqual({ daily: 1, weekly: 1, monthly: 1 });
     expect(repositories[0].observationSources).toEqual([
       "official_daily",
@@ -287,8 +291,8 @@ describe("GitHub collection", () => {
       }
       if (url.startsWith("https://api.github.com/search/repositories")) {
         return Response.json({
-          total_count: 1,
-          items: [{ full_name: "gone/repository" }],
+          incomplete_results: false, total_count: 1,
+          items: [{ private: false, full_name: "gone/repository" }],
         });
       }
       if (url === "https://api.github.com/graphql") {
@@ -335,7 +339,7 @@ it("fetches metadata with bounded concurrency while preserving candidate order",
   const fetchImplementation: typeof fetch = async (input, init) => {
     const url = String(input);
     if (url.startsWith("https://github.com/trending")) return new Response(trendingHtml([names[0]]));
-    if (url.startsWith("https://api.github.com/search")) return Response.json({ total_count: 0, items: [] });
+    if (url.startsWith("https://api.github.com/search")) return Response.json({ incomplete_results: false, total_count: 0, items: [] });
     if (url !== "https://api.github.com/graphql") throw new Error(`Unexpected ${url}`);
     batches += 1; active += 1; maximum = Math.max(maximum, active);
     await new Promise(resolve => setTimeout(resolve, 5));
@@ -351,4 +355,113 @@ it("fetches metadata with bounded concurrency while preserving candidate order",
   expect(result.map(repository => repository.fullName)).toEqual(names);
   expect(maximum).toBe(2);
   expect(batches).toBe(4);
+});
+
+
+describe("GitHub public source contracts", () => {
+  it.each([{ items: [] }, { items: [{ full_name: "owner/partial", private: false }] }])("rejects incomplete Search results without retrying every candidate", async ({ items }) => {
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ total_count: items.length, incomplete_results: true, items }));
+    await expect(searchGitHubRepositoryNames("token", "2026-09-11T00:00:00Z", fetchMock))
+      .rejects.toThrow("GitHub Search returned incomplete results");
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a complete empty Search result", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ total_count: 0, incomplete_results: false, items: [] }));
+    await expect(searchGitHubRepositoryNames("token", "2026-09-11T00:00:00Z", fetchMock)).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails closed when Search completeness is unknown", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ total_count: 0, items: [] }));
+    await expect(searchGitHubRepositoryNames("token", "2026-09-11T00:00:00Z", fetchMock)).rejects.toThrow("invalid response");
+  });
+
+  it("filters private Search rows without treating the filtered page as an early end", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const fetchMock = vi.fn<typeof fetch>(async input => {
+        const page = Number(new URL(String(input)).searchParams.get("page"));
+        return Response.json({ total_count: 101, incomplete_results: false, items: page === 1
+          ? Array.from({ length: 100 }, (_, index) => ({ full_name: `owner/private-${index}`, private: true }))
+          : [{ full_name: "owner/public", private: false }] });
+      });
+      const result = await searchGitHubRepositoryNames("token", "2026-09-11T00:00:00Z", fetchMock);
+      expect(result.map(row => row.fullName)).toEqual(["owner/public"]);
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Skipping non-public GitHub Search repository"));
+    } finally { stderr.mockRestore(); }
+  });
+
+  it.each([undefined, null, "false"])("fails closed on unknown Search visibility %s", async visibility => {
+    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ total_count: 1, incomplete_results: false, items: [{ full_name: "owner/unknown", private: visibility }] }));
+    await expect(searchGitHubRepositoryNames("token", "2026-09-11T00:00:00Z", fetchMock)).rejects.toThrow("visibility");
+  });
+
+  function metadataFetch(value: Record<string, unknown>): typeof fetch {
+    return async (input, init) => {
+      if (String(input).startsWith("https://github.com/trending")) return new Response(trendingHtml(["owner/repository"]));
+      if (String(input).startsWith("https://api.github.com/search")) return Response.json({ total_count: 1, incomplete_results: false, items: [{ full_name: "owner/repository", private: false }] });
+      const request = JSON.parse(String(init?.body));
+      expect(request.query).toMatch(/\bisPrivate\b/);
+      expect(request.query).toMatch(/\bid\b/);
+      return Response.json({ data: { repository0: value } });
+    };
+  }
+
+  it("excludes a repository made private after public Search discovery", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const result = await fetchGitHubRepositories({ token: "token", capturedAt: "2026-09-11T00:00:00Z", retainedRepositoryNames: [], ghArchiveRepositoryNames: [], fetchImplementation: metadataFetch({ ...metadata("owner/repository"), isPrivate: true }) });
+      expect(result).toEqual([]);
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining("Skipping non-public GitHub repository"));
+    } finally { stderr.mockRestore(); }
+  });
+
+  it.each([undefined, null, "false"])("fails closed on unknown GraphQL visibility %s", async isPrivate => {
+    await expect(fetchGitHubTrendingRepositories("token", metadataFetch({ ...metadata("owner/repository"), isPrivate }))).rejects.toThrow("visibility");
+  });
+
+  it.each([undefined, null, ""])("rejects missing immutable repository identity %s", async id => {
+    await expect(fetchGitHubTrendingRepositories("token", metadataFetch({ ...metadata("owner/repository"), id }))).rejects.toThrow("metadata");
+  });
+});
+
+describe("GitHub immutable identity", () => {
+  function identityFetch(resolveMetadata: (requested: string) => ReturnType<typeof metadata>): typeof fetch {
+    return async (input, init) => {
+      const url = String(input);
+      if (url.startsWith("https://github.com/trending")) return new Response(trendingHtml(["owner/old"]));
+      if (url.startsWith("https://api.github.com/search")) return Response.json({ total_count: 0, incomplete_results: false, items: [] });
+      const { variables } = JSON.parse(String(init?.body));
+      const data: Record<string, ReturnType<typeof metadata>> = {};
+      for (let index = 0; variables[`owner${index}`] !== undefined; index++) {
+        const requested = `${variables[`owner${index}`]}/${variables[`name${index}`]}`;
+        data[`repository${index}`] = resolveMetadata(requested);
+      }
+      return Response.json({ data });
+    };
+  }
+
+  const fetchRepositories = (fetchImplementation: typeof fetch) => fetchGitHubRepositories({
+    token: "token", capturedAt: "2026-09-11T00:00:00Z", retainedRepositoryNames: ["owner/new"], ghArchiveRepositoryNames: [], fetchImplementation,
+  });
+
+  it("rejects different immutable identities claiming one canonical name", async () => {
+    await expect(fetchRepositories(identityFetch(requested => ({ ...metadata("owner/new"), id: `R_${requested}` }))))
+      .rejects.toThrow("conflicting GitHub identities");
+  });
+
+  it("rejects one immutable identity claiming different canonical names in a run", async () => {
+    await expect(fetchRepositories(identityFetch(requested => ({ ...metadata(requested), id: "R_same" }))))
+      .rejects.toThrow("conflicting canonical names");
+  });
+
+  it("keeps a reused old name separate from the original repository at its new name", async () => {
+    const result = await fetchRepositories(identityFetch(requested => ({ ...metadata(requested), id: requested === "owner/old" ? "R_replacement" : "R_original" })));
+    expect(result.map(row => ({ name: row.fullName, id: row.repositoryId, requested: row.requestedNames }))).toEqual([
+      { name: "owner/old", id: "R_replacement", requested: ["owner/old"] },
+      { name: "owner/new", id: "R_original", requested: ["owner/new"] },
+    ]);
+  });
 });
