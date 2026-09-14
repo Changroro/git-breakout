@@ -26,6 +26,7 @@ const MIME_TYPES: Record<string, string> = {
   ".json": "application/json; charset=utf-8",
   ".png": "image/png",
   ".svg": "image/svg+xml",
+  ".txt": "text/plain; charset=utf-8",
   ".webp": "image/webp",
   ".xml": "application/xml; charset=utf-8",
 };
@@ -423,7 +424,7 @@ function serveStatic(
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader(
     "Cache-Control",
-    ["/", "/archive", "/track-record", "/theme-init.js", "/locale-init.js"].includes(requestUrl.pathname)
+    ["/", "/archive", "/track-record", "/theme-init.js", "/locale-init.js", "/ads.txt"].includes(requestUrl.pathname)
       ? "no-cache"
       : "public, max-age=31536000, immutable",
   );

@@ -123,6 +123,20 @@ afterEach(async () => {
 });
 
 describe("createWebServer", () => {
+  it("serves ads.txt as revalidated plain text for ownership verification", async () => {
+    const directories = testDirectories();
+    const entry = "google.com, pub-1685262956536611, DIRECT, f08c47fec0942fa0\n";
+    writeFileSync(join(directories.staticDirectory, "ads.txt"), entry);
+    const server = createWebServer({ ...directories, ...redirectConfig,
+      internalApiUrl: "http://rest:3000", trafficAnalytics });
+    const baseUrl = await listen(server);
+    const response = await fetch(`${baseUrl}/ads.txt`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+    expect(response.headers.get("cache-control")).toBe("no-cache");
+    expect(await response.text()).toBe(entry);
+  });
+
   it("reports degraded data separately from healthy process readiness", async () => {
     const degraded = {
       schema_version: "1.0", status: "degraded", latest_snapshot_at: "2026-09-11T00:00:00Z",
