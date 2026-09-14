@@ -6,7 +6,6 @@ import {
   DiscoveryEvidenceBadge,
   RepositoryShareAction,
   RankingPage,
-  RepositoryScoreEvidence,
   ServiceFreshnessNotice,
   buildArchiveHref,
   formatCompactNumber,
@@ -366,31 +365,6 @@ it.each(["breakout", "resurgence", "current", "momentum", "github"] as const)("d
   expect(markup).toContain('role="group" aria-label="Ranking model"');
   expect(markup).not.toContain('role="tab"');
 });
-
-it("shows measured windows, baseline age, missing values and component denominator", () => {
-  const repository = {
-    ...rankRepositories(sampleRepositories.slice(0, 1), SAMPLE_CAPTURED_AT)[0],
-    identity_status: "legacy_unverified" as const,
-    trend_intelligence: {
-      score_version: "trend-intelligence-v8-shadow" as const, phase: "spark" as const, confidence: "low" as const,
-      star_evidence_window_hours: 6 as const, event_evidence_window_hours: null,
-      current_heat: { score: null, components }, breakout: { score: 80, components },
-      cohort: { key: "new", size: 2 }, event_data_captured_at: null, missing_evidence: ["fresh_github_events", "star_history_baseline"], reasons: ["broad_actor_interest"],
-      evidence: { current_heat_component_count: 2, discovery_component_count: 2, star_window_elapsed_hours: 6.5, history_fetched_at: "2026-08-01T00:00:00Z", baseline_started_at: "2026-07-01T00:00:00Z", baseline_ended_at: "2026-07-31T00:00:00Z", baseline_gap_hours: 696 },
-    },
-  };
-  const markup = renderToStaticMarkup(<I18nProvider locale="ko"><RepositoryScoreEvidence repository={repository} view="breakout" /></I18nProvider>);
-  expect(markup).toContain("6.5시간");
-  expect(markup).toContain("696시간");
-  expect(markup).toContain("2 / 6");
-  expect(markup).toContain("최신 GitHub 이벤트");
-  expect(markup).toContain("확인할 수 없음");
-  expect(markup).not.toContain("fresh_github_events");
-  expect(markup).toContain("유지 스타 이력 조회 시각");
-  expect(markup).toContain("저장소 ID로 동일성이 확인되지 않았습니다");
-});
-
-const components = { star_velocity: 0.8, peer_relative_growth: 0.8, self_relative_growth: null, star_acceleration: null, actor_acceleration: null, organic_breadth: null, event_diversity: null, persistence: null };
 
 it("keeps unknown service status distinct from a confirmed delay", () => {
   const markup = renderToStaticMarkup(<ServiceFreshnessNotice status={null} unavailable />);

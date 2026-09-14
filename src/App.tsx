@@ -943,91 +943,6 @@ export function RepositoryShareAction({ input }: { input: RepositoryShareInput }
   return <a aria-label={t("repository.shareThreads", { name: input.fullName })} className="repository-share-button" href={href} rel="noopener noreferrer" target="_blank" title={t("repository.shareThreads", { name: input.fullName })}><MentionIcon aria-hidden="true" size={15} /></a>;
 }
 
-const EVIDENCE_LABELS: Record<string, [string, string]> = {
-  star_velocity: ["Star velocity", "스타 증가 속도"],
-  peer_relative_growth: ["Growth within the comparison group", "비교군 내 상대 성장"],
-  self_relative_growth: ["Growth against own baseline", "자체 기준 이력 대비 성장"],
-  star_acceleration: ["Star acceleration", "스타 증가 가속"],
-  actor_acceleration: ["Participant acceleration", "참여자 증가 가속"],
-  organic_breadth: ["Unique participant breadth", "고유 참여자 폭"],
-  event_diversity: ["Activity diversity", "활동 종류 다양성"],
-  persistence: ["Recent activity ratio", "최근 활동 비율"],
-  observed_growth_score: ["Observed star growth", "관측 스타 성장"],
-  lifetime_velocity_score: ["Lifetime star velocity", "생성 후 평균 스타 속도"],
-  size_score: ["Repository stars", "전체 스타 수"],
-  forks_score: ["Forks", "포크"],
-  open_issues_score: ["Open issues", "열린 이슈"],
-  recent_push_score: ["Recent push", "최근 푸시"],
-  first_observation_score: ["First observation", "첫 관측"],
-  star_growth_window: ["Star growth window", "스타 성장 관측 구간"],
-  star_window_observed: ["Observed star deltas (retained acquisitions used)", "실측 스타 증분 (유지 스타 획득 이력 사용)"],
-  star_window_24h: ["24-hour star observations", "24시간 스타 관측"],
-  star_history: ["Retained-star history", "유지 스타 이력"],
-  star_history_baseline: ["Earlier star baseline", "이전 스타 기준 이력"],
-  github_events: ["GitHub events", "GitHub 이벤트"],
-  fresh_github_events: ["Fresh GitHub events", "최신 GitHub 이벤트"],
-  event_growth_window: ["Complete event window", "완전한 이벤트 관측 구간"],
-  event_window_24h: ["24-hour event coverage", "24시간 이벤트 수집 범위"],
-  comparison_cohort: ["Sufficient comparison group", "충분한 비교군"],
-  discovery_history: ["First-observation provenance", "첫 관측 출처 이력"],
-  peer_growth_outlier: ["High growth among peers", "비교군 내 높은 성장"],
-  self_growth_acceleration: ["Growth above own baseline", "자체 기준을 웃도는 성장"],
-  accelerating_stars: ["Accelerating star growth", "빨라지는 스타 증가"],
-  accelerating_community: ["Accelerating participant activity", "빨라지는 참여자 활동"],
-  broad_organic_interest: ["Broad participant activity", "폭넓은 참여자 활동"],
-  broad_actor_interest: ["Broad participant activity", "폭넓은 참여자 활동"],
-  multi_signal_activity: ["Multiple activity types", "여러 종류의 활동"],
-  sustained_attention: ["High recent activity ratio", "높은 최근 활동 비율"],
-  recent_actor_activity: ["High recent activity ratio", "높은 최근 활동 비율"],
-  official_daily_rank: ["Observed in Trending Daily", "일간 트렌딩에서 관측"],
-  official_weekly_rank: ["Observed in Trending Weekly", "주간 트렌딩에서 관측"],
-  official_monthly_rank: ["Observed in Trending Monthly", "월간 트렌딩에서 관측"],
-  rapid_star_growth_1h: ["Rapid growth in the short window", "짧은 관측 구간의 빠른 성장"],
-  rapid_star_growth_24h: ["Rapid growth in the daily window", "일간 관측 구간의 빠른 성장"],
-  recently_active: ["Recent repository activity", "최근 저장소 활동"],
-};
-
-export function RepositoryScoreEvidence({ repository, view }: { repository: RankedRepository; view: Exclude<RankingView, "github"> }) {
-  const { locale, t } = useI18n();
-  const intelligence = trendIntelligenceFor(repository);
-  const momentum = view === "momentum";
-  const trendScore = view === "current" ? intelligence?.current_heat : view === "resurgence" ? intelligence?.resurgence : intelligence?.breakout;
-  const confidence = momentum ? repository.momentum.confidence : intelligence?.confidence;
-  const score = momentum ? repository.momentum.score : trendScore?.score;
-  const components = momentum
-    ? Object.entries(repository.momentum.components).filter(([key]) => ["observed_growth_score", "lifetime_velocity_score", "size_score", "forks_score", "open_issues_score", "recent_push_score", "first_observation_score"].includes(key))
-    : Object.entries(trendScore?.components ?? {}).filter(([key]) => (view === "current" ? ["star_velocity", "organic_breadth", "event_diversity", "persistence"] : ["star_velocity", "peer_relative_growth", "self_relative_growth", "star_acceleration", "actor_acceleration", "organic_breadth"]).includes(key));
-  const label = (key: string) => EVIDENCE_LABELS[key]?.[locale === "ko" ? 1 : 0] ?? (locale === "ko" ? `추가 근거 (${key})` : `Additional evidence (${key})`);
-  const number = (value: number) => value.toLocaleString(locale === "ko" ? "ko-KR" : "en-US", { maximumFractionDigits: 2 });
-  const hours = (value: number | null | undefined) => value == null ? t("evidence.unavailable") : t("evidence.hours", { hours: number(value) });
-  const reasons = momentum ? repository.momentum.reasons : intelligence?.reasons ?? [];
-  return <details className="score-evidence">
-    <summary>{t("evidence.title")} · {score == null ? t("evidence.noScore") : number(score)} · {t("evidence.confidence")} {confidence ? t(`evidence.${confidence}`) : t("evidence.unavailable")}</summary>
-    <div className="score-evidence-body">
-      {repository.identity_status === "legacy_unverified" ? <p>{locale === "ko"
-        ? "과거 이름 기반 이력은 저장소 ID로 동일성이 확인되지 않았습니다."
-        : "Earlier name-based history has not been verified against a stable repository ID."}</p> : null}
-      <dl>
-        <dt>{t("evidence.confidence")}</dt><dd>{confidence ? t(`evidence.${confidence}`) : t("evidence.unavailable")}</dd>
-        <dt>{t("evidence.components")}</dt><dd>{components.filter(([, value]) => value !== null).length} / {components.length}</dd>
-        {!momentum ? <>
-          <dt>{t("evidence.starWindow")}</dt><dd>{hours(intelligence?.evidence?.star_window_elapsed_hours ?? intelligence?.star_evidence_window_hours)}</dd>
-          <dt>{t("evidence.historyFetched")}</dt><dd>{intelligence?.evidence?.history_fetched_at ? <time dateTime={intelligence.evidence.history_fetched_at}>{formatCapturedAt(intelligence.evidence.history_fetched_at, locale)}</time> : t("evidence.unavailable")}</dd>
-          <dt>{t("evidence.baseline")}</dt><dd>{intelligence?.evidence?.baseline_started_at && intelligence.evidence.baseline_ended_at ? <><time dateTime={intelligence.evidence.baseline_started_at}>{formatCapturedAt(intelligence.evidence.baseline_started_at, locale)}</time> – <time dateTime={intelligence.evidence.baseline_ended_at}>{formatCapturedAt(intelligence.evidence.baseline_ended_at, locale)}</time></> : t("evidence.unavailable")}</dd>
-          <dt>{t("evidence.gap")}</dt><dd>{hours(intelligence?.evidence?.baseline_gap_hours)}</dd>
-          <dt>{t("evidence.eventWindow")}</dt><dd>{hours(intelligence?.event_evidence_window_hours)}</dd>
-          <dt>{t("evidence.eventCaptured")}</dt><dd>{intelligence?.event_data_captured_at ? <time dateTime={intelligence.event_data_captured_at}>{formatCapturedAt(intelligence.event_data_captured_at, locale)}</time> : t("evidence.unavailable")}</dd>
-        </> : null}
-      </dl>
-      {momentum ? <dl>{Object.entries(repository.growth_evidence ?? {}).map(([key, window]) => <div key={key}><dt>{t("evidence.starWindow")} ({key.slice(1)}h)</dt><dd>{window ? <><time dateTime={window.started_at}>{formatCapturedAt(window.started_at, locale)}</time> – <time dateTime={window.ended_at}>{formatCapturedAt(window.ended_at, locale)}</time> ({hours(window.elapsed_hours)})</> : t("evidence.unavailable")}</dd></div>)}</dl> : null}
-      <p>{t(momentum ? "evidence.momentumScale" : "evidence.componentScale")}</p>
-      <dl>{components.map(([key, value]) => <div key={key}><dt>{label(key)}</dt><dd>{value === null ? t("evidence.unavailable") : number(value * (momentum ? 1 : 100))}</dd></div>)}</dl>
-      {!momentum ? <><h4>{t("evidence.missing")}</h4>{intelligence ? intelligence.missing_evidence.length ? <ul>{intelligence.missing_evidence.map(key => <li key={key}>{label(key)}</li>)}</ul> : <p>{t("evidence.noneMissing")}</p> : <p>{t("evidence.unavailable")}</p>}</> : null}
-      {reasons.length ? <><h4>{t("evidence.reason")}</h4><ul>{reasons.map(key => <li key={key}>{label(key)}</li>)}</ul></> : null}
-    </div>
-  </details>;
-}
-
 export function RankingRow({
   repository,
   displayRank,
@@ -1112,7 +1027,6 @@ export function RankingRow({
         <span className="cell language">{language}</span>
         <span className="cell stars">{formatCompactNumber(stars, locale)}</span>
         <RepositoryStarGrowth repositoryName={repository.full_name} state={starSeries} />
-        {rankingView !== "github" ? <RepositoryScoreEvidence repository={repository} view={rankingView} /> : null}
       </div>
     </li>
   );
