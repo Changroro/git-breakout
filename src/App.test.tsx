@@ -241,7 +241,7 @@ describe("TrackRecordSection", () => {
   it("shows evidence collection instead of misleading zero rates", () => {
     const markup = renderToStaticMarkup(<TrackRecordSection trackRecord={emptyTrackRecord()} />);
 
-    expect(markup).toContain("Track Record");
+    expect(markup).toContain("Discovery overview");
     expect(markup.match(/Collecting evidence/g)).toHaveLength(4);
     expect(markup).not.toContain("<strong>0%</strong>");
     expect(markup).toContain('aria-haspopup="dialog"');
@@ -282,6 +282,10 @@ describe("TrackRecordSection", () => {
 
     expect(markup).toContain("Observed 1.3d before Daily");
     expect(markup).toContain("Daily #5");
+    expect(markup).toContain('dateTime="2026-08-29T00:00:00.000Z"');
+    expect(markup).toContain('dateTime="2026-08-30T06:00:00.000Z"');
+    expect(markup).toContain("First observed");
+    expect(markup).toContain("Observed in Daily");
     expect(markup).toContain("log1p(value) × 55");
     expect(markup).toContain("Official Trending signal");
     expect(markup).toContain("24h → 6h → 1h");
