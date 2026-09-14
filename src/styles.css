@@ -3144,21 +3144,11 @@ h1 {
   }
 }
 
-.score-evidence {
-  grid-column: 3 / -1;
-  min-width: 0;
-  margin-top: 4px;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.score-evidence summary,
 .discovery-evidence summary {
   cursor: pointer;
   width: fit-content;
 }
 
-.score-evidence-body,
 .discovery-evidence-body {
   padding: 12px;
   margin-top: 8px;
@@ -3171,7 +3161,6 @@ h1 {
   overflow-wrap: anywhere;
 }
 
-.score-evidence-body dl,
 .discovery-evidence-body dl {
   margin: 8px 0;
   display: grid;
@@ -3179,23 +3168,12 @@ h1 {
   gap: 4px 16px;
 }
 
-.score-evidence-body dl > div {
-  display: contents;
-}
-
-.score-evidence-body dd,
 .discovery-evidence-body dd {
   margin: 0;
 }
 
-.score-evidence-body h4,
-.score-evidence-body p,
 .discovery-evidence-body p {
   margin: 8px 0;
-}
-
-.score-evidence-body ul {
-  padding-left: 20px;
 }
 
 .evidence-evaluated {
@@ -3237,12 +3215,6 @@ h1 {
     min-width: 0;
   }
 
-  .score-evidence {
-    grid-column: 1 / -1;
-    margin-top: 10px;
-  }
-
-  .score-evidence summary,
   .discovery-evidence summary {
     min-height: 32px;
     padding-block: 6px;
