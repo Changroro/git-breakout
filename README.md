@@ -18,6 +18,8 @@
 
 GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하지만, 이미 알려진 저장소가 반복해서 노출되거나 성장 초기의 프로젝트를 놓칠 수 있다. Git Breakout은 Trending 목록뿐 아니라 최근 생성·푸시된 저장소와 공개 이벤트를 함께 관측하고, 누적 인기도보다 **최근의 변화**에 무게를 둔다.
 
+[![Git Breakout on StartupScores](https://startupscores.com/badge/git-breakout.svg?style=shield&v=combo&theme=dark)](https://startupscores.com/open-source/git-breakout)
+
 이 프로젝트는 GitHub 전체 저장소의 완전한 색인이 아니다. API 검색 한계 안에서 후보를 넓게 발견한다. Star 그래프는 GitHub API의 현재 유지 스타 획득 기록과 Git Breakout의 시점별 관측을 서로 구분해 사용한다.
 
 ## 화면
