@@ -1078,8 +1078,8 @@ h1 {
 }
 
 .track-record-heading {
-  min-height: 64px;
-  padding: 13px 16px 13px 18px;
+  min-height: 88px;
+  padding: 20px 24px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1111,15 +1111,15 @@ h1 {
 }
 
 .track-record-title h2 {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 680;
   letter-spacing: -0.015em;
 }
 
 .track-record-title p {
-  margin: 2px 0 0;
-  color: var(--text-muted);
-  font-size: 11px;
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .track-record-heading-meta {
@@ -1153,7 +1153,7 @@ h1 {
 
 .track-record-content {
   display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(260px, 1fr);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .track-record-metrics {
@@ -1164,49 +1164,57 @@ h1 {
 
 .track-record-metric {
   min-width: 0;
-  min-height: 108px;
-  padding: 17px 16px;
+  min-height: 166px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   border-right: 1px solid var(--border);
 }
 
+.track-record-metric:last-child {
+  border-right: 0;
+}
+
 .track-record-metric > span {
-  color: var(--text-muted);
-  font-size: 11px;
+  color: var(--text-secondary);
+  font-size: 12px;
   font-weight: 650;
   text-transform: uppercase;
 }
 
 .track-record-metric strong {
-  margin-top: 7px;
-  overflow: hidden;
+  margin-top: 16px;
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: clamp(18px, 2vw, 24px);
+  font-size: clamp(24px, 2.5vw, 32px);
   font-variant-numeric: tabular-nums;
-  line-height: 1.15;
-  text-overflow: ellipsis;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .track-record-metric small {
-  margin-top: 6px;
-  color: var(--text-muted);
-  font-size: 10px;
-  line-height: 1.35;
+  margin-top: 12px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.6;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 
 .track-record-metric-collecting strong {
   color: var(--text-secondary);
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: 18px;
   font-weight: 640;
+  white-space: normal;
+  word-break: keep-all;
 }
 
 .track-record-recent {
   min-width: 0;
-  padding: 15px 16px;
+  padding: 24px;
+  border-top: 1px solid var(--border);
 }
 
 .track-record-recent-heading {
@@ -1214,42 +1222,72 @@ h1 {
 }
 
 .track-record-recent-heading h3 {
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 680;
 }
 
 .track-record-recent ol {
-  margin: 10px 0 0;
+  margin: 20px 0 0;
   padding: 0;
   display: grid;
-  gap: 8px;
   list-style: none;
 }
 
 .track-record-recent li {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   align-items: center;
-  gap: 2px 10px;
+  gap: 10px 24px;
+  padding: 20px 0;
+  border-top: 1px solid var(--border);
 }
 
 .track-record-recent a {
   min-width: 0;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  overflow: hidden;
+  gap: 8px;
   color: var(--text);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 650;
   text-decoration: none;
 }
 
 .track-record-recent a span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+.track-record-recent a svg {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.track-record-observations {
+  grid-column: 2;
+  grid-row: span 2;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+}
+
+.track-record-observations dt {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.track-record-observations dd {
+  margin: 6px 0 0;
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.track-record-content > .evidence-evaluated {
+  padding: 12px 24px;
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
 }
 
 .track-record-recent a:hover {
@@ -1258,7 +1296,7 @@ h1 {
 }
 
 .track-record-recent li > span {
-  grid-column: 1 / -1;
+  grid-column: 1;
   color: var(--accent-text);
   font-family: var(--font-mono);
   font-size: 10px;
@@ -1266,9 +1304,9 @@ h1 {
 }
 
 .track-record-empty {
-  margin: 14px 0 0;
-  color: var(--text-muted);
-  font-size: 10px;
+  margin: 24px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
   line-height: 1.45;
 }
 
@@ -2686,7 +2724,7 @@ h1 {
   }
 
   .track-record-metric {
-    min-height: 102px;
+    min-height: 155px;
     padding: 14px;
   }
 
@@ -2699,15 +2737,25 @@ h1 {
   }
 
   .track-record-metric strong {
-    font-size: 19px;
+    font-size: 24px;
   }
 
   .track-record-metric-collecting strong {
-    font-size: 12px;
+    font-size: 16px;
   }
 
   .track-record-recent {
-    padding: 14px;
+    padding: 20px 14px;
+  }
+
+  .track-record-recent li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .track-record-observations {
+    grid-column: 1;
+    grid-row: 3;
   }
 
   .methodology-dialog {

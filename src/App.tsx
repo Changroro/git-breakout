@@ -1002,7 +1002,7 @@ export function RepositoryScoreEvidence({ repository, view }: { repository: Rank
   const hours = (value: number | null | undefined) => value == null ? t("evidence.unavailable") : t("evidence.hours", { hours: number(value) });
   const reasons = momentum ? repository.momentum.reasons : intelligence?.reasons ?? [];
   return <details className="score-evidence">
-    <summary>{t("evidence.title")} · {score == null ? t("evidence.noScore") : number(score)} · {confidence ? t(`evidence.${confidence}`) : t("evidence.unavailable")}</summary>
+    <summary>{t("evidence.title")} · {score == null ? t("evidence.noScore") : number(score)} · {t("evidence.confidence")} {confidence ? t(`evidence.${confidence}`) : t("evidence.unavailable")}</summary>
     <div className="score-evidence-body">
       {repository.identity_status === "legacy_unverified" ? <p>{locale === "ko"
         ? "과거 이름 기반 이력은 저장소 ID로 동일성이 확인되지 않았습니다."
@@ -1878,7 +1878,7 @@ export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }
         <div className="track-record-title">
           <TelescopeIcon size={17} />
           <div>
-            <h2 id="track-record-title">{t("trackRecord.title")}</h2>
+            <h2 id="track-record-title">{t("trackRecord.overview")}</h2>
             <p>{t("trackRecord.subtitle")}</p>
           </div>
         </div>
@@ -1942,6 +1942,10 @@ export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }
                     <RepoIcon size={13} />
                     <span>{hit.full_name}</span>
                   </a>
+                  <dl className="track-record-observations">
+                    <div><dt>{t("trackRecord.firstObserved")}</dt><dd><time dateTime={hit.first_observed_at}>{formatEvidenceDate(hit.first_observed_at, locale)}</time></dd></div>
+                    <div><dt>{t("trackRecord.firstTrending")}</dt><dd><time dateTime={hit.first_trending_at}>{formatEvidenceDate(hit.first_trending_at, locale)}</time></dd></div>
+                  </dl>
                   <span>
                     {t("trackRecord.recentHit", {
                       lead: formatObservedLeadDuration(hit.lead_hours, locale),
