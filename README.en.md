@@ -14,7 +14,7 @@
 
 </div>
 
-## Why Git Breakout
+## Intro
 
 GitHub Trending is useful for seeing what is popular now, but established repositories can appear repeatedly while early-stage growth goes unnoticed. Git Breakout combines Trending with recently created and pushed repositories plus public activity events, then emphasizes **recent change** over lifetime popularity.
 
@@ -26,12 +26,6 @@ Git Breakout is not a complete index of every repository on GitHub. It discovers
 
 <p align="center">
   <img src="docs/screenshots/desktop.png" alt="Git Breakout desktop ranking view" width="960" />
-</p>
-
-### Mobile
-
-<p align="center">
-  <img src="docs/screenshots/mobile.png" alt="Git Breakout mobile ranking view" width="360" />
 </p>
 
 ## Features
@@ -47,7 +41,7 @@ Git Breakout is not a complete index of every repository on GitHub. It discovers
 - **Track record** verifies whether repositories observed early by Git Breakout later enter GitHub Trending Daily.
 - **Discovery UI** includes repository search, language and topic filters, pagination, read-state dimming, Korean and English, responsive layouts, and light and dark themes.
 
-## Data flow
+## Data Flow
 
 ```text
 GitHub Trending ─┐
@@ -63,7 +57,7 @@ GH Archive ──────┘                               │
                                       API ─→ Git Breakout UI
 ```
 
-### Candidate sources
+### Candidate Sources
 
 | Source | Coverage | Purpose |
 | --- | --- | --- |
@@ -76,7 +70,7 @@ GH Archive ──────┘                               │
 
 GitHub Search returns at most 1,000 results per query, so Git Breakout must not be described as a complete ranking of every GitHub repository. Leaving the candidate pool stops new observations; it does not delete existing snapshots.
 
-## Ranking model
+## Ranking Model
 
 The baseline momentum model is `baseline-v1`.
 
@@ -100,7 +94,7 @@ New discoveries is the default view, with Momentum available separately. This na
 
 See the [public methodology](docs/methodology.md) for formulas and limitations. The question-mark control beside each ranking view also exposes the current methodology in the web app.
 
-## Collection and storage
+## Collection and Storage
 
 - The production collector follows a database-backed schedule and runs about every two hours.
 - A server file lock and database lease prevent overlapping runs.
@@ -110,7 +104,7 @@ See the [public methodology](docs/methodology.md) for formulas and limitations. 
 - Web star-history requests are hard-capped by `TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT`; the accepted range is 1-500 and production uses 300 requests per hour.
 - Scheduled collection does not use GitHub Actions.
 
-## Getting started
+## Getting Started
 
 ### Requirements
 
@@ -118,7 +112,7 @@ See the [public methodology](docs/methodology.md) for formulas and limitations. 
 - npm
 - A GitHub API token that can read public repository metadata (used by both the collector and the web server)
 
-### Local development
+### Local Development
 
 ```bash
 git clone https://github.com/Changroro/git-breakout.git
@@ -148,7 +142,7 @@ npm run evaluate:ranking -- snapshot-history.json 20 > ranking-evaluation.json
 
 The evaluator freezes each version's top 20 and Momentum's top 20 within the same candidate pool, then compares observed growth and coverage at 24 and 72 hours. It reports evidence, confidence and star-size strata, plus sensitivity to removing individual saved score components. Future candidates cannot enter an earlier selection, and missing observations do not become zero growth. Passing synthetic tests is not proof of empirical ranking quality. See the [offline evaluation input contract and limitations](docs/methodology.md#offline-ranking-evaluation).
 
-## Project layout
+## Project Layout
 
 ```text
 src/                 React UI, i18n, filters, and ranking views
@@ -166,8 +160,10 @@ Git Breakout is distributed under the [MIT License](LICENSE).
 
 ---
 
+This project is not an official GitHub product and is not affiliated with, sponsored by, or endorsed by GitHub, Inc.
+
+<br />
+
 <div align="center">
 Built by <a href="https://github.com/Changroro">Changroro</a>
 </div>
-
-This project is not an official GitHub product and is not affiliated with, sponsored by, or endorsed by GitHub, Inc.
