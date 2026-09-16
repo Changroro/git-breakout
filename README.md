@@ -7,34 +7,28 @@
 [![License](https://img.shields.io/badge/License-MIT-f1e05a?style=flat-square)](LICENSE)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Collection](https://img.shields.io/badge/Collection-every%202%20hours-3FB950?style=flat-square)](#수집과-저장)
+[![Collection](https://img.shields.io/badge/Collection-every%202%20hours-3FB950?style=flat-square)](#collection-and-storage)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?style=flat-square&logo=githubsponsors)](https://github.com/sponsors/Changroro)
 
 [English](README.en.md) · [서비스 열기](https://gitbreakout.imbch.dev) · [API 상태](https://gitbreakout.imbch.dev/rpc/health)
 
 </div>
 
-## Git Breakout이 필요한 이유
+## Intro
 
 GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하지만, 이미 알려진 저장소가 반복해서 노출되거나 성장 초기의 프로젝트를 놓칠 수 있다. Git Breakout은 Trending 목록뿐 아니라 최근 생성·푸시된 저장소와 공개 이벤트를 함께 관측하고, 누적 인기도보다 **최근의 변화**에 무게를 둔다.
 
 이 프로젝트는 GitHub 전체 저장소의 완전한 색인이 아니다. API 검색 한계 안에서 후보를 넓게 발견한다. Star 그래프는 GitHub API의 현재 유지 스타 획득 기록과 Git Breakout의 시점별 관측을 서로 구분해 사용한다.
 
-## 화면
+## Screenshots
 
-### 데스크톱
+### Desktop
 
 <p align="center">
   <img src="docs/screenshots/desktop.png" alt="Git Breakout 데스크톱 랭킹 화면" width="960" />
 </p>
 
-### 모바일
-
-<p align="center">
-  <img src="docs/screenshots/mobile.png" alt="Git Breakout 모바일 랭킹 화면" width="360" />
-</p>
-
-## 주요 기능
+## Features
 
 - **신규 발굴**: 첫 관측 Star 1만 개 미만이고 관측된 Trending 이력이 없는 저장소를 신규 후보끼리 비교합니다.
 - **재부상**: 이전 활동 수준에서 7일간 둔화한 뒤 다시 성장한 저장소를 별도로 비교합니다. 충분한 일별 이력이 있어야 분류합니다.
@@ -47,7 +41,7 @@ GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하
 - **발굴 성과**: Git Breakout이 먼저 관측한 저장소가 이후 Daily Trending에 진입했는지 검증한다.
 - **탐색 UI**: 저장소 검색, 언어·토픽 필터, 페이지네이션, 읽은 항목 표시, 한·영 전환, 반응형 라이트·다크 테마를 제공한다.
 
-## 데이터 흐름
+## Data Flow
 
 ```text
 GitHub Trending ─┐
@@ -63,7 +57,7 @@ GH Archive ──────┘                            │
                                  API ─→ Git Breakout UI
 ```
 
-### 후보 소스
+### Candidate Sources
 
 | 소스 | 범위 | 용도 |
 | --- | --- | --- |
@@ -76,7 +70,7 @@ GH Archive ──────┘                            │
 
 GitHub Search는 쿼리별 최대 1,000개 결과만 반환하므로 Git Breakout의 순위를 “GitHub 전체 저장소의 완전한 순위”로 해석하면 안 된다. 후보군에서 제외된 저장소는 새 관측만 멈추며 기존 스냅샷은 삭제하지 않는다.
 
-## 랭킹 방식
+## Ranking Model
 
 기본 모멘텀 모델은 `baseline-v1`이다.
 
@@ -100,7 +94,7 @@ score = log1p(observedStarsPerDay) × 55
 
 자세한 산식과 한계는 [공개 방법론](docs/methodology.md)에 정리돼 있다. 웹 화면의 각 지표 옆 물음표에서도 현재 계산 방식을 확인할 수 있다.
 
-## 수집과 저장
+## Collection and Storage
 
 - 운영 수집기는 DB가 기록한 다음 실행 시각을 기준으로 약 2시간마다 실행된다.
 - 중복 실행은 서버 파일 잠금과 DB lease로 차단한다.
@@ -110,15 +104,15 @@ score = log1p(observedStarsPerDay) × 55
 - 웹의 Star 히스토리 조회는 `TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT`로 시간당 요청 수를 강제 제한한다. 허용 범위는 1~500이고 운영값은 300이다.
 - GitHub Actions 예약 수집은 사용하지 않는다.
 
-## 시작하기
+## Getting Started
 
-### 요구 사항
+### Requirements
 
 - Node.js 22 이상
 - npm
 - 공개 저장소를 조회할 수 있는 GitHub API 토큰 (수집기와 웹 서버 모두 사용)
 
-### 로컬 실행
+### Local Development
 
 ```bash
 git clone https://github.com/Changroro/git-breakout.git
@@ -130,7 +124,7 @@ GITHUB_TOKEN=your_token TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT=300 npm run de
 
 브라우저에서 `http://localhost:5173`을 연다. 수집된 스냅샷이 없으면 화면은 데이터가 필요하다는 오류를 명시적으로 표시한다.
 
-### 검증
+### Verification
 
 ```bash
 npm test
@@ -148,7 +142,7 @@ npm run evaluate:ranking -- snapshot-history.json 20 > ranking-evaluation.json
 
 당시 버전별 상위 20개와 같은 후보군의 모멘텀 상위 20개를 고정해 24·72시간 후 관측 성장과 데이터 가용률을 비교한다. 누락·신뢰도·저장소 규모별 결과와 구성요소를 하나씩 뺀 민감도도 기록한다. 미래 후보를 당시 목록에 넣거나 결측을 성장 0으로 바꾸지 않는다. 합성 테스트 통과는 실제 랭킹 품질의 증명이 아니다. 입력 계약과 한계는 [공개 방법론의 오프라인 평가](docs/methodology.md#offline-ranking-evaluation)에 있다.
 
-## 프로젝트 구조
+## Project Layout
 
 ```text
 src/                 React UI, i18n, filters, ranking views
@@ -158,7 +152,7 @@ docs/                Brand assets, screenshots, public methodology
 
 운영 서버의 배포 자동화, 비밀 설정, 백업 구성과 내부 비교 조사는 공개 저장소에 포함하지 않는다.
 
-## 기여
+## Contributing
 
 개발 환경과 제출 절차는 [CONTRIBUTING.md](CONTRIBUTING.md), 취약점 제보 방법은 [SECURITY.md](SECURITY.md)를 참고한다. 사용된 주요 서드파티 자산과 라이선스는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)에 정리돼 있다.
 
@@ -166,8 +160,10 @@ docs/                Brand assets, screenshots, public methodology
 
 ---
 
+이 프로젝트는 GitHub 공식 제품이 아니며 GitHub, Inc.와 제휴·후원·승인 관계가 없습니다.
+
+<br />
+
 <div align="center">
 Built by <a href="https://github.com/Changroro">Changroro</a>
 </div>
-
-이 프로젝트는 GitHub 공식 제품이 아니며 GitHub, Inc.와 제휴·후원·승인 관계가 없습니다.
