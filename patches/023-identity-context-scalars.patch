@@ -1,0 +1,280 @@
+--- a/deploy/oracle/db/init.sh
++++ b/deploy/oracle/db/init.sh
+@@ -23,7 +23,7 @@
+ );
+ revoke all on radar.schema_migrations from public, web_anon, collector;
+ SQL
+-for migration in 006_operational_hardening 007_discovery_track_record 008_archive_page 009_github_trending_page 010_emerging_breakout_context 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope; do
++for migration in 006_operational_hardening 007_discovery_track_record 008_archive_page 009_github_trending_page 010_emerging_breakout_context 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars; do
+   migration_file="/opt/trend-radar/migrations/$migration.sql"
+   test -f "$migration_file" || { echo "Database migration is unavailable: $migration" >&2; exit 1; }
+   psql -X --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --file "$migration_file"
+--- a/deploy/oracle/docker-compose.yml
++++ b/deploy/oracle/docker-compose.yml
+@@ -35,6 +35,7 @@
+       - ./db/migrations/020_service_status.sql:/opt/trend-radar/migrations/020_service_status.sql:ro
+       - ./db/migrations/021_v8_classification.sql:/opt/trend-radar/migrations/021_v8_classification.sql:ro
+       - ./db/migrations/022_event_processing_scope.sql:/opt/trend-radar/migrations/022_event_processing_scope.sql:ro
++      - ./db/migrations/023_identity_context_scalars.sql:/opt/trend-radar/migrations/023_identity_context_scalars.sql:ro
+     networks:
+       - internal
+
+--- a/deploy/oracle/tests/audit-regression.mjs
++++ b/deploy/oracle/tests/audit-regression.mjs
+@@ -8,9 +8,9 @@
+ const directory = dirname(fileURLToPath(import.meta.url));
+ const root = resolve(directory, '../../..');
+ const selected = process.argv.slice(2);
+-const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', 'backup'] : selected;
++const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', '023', 'backup'] : selected;
+ for (const name of modules) {
+-  if (!/^(core|017|018|019|020|021|022|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
++  if (!/^(core|017|018|019|020|021|022|023|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
+ }
+ const suites = await Promise.all(modules.map(async name => ({
+   name,
+--- a/deploy/oracle/operations.test.ts
++++ b/deploy/oracle/operations.test.ts
+@@ -24,7 +24,7 @@
+
+ function deploymentFixture() {
+   const f = fixture("auto-deploy.sh");
+-  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope"];
++  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars"];
+   for (const migration of migrations) writeFileSync(join(f.repo, "deploy/oracle/db/migrations", `${migration}.sql`), "select 'fixture migration';\n");
+   writeFileSync(join(f.state, "active-image"), "sha256:previous\n");
+   writeFileSync(join(f.state, "deployed-revision"), "previous-revision\n");
+@@ -91,7 +91,7 @@
+       expect(existsSync(join(f.state, "failed-target"))).toBe(true);
+       expect(f.run({ BROKEN_IMAGE: "1" }).status).toBe(1);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(12);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(13);
+     } finally { f.close(); }
+   });
+
+@@ -104,7 +104,7 @@
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\nbuild\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(12);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(13);
+     } finally { f.close(); }
+   });
+
+@@ -115,7 +115,7 @@
+       rmSync(join(f.state, "ledger"), { recursive: true });
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(24);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(26);
+     } finally { f.close(); }
+   });
+
+--- a/deploy/oracle/auto-deploy.sh
++++ b/deploy/oracle/auto-deploy.sh
+@@ -86,7 +86,7 @@
+ revoke all on radar.schema_migrations from public, web_anon, collector;
+ SQL
+ pending_migrations=()
+-for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope; do
++for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars; do
+   migration_file="$TREND_RADAR_REPO/deploy/oracle/db/migrations/$migration.sql"
+   test -f "$migration_file" || { echo "Database migration is unavailable: $migration" >&2; exit 1; }
+   checksum=$(sha256sum "$migration_file" | cut -d' ' -f1)
+--- /dev/null
++++ b/deploy/oracle/db/migrations/023_identity_context_scalars.sql
+@@ -0,0 +1,120 @@
++begin;
++
++set local lock_timeout = '5s';
++alter table radar.snapshot_repositories
++  add column if not exists identity_pushed_at text
++    generated always as (payload_json->>'pushed_at') stored,
++  add column if not exists identity_is_trending boolean
++    generated always as (payload_json #>> '{official_ranks,daily}' is not null
++      or payload_json #>> '{official_ranks,weekly}' is not null
++      or payload_json #>> '{official_ranks,monthly}' is not null) stored;
++
++create or replace function api.repository_identity_context(p_repositories jsonb)
++returns jsonb language plpgsql stable set search_path = pg_catalog, radar as $$
++declare
++  result jsonb;
++begin
++  if jsonb_typeof(p_repositories) is distinct from 'array' then
++    raise exception 'Repository identity context requires an array';
++  end if;
++  if jsonb_array_length(p_repositories) not between 1 and 10000 then
++    raise exception 'Repository identity context requires 1-10000 repositories';
++  end if;
++  if exists(select 1 from jsonb_array_elements(p_repositories) r where
++      jsonb_typeof(r->'repository_id') is distinct from 'string' or btrim(r->>'repository_id') = ''
++      or jsonb_typeof(r->'full_name') is distinct from 'string' or (r->>'full_name') !~ '^[^/[:space:]]+/[^/[:space:]]+$'
++      or jsonb_typeof(r->'requested_names') is distinct from 'array') then
++    raise exception 'Invalid repository identity proof';
++  end if;
++  if exists(select 1 from jsonb_array_elements(p_repositories) r
++      cross join lateral jsonb_array_elements(r->'requested_names') n
++      where jsonb_typeof(n) <> 'string' or (n #>> '{}') !~ '^[^/[:space:]]+/[^/[:space:]]+$') then
++    raise exception 'Invalid requested repository name';
++  end if;
++  if exists(select 1 from jsonb_array_elements(p_repositories) r group by r->>'repository_id' having count(*) > 1)
++    or exists(select 1 from jsonb_array_elements(p_repositories) r group by lower(r->>'full_name') having count(*) > 1) then
++    raise exception 'Duplicate repository identity proof';
++  end if;
++
++  with requested as (
++    select r->>'repository_id' as repository_id, r->>'full_name' as full_name, r->'requested_names' as requested_names
++    from jsonb_array_elements(p_repositories) r
++  ), names as (
++    select repository_id, full_name as canonical_name, lower(full_name) as full_name_key from requested
++    union
++    select q.repository_id, q.full_name, lower(n) from requested q
++    cross join lateral jsonb_array_elements_text(q.requested_names) n
++    union
++    select q.repository_id, q.full_name, a.full_name_key from requested q
++    join radar.repository_identity_aliases a using(repository_id)
++  ), allowed_names as (
++    select n.* from names n where not exists(
++      select 1 from radar.repository_identity_aliases a
++      where a.full_name_key = n.full_name_key and a.repository_id <> n.repository_id
++    )
++  ), rows as (
++    select q.repository_id, q.full_name as canonical_name, r.captured_at, r.rank, r.stars,
++      r.identity_pushed_at, r.identity_is_trending, 'verified'::text as identity_status
++    from requested q join radar.repository_identity_observations i using(repository_id)
++    join radar.snapshot_repositories r using(snapshot_id, full_name_key)
++    union all
++    select n.repository_id, n.canonical_name, r.captured_at, r.rank, r.stars,
++      r.identity_pushed_at, r.identity_is_trending, 'legacy_unverified'::text
++    from allowed_names n join radar.snapshot_repositories r using(full_name_key)
++    where not exists(select 1 from radar.repository_identity_observations i
++        where i.snapshot_id = r.snapshot_id and i.full_name_key = r.full_name_key)
++      and not exists(select 1 from radar.repository_identity_observations i
++        where i.repository_id = n.repository_id and i.captured_at = r.captured_at)
++  ), history as (
++    select r.repository_id, r.canonical_name, r.captured_at, r.rank, r.stars, r.identity_status,
++      r.identity_pushed_at as pushed_at, r.identity_is_trending as trending
++    from rows r
++  ), ordered as (
++    select *, row_number() over(partition by repository_id order by captured_at) as first_number,
++      row_number() over(partition by repository_id order by captured_at desc) as last_number,
++      lag(trending, 1, false) over(partition by repository_id order by captured_at) as was_trending
++    from history
++  ), summaries as (
++    select repository_id, canonical_name, min(captured_at) as first_seen_at,
++      case when bool_or(identity_status = 'legacy_unverified') then 'legacy_unverified' else 'verified' end as identity_status,
++      max(stars) filter(where first_number = 1) as first_observed_stars,
++      bool_or(trending) filter(where first_number = 1) as first_observation_was_trending,
++      count(*) filter(where trending and not was_trending)::integer as official_trending_episode_count,
++      max(captured_at) as latest_captured_at, max(rank) filter(where last_number = 1) as latest_rank,
++      max(stars) filter(where last_number = 1) as latest_stars,
++      max(pushed_at) filter(where last_number = 1) as latest_pushed_at,
++      jsonb_agg(jsonb_build_object('captured_at', captured_at, 'stars', stars) order by captured_at desc)
++        filter(where last_number <= 20) as observations
++    from ordered group by repository_id, canonical_name
++  ), policy as (select * from radar.collector_settings where id limit 1),
++  latest as (select max(captured_at) as captured_at from radar.snapshots),
++  comparisons as (
++    select distinct on(h.repository_id) h.repository_id, h.captured_at, h.stars
++    from history h cross join policy cross join latest
++    where h.captured_at <= latest.captured_at - make_interval(days => policy.retention_growth_days)
++    order by h.repository_id, h.captured_at desc
++  )
++  select jsonb_build_object(
++    'latest_captured_at', (select captured_at from latest),
++    'interval_minutes', (select interval_minutes from policy),
++    'retention_policy', (select jsonb_build_object('grace_days', retention_grace_days, 'growth_days', retention_growth_days,
++      'push_days', retention_push_days, 'repository_limit', retention_repository_limit) from policy),
++    'repositories', coalesce((select jsonb_agg(jsonb_build_object(
++      'repository_id', s.repository_id, 'identity_status', s.identity_status, 'full_name', s.canonical_name,
++      'first_seen_at', s.first_seen_at, 'first_observed_stars', s.first_observed_stars,
++      'first_observation_was_trending', s.first_observation_was_trending,
++      'official_trending_episode_count', s.official_trending_episode_count,
++      'latest_captured_at', s.latest_captured_at, 'latest_rank', s.latest_rank, 'latest_stars', s.latest_stars,
++      'latest_pushed_at', s.latest_pushed_at, 'observations', s.observations,
++      'growth_comparison_captured_at', comparison.captured_at, 'growth_comparison_stars', comparison.stars
++    ) order by lower(s.canonical_name)) from summaries s
++    left join comparisons comparison using(repository_id)), '[]'::jsonb)
++  ) into result;
++  return result;
++end;
++$$;
++revoke execute on function api.repository_identity_context(jsonb) from public;
++grant execute on function api.repository_identity_context(jsonb) to collector;
++
++notify pgrst, 'reload schema';
++commit;
+--- /dev/null
++++ b/deploy/oracle/tests/regression-023.mjs
+@@ -0,0 +1,70 @@
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++import identityRegression from './regression-019.mjs';
++
++export default async function (helpers) {
++  const { sql, json, check, repository } = helpers;
++  await check('023 identity query reads stored scalar values instead of historical JSON', () => {
++    assert.equal(sql(`select count(*) from information_schema.columns
++      where table_schema='radar' and table_name='snapshot_repositories'
++      and column_name in ('identity_pushed_at','identity_is_trending') and is_generated='ALWAYS'`), '2');
++    const definition = sql("select pg_get_functiondef('api.repository_identity_context(jsonb)'::regprocedure)");
++    assert.ok(!definition.includes('payload_json'));
++  });
++  await identityRegression(helpers);
++  await check('023 optimized context preserves rename, reuse and legacy results exactly', () => {
++    const proofs = [
++      ['R_project', 'new/project'], ['R_reused', 'old/project'],
++      ['R_legacy', 'legacy-new/project'], ['R_legacy_reused', 'legacy/project'],
++    ].map(([repository_id, full_name]) => ({ repository_id, full_name, requested_names: [full_name] }));
++    const query = `set role collector; select api.repository_identity_context($proofs$${JSON.stringify(proofs)}$proofs$::jsonb)`;
++    const before = json(query);
++    sql('alter table radar.snapshot_repositories drop column identity_pushed_at, drop column identity_is_trending');
++    sql(readFileSync(new URL('../db/migrations/023_identity_context_scalars.sql', import.meta.url), 'utf8'));
++    assert.deepEqual(json(query), before);
++    sql(readFileSync(new URL('../db/migrations/023_identity_context_scalars.sql', import.meta.url), 'utf8'));
++    assert.deepEqual(json(query), before);
++  });
++  await check('023 full provenance survives the latest twenty observation window', () => {
++    for (let index = 0; index < 25; index += 1) {
++      const id = `23000000-0000-4000-8000-${String(index + 100).padStart(12, '0')}`;
++      const capturedAt = `2026-09-${String(index + 1).padStart(2, '0')}T10:00:00Z`;
++      const payload = repository({ full_name: 'scalar/history', repository_id: 'R_scalar_history',
++        pushed_at: index === 24 ? null : capturedAt,
++        official_ranks: { daily: null, weekly: null, monthly: index % 5 === 0 ? 1 : null } });
++      sql(`begin; set local role collector;
++        insert into radar.collector_runs(id,started_at,finished_at,status) values('${id}','${capturedAt}','${capturedAt}','completed');
++        insert into radar.snapshots(id,captured_at,source,repository_count) values('${id}','${capturedAt}','scalar-history',1);
++        insert into radar.snapshot_repositories(snapshot_id,captured_at,full_name,rank,stars,payload_json)
++        values('${id}','${capturedAt}','scalar/history',1,${100 + index},$payload$${JSON.stringify(payload)}$payload$::jsonb); commit;`);
++    }
++    const proof = [{ repository_id: 'R_scalar_history', full_name: 'scalar/history', requested_names: ['scalar/history'] }];
++    const context = json(`set role collector; select api.repository_identity_context($proofs$${JSON.stringify(proof)}$proofs$::jsonb)`).repositories[0];
++    assert.equal(context.first_seen_at, '2026-09-01T10:00:00+00:00');
++    assert.equal(context.first_observed_stars, 100);
++    assert.equal(context.first_observation_was_trending, true);
++    assert.equal(context.official_trending_episode_count, 5);
++    assert.equal(context.latest_pushed_at, null);
++    assert.deepEqual(context.observations.map(point => point.stars), Array.from({ length: 20 }, (_, index) => 124 - index));
++  });
++  await check('023 stored values track inserts and updates without altering raw JSON', () => {
++    const id = '23000000-0000-4000-8000-000000000001';
++    const payload = repository({ full_name: 'scalar/project', repository_id: 'R_scalar',
++      pushed_at: null, official_ranks: { daily: null, weekly: 0, monthly: null } });
++    sql(`begin; set local role collector;
++      insert into radar.collector_runs(id,started_at,finished_at,status) values('${id}',now(),now(),'completed');
++      insert into radar.snapshots(id,captured_at,source,repository_count) values('${id}',now(),'scalar-test',1);
++      insert into radar.snapshot_repositories(snapshot_id,captured_at,full_name,rank,stars,payload_json)
++      values('${id}',now(),'scalar/project',1,100,$payload$${JSON.stringify(payload)}$payload$::jsonb); commit;`);
++    const query = `select jsonb_build_object('pushed_at',identity_pushed_at,'trending',identity_is_trending,'raw',payload_json)
++      from radar.snapshot_repositories where snapshot_id='${id}'`;
++    assert.deepEqual(json(query), { pushed_at: null, trending: true, raw: payload });
++    sql(`update radar.snapshot_repositories set payload_json = payload_json - 'official_ranks'
++      || '{"pushed_at":"2026-09-30T00:00:00Z"}'::jsonb where snapshot_id='${id}'`);
++    const updated = json(query);
++    assert.equal(updated.pushed_at, '2026-09-30T00:00:00Z');
++    assert.equal(updated.trending, false);
++    assert.deepEqual(updated.raw, { ...Object.fromEntries(Object.entries(payload).filter(([key]) => key !== 'official_ranks')),
++      pushed_at: updated.pushed_at });
++  });
++}
