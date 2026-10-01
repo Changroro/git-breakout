@@ -1531,7 +1531,7 @@ h1 {
   display: grid;
   grid-template-columns: var(--filter-sidebar-width) minmax(0, 1fr);
   gap: var(--ranking-gap);
-  align-items: start;
+  align-items: stretch;
 }
 
 .ranking-layout-collapsed {
@@ -1544,8 +1544,10 @@ h1 {
 
 .filter-sidebar {
   width: 100%;
-  position: sticky;
-  top: 20px;
+  min-height: 0;
+  contain: size;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -1623,6 +1625,21 @@ h1 {
   padding: 14px;
 }
 
+.filter-sidebar .filter-panel,
+.filter-sidebar .filter-group {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.filter-sidebar .filter-group-heading,
+.filter-sidebar .topic-search,
+.filter-sidebar .clear-filters-button,
+.filter-sidebar-heading {
+  flex-shrink: 0;
+}
+
 .filter-group + .filter-group {
   margin-top: 22px;
   padding-top: 20px;
@@ -1655,13 +1672,13 @@ h1 {
 }
 
 .filter-options {
-  max-height: 286px;
+  min-height: 0;
   overflow-y: auto;
   scrollbar-color: var(--border-strong) transparent;
 }
 
-.filter-options-language {
-  max-height: 240px;
+.filter-sidebar .filter-options {
+  flex: 1;
 }
 
 .filter-option {
@@ -1745,7 +1762,6 @@ h1 {
   color: var(--text-muted);
 }
 
-.filter-options-note,
 .filter-options-empty {
   margin: 8px 3px 0;
   color: var(--text-muted);

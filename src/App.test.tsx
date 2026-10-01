@@ -15,6 +15,7 @@ import {
   LanguageSwitcher,
   RANKING_VIEW_ORDER,
   rankingRequestKey,
+  responsivePageSize,
   parseRankingWithFacets,
   RankingViewHeading,
   rankingViewCopy,
@@ -174,27 +175,41 @@ describe("InitialLoadingState", () => {
 });
 
 describe("SiteFooter", () => {
-  it("uses the spaced brand name and links to source, sponsor, owner, and email", () => {
+  it("links to the repository, sponsor, and email without a separate source item", () => {
     const markup = renderToStaticMarkup(<SiteFooter />);
 
     expect(translate("en", "ranking.title")).toBe("Git Breakout");
     expect(markup).toContain('href="https://github.com/Changroro/git-breakout"');
-    expect(markup).toContain('aria-label="Git Breakout source code"');
+    expect(markup).not.toContain('aria-label="Git Breakout source code"');
     expect(markup).toContain('href="https://github.com/sponsors/Changroro"');
-    expect(markup).toContain('href="https://github.com/Changroro"');
+    expect(markup).not.toContain('href="https://github.com/Changroro"');
+    expect(markup).toContain("github.com/Changroro/git-breakout</a>");
     expect(markup).toContain('href="mailto:chbae624@gmail.com"');
   });
 
-  it("localizes the source link in Korean", () => {
+  it("omits the source item in Korean while retaining the localized sponsor", () => {
     const markup = renderToStaticMarkup(
       <I18nProvider locale="ko">
         <SiteFooter />
       </I18nProvider>,
     );
 
-    expect(markup).toContain('aria-label="Git Breakout 소스 코드"');
+    expect(markup).not.toContain('aria-label="Git Breakout 소스 코드"');
     expect(markup).toContain('aria-label="GitHub Sponsors에서 후원"');
-    expect(markup).toContain(">소스 코드</a>");
+    expect(markup).not.toContain(">소스 코드</a>");
+  });
+});
+
+describe("responsive pagination", () => {
+  it("fits whole rows into the available height within the API limits", () => {
+    expect(responsivePageSize(800, 100, 250)).toBe(5);
+    expect(responsivePageSize(500, 100, 250)).toBe(2);
+    expect(responsivePageSize(200, 100, 250)).toBe(1);
+    expect(responsivePageSize(20_000, 100, 250)).toBe(100);
+    expect(() => responsivePageSize(800, 0, 250)).toThrow("positive row height");
+  });
+  it("keeps different viewport page sizes in separate ranking cache entries", () => {
+    expect(rankingRequestKey("snapshot", "?page=2", 3)).not.toBe(rankingRequestKey("snapshot", "?page=2", 8));
   });
 });
 

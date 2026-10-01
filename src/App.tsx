@@ -95,14 +95,50 @@ import { parseServiceStatus, type ServiceStatus } from "./lib/service-status";
 import { parsePublicTrafficResponse } from "./lib/public-traffic";
 import { threadsShareUrl, type RepositoryShareInput } from "./lib/repository-share";
 
-const PAGE_SIZE = 10;
-const DEFAULT_TOPIC_LIMIT = 12;
-const SEARCH_TOPIC_LIMIT = 40;
+const INITIAL_PAGE_SIZE = 10;
 const SEARCH_RESULT_LIMIT = 10;
 const READ_REPOSITORIES_STORAGE_KEY = "git-breakout:read-repositories";
 const LEGACY_READ_REPOSITORIES_STORAGE_KEY = "github-trend-radar:read-repositories";
 const LOCALE_STORAGE_KEY = "git-breakout:locale";
 const LEGACY_LOCALE_STORAGE_KEY = "github-trend-radar:locale";
+
+export function responsivePageSize(availableHeight: number, rowHeight: number, chromeHeight: number): number {
+  if (![availableHeight, rowHeight, chromeHeight].every(Number.isFinite) || rowHeight <= 0) {
+    throw new RangeError("Responsive pagination requires finite dimensions and a positive row height");
+  }
+  return Math.max(1, Math.min(100, Math.floor((availableHeight - chromeHeight) / rowHeight)));
+}
+
+function useResponsivePageSize(layoutKey: string): number {
+  const [pageSize, setPageSize] = useState(INITIAL_PAGE_SIZE);
+  useEffect(() => {
+    let measuredViewport = "";
+    function measure() {
+      const list = document.querySelector<HTMLOListElement>(".ranking-list, .archive-list");
+      const row = list?.firstElementChild;
+      const board = list?.closest(".ranking-board, .archive-board");
+      if (!list || !row || !board) return;
+      const viewport = `${window.innerWidth}:${window.innerHeight}`;
+      if (viewport === measuredViewport) return;
+      // ponytail: 첫 행 기준; 카드 높이가 크게 달라지면 누적 높이로 계산한다.
+      const rowHeight = row.getBoundingClientRect().height;
+      if (rowHeight <= 0) return;
+      measuredViewport = viewport;
+      const header = document.querySelector(".site-header");
+      const footer = document.querySelector(".site-footer");
+      if (!header || !footer) throw new Error("Responsive pagination requires the site header and footer");
+      setPageSize(responsivePageSize(window.innerHeight - header.getBoundingClientRect().height
+        - footer.getBoundingClientRect().height, rowHeight,
+        board.getBoundingClientRect().height - list.getBoundingClientRect().height));
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(document.body);
+    window.addEventListener("resize", measure);
+    measure();
+    return () => { observer.disconnect(); window.removeEventListener("resize", measure); };
+  }, [layoutKey]);
+  return pageSize;
+}
 
 export const RANKING_VIEW_ORDER = ["breakout", "resurgence", "momentum", "current", "github"] as const;
 const RANKING_VIEW_LABEL_KEYS = {
@@ -1126,16 +1162,6 @@ function FilterPanel({
   const matchingTopics = topicOptions.filter((option) => (
     normalizedSearch === "" || option.label.toLocaleLowerCase("en-US").includes(normalizedSearch)
   ));
-  const topicLimit = normalizedSearch === "" ? DEFAULT_TOPIC_LIMIT : SEARCH_TOPIC_LIMIT;
-  const visibleTopics = matchingTopics.slice(0, topicLimit);
-  const selectedTopic = topicOptions.find((option) => option.value === filters.topic);
-  if (
-    normalizedSearch === ""
-    && selectedTopic !== undefined
-    && !visibleTopics.some((option) => option.value === selectedTopic.value)
-  ) {
-    visibleTopics.push(selectedTopic);
-  }
 
   return (
     <div className="filter-panel">
@@ -1178,7 +1204,7 @@ function FilterPanel({
           </span>
         </label>
         <div className="filter-options">
-          {visibleTopics.map((option) => (
+          {matchingTopics.map((option) => (
             <FilterOptionButton
               key={option.value}
               option={option}
@@ -1187,10 +1213,8 @@ function FilterPanel({
             />
           ))}
         </div>
-        {visibleTopics.length === 0 ? (
+        {matchingTopics.length === 0 ? (
           <p className="filter-options-empty">{t("filters.noTopics")}</p>
-        ) : normalizedSearch === "" && matchingTopics.length > DEFAULT_TOPIC_LIMIT ? (
-          <p className="filter-options-note">{t("filters.topTopics", { count: DEFAULT_TOPIC_LIMIT })}</p>
         ) : null}
       </section>
 
@@ -1998,12 +2022,14 @@ function ArchiveRow({
 
 function ArchivePage({
   locationSearch,
+  pageSize,
   readRepositories,
   onRead,
   onNavigate,
   onOpenSnapshot,
 }: {
   locationSearch: string;
+  pageSize: number;
   readRepositories: ReadonlySet<string>;
   onRead: (fullName: string) => void;
   onNavigate: (href: string, mode: RankingNavigationMode) => void;
@@ -2028,7 +2054,7 @@ function ArchivePage({
       try {
         const requestParameters = new URLSearchParams({
           page: String(page),
-          page_size: String(PAGE_SIZE),
+          page_size: String(pageSize),
         });
         if (query !== "") requestParameters.set("query", query);
         const response = await fetch(`/api/archive?${requestParameters.toString()}`, {
@@ -2039,7 +2065,11 @@ function ArchivePage({
           throw new Error(`Archive request failed with status ${response.status}`);
         }
         const result = parseArchivePageResponse(await response.json());
-        if (!controller.signal.aborted) setArchive(result);
+        if (!controller.signal.aborted) {
+          if (result.page_size !== pageSize) throw new Error("Archive page size differs from the requested size");
+          if (result.page !== page) onNavigate(buildArchiveHref(result.page, query), "replace");
+          setArchive(result);
+        }
       } catch (error) {
         if (!controller.signal.aborted) {
           setArchiveError(error instanceof Error ? error.message : "Unknown archive error");
@@ -2050,7 +2080,7 @@ function ArchivePage({
     }
     void loadArchive();
     return () => controller.abort();
-  }, [page, query]);
+  }, [page, query, pageSize]);
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2572,15 +2602,6 @@ export function SiteFooter() {
         <span className="footer-owner">Changroro</span>
         <nav aria-label={t("footer.links")} className="footer-links">
           <a
-            aria-label={t("footer.sourceLabel")}
-            href="https://github.com/Changroro/git-breakout"
-            rel="noreferrer"
-            target="_blank"
-          >
-            <RepoIcon size={16} />
-            {t("footer.source")}
-          </a>
-          <a
             aria-label={t("footer.sponsorLabel")}
             href="https://github.com/sponsors/Changroro"
             rel="noreferrer"
@@ -2589,9 +2610,9 @@ export function SiteFooter() {
             <HeartIcon size={16} />
             {t("footer.sponsor")}
           </a>
-          <a href="https://github.com/Changroro" rel="noreferrer" target="_blank">
+          <a href="https://github.com/Changroro/git-breakout" rel="noreferrer" target="_blank">
             <MarkGithubIcon size={16} />
-            github.com/Changroro
+            github.com/Changroro/git-breakout
           </a>
           <a href="mailto:chbae624@gmail.com">
             <MailIcon size={16} />
@@ -2603,10 +2624,10 @@ export function SiteFooter() {
   );
 }
 
-export function rankingRequestKey(snapshotId: string, search: string): string {
+export function rankingRequestKey(snapshotId: string, search: string, pageSize = INITIAL_PAGE_SIZE): string {
   const view = parseRankingView(search);
   return buildRankingHref(requestedPage(search), snapshotId, parseRepositoryFilters(search), view,
-    view === "github" ? parseGitHubTrendingPeriod(search) : "daily");
+    view === "github" ? parseGitHubTrendingPeriod(search) : "daily") + `&page_size=${pageSize}`;
 }
 
 function AppContent({
@@ -2635,6 +2656,7 @@ function AppContent({
   const [locationPath, setLocationPath] = useState<AppPath>(() => resolveAppPath(window.location.pathname));
   const [locationSearch, setLocationSearch] = useState(window.location.search);
   const rankingLocationSearch = locationPath === "/" ? locationSearch : "";
+  const pageSize = useResponsivePageSize(`${locationPath}:${locale}:${parseRankingView(selectedSnapshotSearch ?? rankingLocationSearch)}`);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -2671,7 +2693,7 @@ function AppContent({
         const initialSearch = window.location.search;
         const isRankingPage = initialPath === "/";
         const parameters = new URLSearchParams(initialSearch);
-        parameters.set("page_size", String(PAGE_SIZE));
+        parameters.set("page_size", String(pageSize));
         const response = await fetch(isRankingPage ? "/api/bootstrap?" + parameters : "/api/timeline", {
           headers: { Accept: "application/json" }, signal: controller.signal,
         });
@@ -2682,7 +2704,7 @@ function AppContent({
           const initial = parseRankingBootstrap(payload);
           setSnapshots(initial.timeline.snapshots);
           setSelectedId(initial.ranking.id);
-          rememberRanking(rankingRequestKey(initial.ranking.id, initialSearch), initial.ranking);
+          rememberRanking(rankingRequestKey(initial.ranking.id, initialSearch, initial.ranking.page_size), initial.ranking);
           setSelectedSnapshot(initial.ranking);
           setSelectedSnapshotSearch(initialSearch);
           const view = parseRankingView(initialSearch);
@@ -2756,9 +2778,10 @@ function AppContent({
   useEffect(() => {
     if (selectedId === null || locationPath !== "/") return;
     if (selectedSnapshot?.id === selectedId && selectedSnapshotSearch !== null
-      && rankingRequestKey(selectedId, selectedSnapshotSearch) === rankingRequestKey(selectedId, rankingLocationSearch)) return;
+      && rankingRequestKey(selectedId, selectedSnapshotSearch, selectedSnapshot.page_size)
+        === rankingRequestKey(selectedId, rankingLocationSearch, pageSize)) return;
     const snapshotId = selectedId;
-    const cacheKey = rankingRequestKey(snapshotId, rankingLocationSearch);
+    const cacheKey = rankingRequestKey(snapshotId, rankingLocationSearch, pageSize);
     const cached = rankingPages.current.get(cacheKey);
     if (cached !== undefined && cached.expiresAt > Date.now()) {
       setSelectedSnapshot(cached.value);
@@ -2793,7 +2816,7 @@ function AppContent({
         const parameters = new URLSearchParams({
           snapshot: snapshotId,
           page: String(page),
-          page_size: String(PAGE_SIZE),
+          page_size: String(pageSize),
           view,
         });
         if (selectedSnapshot?.id === snapshotId && (filters.topic === null
@@ -2815,6 +2838,7 @@ function AppContent({
         if (snapshot.id !== snapshotId) {
           throw new Error(`Snapshot response ${snapshot.id} does not match ${snapshotId}`);
         }
+        if (snapshot.page_size !== pageSize) throw new Error("Ranking page size differs from the requested size");
         if (shouldFallbackToMomentum({
           isLatestSnapshot: snapshots?.at(-1)?.id === snapshotId,
           view,
@@ -2828,9 +2852,12 @@ function AppContent({
           );
           return;
         }
-        rememberRanking(cacheKey, snapshot);
+        const responseSearch = snapshot.page === page ? loadedSearch
+          : buildRankingHref(snapshot.page, snapshotId, filters, view, period ?? "daily");
+        if (snapshot.page !== page) navigate(responseSearch, "replace");
+        rememberRanking(rankingRequestKey(snapshotId, responseSearch, pageSize), snapshot);
         setSelectedSnapshot(snapshot);
-        setSelectedSnapshotSearch(loadedSearch);
+        setSelectedSnapshotSearch(responseSearch);
       } catch (caughtError) {
         if (!controller.signal.aborted) {
           setError(caughtError instanceof Error ? caughtError.message : "Unknown snapshot error");
@@ -2844,7 +2871,7 @@ function AppContent({
 
     void loadSnapshot();
     return () => controller.abort();
-  }, [locationPath, rankingLocationSearch, selectedId, snapshots]);
+  }, [locationPath, rankingLocationSearch, selectedId, snapshots, pageSize]);
 
   function rememberRanking(key: string, value: RankingPageResponse) {
     if (value.matching_count === 0 && !value.classification_available) return;
@@ -2981,7 +3008,7 @@ function AppContent({
       <ServiceFreshness />
 
       {locationPath === "/archive" ? (
-        <ArchivePage locationSearch={locationSearch} readRepositories={readRepositories}
+        <ArchivePage locationSearch={locationSearch} pageSize={pageSize} readRepositories={readRepositories}
           onRead={markRepositoryRead} onNavigate={navigate} onOpenSnapshot={openArchivedSnapshot} />
       ) : locationPath === "/track-record" ? (
         <TrackRecordLoader />
