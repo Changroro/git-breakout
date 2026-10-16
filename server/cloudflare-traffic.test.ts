@@ -11,7 +11,7 @@ function successfulResponse(visits: number): Response {
   return new Response(JSON.stringify({
     data: {
       viewer: {
-        zones: [{ traffic: [{ sum: { visits } }] }],
+        zones: [{ traffic: [{ dimensions: { userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36" }, sum: { visits } }] }],
       },
     },
     errors: null,
@@ -45,11 +45,34 @@ describe("CloudflareTrafficAnalytics", () => {
       datetime_geq: "2026-08-31T15:00:00.000Z",
       datetime_lt: "2026-09-01T03:15:00.000Z",
       requestSource: "eyeball",
+      edgeResponseContentTypeName: "html",
     });
 
     now = new Date("2026-09-01T03:20:01.000Z");
     await analytics.readDailyTraffic();
     expect(fetchImplementation).toHaveBeenCalledTimes(2);
+  });
+
+  it("counts only visits from likely human browsers", async () => {
+    const traffic = [
+      ["Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Safari/537.36", 5],
+      ["Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Mobile/15E148 Safari/604.1", 3],
+      ["Mozilla/5.0 (compatible; YandexBot/3.0; +http://yandex.com/bots)", 40],
+      ["Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36", 30],
+      ["Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1", 20],
+      ["Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/79.0.3945.130 Safari/537.36", 10],
+      ["Mediapartners-Google", 4],
+      ["", 7],
+    ].map(([userAgent, visits]) => ({ dimensions: { userAgent }, sum: { visits } }));
+    const analytics = new CloudflareTrafficAnalytics(config, {
+      fetchImplementation: async () => new Response(JSON.stringify({
+        data: { viewer: { zones: [{ traffic }] } },
+        errors: null,
+      })),
+      now: () => new Date("2026-09-01T03:15:00.000Z"),
+    });
+
+    await expect(analytics.readDailyTraffic()).resolves.toMatchObject({ visits: 8 });
   });
 
   it("returns zero for an empty traffic result", async () => {

@@ -343,6 +343,7 @@ a:focus-visible {
   cursor: pointer;
   font-size: 13px;
   font-weight: 620;
+  text-decoration: none;
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 120ms ease;
 }
 
@@ -3328,6 +3329,20 @@ h1 {
 
   .brand > span:last-child {
     display: inline;
+  }
+
+  .header-actions {
+    gap: 0;
+  }
+
+  .header-search-button {
+    width: 44px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .header-search-button span {
+    display: none;
   }
 
   .header-actions .header-traffic,

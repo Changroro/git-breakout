@@ -32,6 +32,12 @@ The Track Record page uses the existing Geist fonts, theme variables and bordere
 
 랭킹 화면은 큰 제목과 마지막 갱신 줄을 숨긴다. 스냅샷 시각 칩과 필터 버튼을 한 줄에 두고, 기록 스크러버는 칩을 눌렀을 때만 펼친다. 랭킹 모델은 가로 탭 대신 네이티브 `select`로 고르고, 출처 설명·결과 개수·평가 시점 문단은 숨긴다. 행은 썸네일 없이 이름(한 줄 말줄임)과 단계 배지, 설명 두 줄, 언어·스타·증가량으로 구성하며 가로 스크롤이 생기지 않아야 한다.
 
+## 헤더
+
+헤더의 검색 버튼 옆에 `https://github.com/Changroro/git-breakout` 링크를 둔다. 데스크톱은 아이콘과 `GitHub` 글자, 720px 이하는 아이콘만 보인다.
+
+오늘 방문수는 Cloudflare `httpRequestsAdaptiveGroups`에서 KST 자정 이후 HTML 요청의 `visits`를 User-Agent별로 받아, `server/cloudflare-traffic.ts`의 `isLikelyHumanUserAgent`가 사람으로 판단한 것만 더한다. 크롤러·스캐너·미리보기 봇, 리눅스 데스크톱 크롬, iOS 13.2.3 고정 UA, 크롬 140 미만을 제외하는 휴리스틱이라 브라우저를 흉내 내는 봇은 남는다. 고유 방문자 수가 아니라 외부 유입 페이지뷰 수다.
+
 ## 사이트 푸터
 
 사이트에는 별도의 ‘소스 코드’ 항목을 두지 않는다. 우측 GitHub 링크의 주소와 표시 텍스트는 `https://github.com/Changroro/git-breakout` 저장소를 가리킨다. 후원과 이메일 링크는 유지한다. 이 동작은 `SiteFooter`와 영문·한글 푸터 테스트에서 확인한다.

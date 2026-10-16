@@ -3133,6 +3133,16 @@ function AppContent({
               <SearchIcon size={18} />
               <span>{t("header.search")}</span>
             </button>
+            <a
+              aria-label={t("header.github")}
+              className="header-search-button"
+              href="https://github.com/Changroro/git-breakout"
+              rel="noreferrer"
+              target="_blank"
+            >
+              <MarkGithubIcon size={18} />
+              <span>GitHub</span>
+            </a>
             <HeaderTrafficBadge state={traffic} />
             <LanguageSwitcher locale={locale} onChange={onLocaleChange} />
           </div>

@@ -1,12 +1,26 @@
 const CLOUDFLARE_GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const KST_TIME_ZONE = "Asia/Seoul";
+const TRAFFIC_GROUP_LIMIT = 5000;
+const AUTOMATED_USER_AGENT = /bot|crawl|spider|slurp|externalhit|palo alto|headless|python|curl|wget|go-http|scan|preview|fetch|monitor|http-client|okhttp|axios|node|java\/|semrush|ahrefs|bytespider|gpt|claude|perplexity|meta-|discord|telegram|slack|whatsapp|scrap|yeti|daum|zgrab|censys|masscan|mediapartners|adsbot/i;
+
+// ponytail: User-Agent 휴리스틱이라 브라우저를 흉내 내는 봇은 못 거른다. 정확도가 필요하면 Cloudflare Web Analytics로 바꾼다.
+export function isLikelyHumanUserAgent(userAgent: string): boolean {
+  if (userAgent === "" || AUTOMATED_USER_AGENT.test(userAgent)) return false;
+  // 데이터센터 크롤러가 주로 쓰는 고정 UA: 리눅스 데스크톱 크롬, iOS 13.2.3, 오래된 크롬.
+  if (userAgent.includes("X11; Linux x86_64") || userAgent.includes("iPhone OS 13_2_3")) return false;
+  const chromeMajor = /Chrome\/(\d+)/.exec(userAgent)?.[1];
+  return chromeMajor === undefined || Number(chromeMajor) >= 140;
+}
 
 const DAILY_VISITS_QUERY = `
   query DailyVisits($zoneTag: string, $filter: filter) {
     viewer {
       zones(filter: { zoneTag: $zoneTag }) {
-        traffic: httpRequestsAdaptiveGroups(limit: 1, filter: $filter) {
+        traffic: httpRequestsAdaptiveGroups(limit: ${TRAFFIC_GROUP_LIMIT}, filter: $filter) {
+          dimensions {
+            userAgent
+          }
           sum {
             visits
           }
@@ -83,13 +97,20 @@ function parseVisits(payload: unknown): number {
   if (!Array.isArray(zone.traffic)) {
     throw new TypeError("Cloudflare Analytics traffic must be an array");
   }
+  if (zone.traffic.length >= TRAFFIC_GROUP_LIMIT) {
+    throw new Error("Cloudflare Analytics traffic groups reached the query limit");
+  }
   return zone.traffic.reduce((total, row, index) => {
     const group = requireRecord(row, `Cloudflare Analytics traffic row ${index}`);
+    const dimensions = requireRecord(group.dimensions, `Cloudflare Analytics traffic dimensions ${index}`);
     const sum = requireRecord(group.sum, `Cloudflare Analytics traffic sum ${index}`);
+    if (typeof dimensions.userAgent !== "string") {
+      throw new TypeError("Cloudflare Analytics userAgent must be a string");
+    }
     if (!Number.isSafeInteger(sum.visits) || (sum.visits as number) < 0) {
       throw new TypeError("Cloudflare Analytics visits must be a non-negative integer");
     }
-    return total + (sum.visits as number);
+    return isLikelyHumanUserAgent(dimensions.userAgent) ? total + (sum.visits as number) : total;
   }, 0);
 }
 
@@ -151,6 +172,7 @@ export class CloudflareTrafficAnalytics {
             datetime_geq: startOfKstDate(date),
             datetime_lt: now.toISOString(),
             requestSource: "eyeball",
+            edgeResponseContentTypeName: "html",
           },
         },
       }),
