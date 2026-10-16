@@ -12,10 +12,12 @@ const english = {
   "language.korean": "한국어",
   "theme.switchLight": "Switch to light mode",
   "theme.switchDark": "Switch to dark mode",
+  "theme.label": "Theme",
   "nav.primary": "Primary",
   "nav.rankings": "Rankings",
   "nav.archive": "Archive",
   "nav.trackRecord": "Track Record",
+  "nav.more": "More",
   "header.home": "Git Breakout home",
   "header.search": "Search",
   "header.searchRepositories": "Search repositories",
@@ -72,6 +74,7 @@ const english = {
   "timeline.snapshots": "{count} snapshots",
   "timeline.slider": "Historical ranking snapshot",
   "timeline.latest": "Latest · {date}",
+  "timeline.toggle": "Snapshot history",
   "source.sample": "Sample snapshot",
   "source.official": "Official GitHub Trending",
   "source.combined": "Official Trending + GitHub-wide discovery",
@@ -179,6 +182,7 @@ const english = {
   "traffic.visitsToday": "{count} visits today",
   "traffic.loading": "Loading today's visits",
   "traffic.unavailable": "Today's visits unavailable",
+  "traffic.title": "Visits today",
 } as const;
 
 export type TranslationKey = keyof typeof english;
@@ -189,10 +193,12 @@ const korean: Record<TranslationKey, string> = {
   "language.korean": "한국어",
   "theme.switchLight": "라이트 모드로 전환",
   "theme.switchDark": "다크 모드로 전환",
+  "theme.label": "테마",
   "nav.primary": "주요 메뉴",
   "nav.rankings": "랭킹",
   "nav.archive": "아카이브",
   "nav.trackRecord": "발굴 성과",
+  "nav.more": "더보기",
   "header.home": "Git Breakout 홈",
   "header.search": "검색",
   "header.searchRepositories": "저장소 검색",
@@ -249,6 +255,7 @@ const korean: Record<TranslationKey, string> = {
   "timeline.snapshots": "스냅샷 {count}개",
   "timeline.slider": "과거 랭킹 스냅샷",
   "timeline.latest": "최신 · {date}",
+  "timeline.toggle": "스냅샷 기록",
   "source.sample": "샘플 스냅샷",
   "source.official": "GitHub 공식 Trending",
   "source.combined": "GitHub Trending + 저장소 탐색",
@@ -356,6 +363,7 @@ const korean: Record<TranslationKey, string> = {
   "traffic.visitsToday": "오늘 방문 {count}회",
   "traffic.loading": "오늘 방문자 수 불러오는 중",
   "traffic.unavailable": "오늘 방문자 수를 불러올 수 없음",
+  "traffic.title": "오늘 방문",
 };
 
 const dictionaries: Record<Locale, Record<TranslationKey, string>> = {

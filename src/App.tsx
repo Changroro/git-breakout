@@ -8,6 +8,8 @@ import {
 } from "react";
 import * as Slider from "@radix-ui/react-slider";
 import {
+  ArchiveIcon,
+  ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ClockIcon,
@@ -27,6 +29,7 @@ import {
   StarIcon,
   SunIcon,
   TelescopeIcon,
+  ThreeBarsIcon,
   QuestionIcon,
   XIcon,
 } from "@primer/octicons-react";
@@ -96,6 +99,8 @@ import { parsePublicTrafficResponse } from "./lib/public-traffic";
 import { threadsShareUrl, type RepositoryShareInput } from "./lib/repository-share";
 
 const INITIAL_PAGE_SIZE = 10;
+// styles.css의 모바일 레이아웃 breakpoint와 같아야 한다.
+const MOBILE_LAYOUT_QUERY = "(max-width: 720px)";
 const SEARCH_RESULT_LIMIT = 10;
 const READ_REPOSITORIES_STORAGE_KEY = "git-breakout:read-repositories";
 const LEGACY_READ_REPOSITORIES_STORAGE_KEY = "github-trend-radar:read-repositories";
@@ -114,6 +119,11 @@ function useResponsivePageSize(layoutKey: string): number {
   useEffect(() => {
     let measuredViewport = "";
     function measure() {
+      if (window.matchMedia(MOBILE_LAYOUT_QUERY).matches) {
+        measuredViewport = "";
+        setPageSize(INITIAL_PAGE_SIZE);
+        return;
+      }
       const list = document.querySelector<HTMLOListElement>(".ranking-list, .archive-list");
       const row = list?.firstElementChild;
       const board = list?.closest(".ranking-board, .archive-board");
@@ -141,6 +151,12 @@ function useResponsivePageSize(layoutKey: string): number {
 }
 
 export const RANKING_VIEW_ORDER = ["breakout", "resurgence", "momentum", "current", "github"] as const;
+
+function requireRankingView(value: string): RankingView {
+  const view = RANKING_VIEW_ORDER.find((candidate) => candidate === value);
+  if (view === undefined) throw new RangeError(`Unknown ranking view ${value}`);
+  return view;
+}
 const RANKING_VIEW_LABEL_KEYS = {
   breakout: "ranking.breakout",
   resurgence: "ranking.resurgence",
@@ -293,9 +309,8 @@ function getInitialTheme(): Theme {
   return theme;
 }
 
-function ThemeButton() {
+function useTheme(): [Theme, () => void] {
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
-  const { t } = useI18n();
 
   function toggleTheme() {
     const nextTheme = theme === "light" ? "dark" : "light";
@@ -304,11 +319,17 @@ function ThemeButton() {
     setTheme(nextTheme);
   }
 
+  return [theme, toggleTheme];
+}
+
+function ThemeButton({ className, theme, onToggle }: { className: string; theme: Theme; onToggle: () => void }) {
+  const { t } = useI18n();
+
   return (
     <button
-      className="theme-button"
+      className={className}
       type="button"
-      onClick={toggleTheme}
+      onClick={onToggle}
       aria-label={theme === "light" ? t("theme.switchDark") : t("theme.switchLight")}
     >
       {theme === "light" ? <MoonIcon size={18} /> : <SunIcon size={18} />}
@@ -1391,7 +1412,7 @@ function Timeline({
   }
 
   return (
-    <section className="timeline" aria-labelledby="timeline-title">
+    <section className="timeline" id="ranking-timeline" aria-labelledby="timeline-title">
       <div className="timeline-heading">
         <div className="timeline-title">
           <HistoryIcon size={14} />
@@ -1909,15 +1930,17 @@ export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }
 export function SiteNavigation({
   currentPath,
   onNavigate,
+  onOpenMore,
 }: {
   currentPath: AppPath;
   onNavigate: (event: MouseEvent<HTMLAnchorElement>, path: AppPath) => void;
+  onOpenMore: () => void;
 }) {
   const { t } = useI18n();
-  const links: Array<{ path: AppPath; label: string }> = [
-    { path: "/", label: t("nav.rankings") },
-    { path: "/archive", label: t("nav.archive") },
-    { path: "/track-record", label: t("nav.trackRecord") },
+  const links: Array<{ path: AppPath; label: string; Icon: typeof GraphIcon }> = [
+    { path: "/", label: t("nav.rankings"), Icon: GraphIcon },
+    { path: "/archive", label: t("nav.archive"), Icon: ArchiveIcon },
+    { path: "/track-record", label: t("nav.trackRecord"), Icon: TelescopeIcon },
   ];
   return (
     <nav aria-label={t("nav.primary")} className="site-navigation">
@@ -1929,11 +1952,91 @@ export function SiteNavigation({
             key={link.path}
             onClick={(event) => onNavigate(event, link.path)}
           >
+            <link.Icon aria-hidden="true" className="site-navigation-icon" size={20} />
             {link.label}
           </a>
         ))}
+        <button className="site-navigation-more" onClick={onOpenMore} type="button">
+          <ThreeBarsIcon aria-hidden="true" className="site-navigation-icon" size={20} />
+          {t("nav.more")}
+        </button>
       </div>
     </nav>
+  );
+}
+
+function MobileMoreDialog({
+  open,
+  locale,
+  theme,
+  traffic,
+  onLocaleChange,
+  onThemeToggle,
+  onClose,
+}: {
+  open: boolean;
+  locale: Locale;
+  theme: Theme;
+  traffic: TrafficState;
+  onLocaleChange: (locale: Locale) => void;
+  onThemeToggle: () => void;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) {
+      throw new Error("Mobile more dialog is unavailable");
+    }
+    if (open && !dialog.open) {
+      dialog.showModal();
+    } else if (!open && dialog.open) {
+      dialog.close();
+    }
+  }, [open]);
+
+  return (
+    <dialog
+      aria-labelledby="mobile-more-title"
+      className="mobile-more-dialog"
+      ref={dialogRef}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onClose={onClose}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
+      {open ? (
+        <div className="mobile-filter-sheet">
+          <div className="mobile-filter-heading">
+            <div>
+              <ThreeBarsIcon size={17} />
+              <h2 id="mobile-more-title">{t("nav.more")}</h2>
+            </div>
+            <button aria-label={t("filters.close")} onClick={onClose} type="button"><XIcon size={18} /></button>
+          </div>
+          <div className="mobile-more-row">
+            <span>{t("language.label")}</span>
+            <LanguageSwitcher locale={locale} onChange={onLocaleChange} />
+          </div>
+          <div className="mobile-more-row">
+            <span>{t("theme.label")}</span>
+            <ThemeButton className="mobile-more-theme" theme={theme} onToggle={onThemeToggle} />
+          </div>
+          <div className="mobile-more-row">
+            <span>{t("traffic.title")}</span>
+            <HeaderTrafficBadge state={traffic} />
+          </div>
+        </div>
+      ) : null}
+    </dialog>
   );
 }
 
@@ -2211,6 +2314,7 @@ export function RankingPage({
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isMobileFiltersOpen, setIsMobileFiltersOpen] = useState(false);
   const [isMethodologyOpen, setIsMethodologyOpen] = useState(false);
+  const [isTimelineOpen, setIsTimelineOpen] = useState(false);
   const filterOptions = {
     languages: selectedSnapshot.languages,
     topics: selectedSnapshot.topics,
@@ -2260,8 +2364,8 @@ export function RankingPage({
   }
 
   return (
-    <main className="page-container">
-      <section className="page-intro" aria-labelledby="page-title">
+    <main className="page-container ranking-page">
+      <section className={`page-intro ${isTimelineOpen ? "page-intro-timeline-open" : ""}`} aria-labelledby="page-title">
         <h1 id="page-title">{t("ranking.title")}</h1>
         <p className="last-updated">
           <HistoryIcon size={14} />
@@ -2272,6 +2376,29 @@ export function RankingPage({
           </span>
         </p>
         <Timeline snapshots={snapshots} selectedId={selectedId} onSelect={onSelect} />
+        <div className="ranking-controls">
+          <button
+            aria-controls="ranking-timeline"
+            aria-expanded={isTimelineOpen}
+            aria-label={t("timeline.toggle")}
+            className="timeline-toggle"
+            onClick={() => setIsTimelineOpen((open) => !open)}
+            type="button"
+          >
+            <HistoryIcon size={16} />
+            <time dateTime={selectedSnapshot.captured_at}>{formatCapturedAt(selectedSnapshot.captured_at, locale)}</time>
+            <ChevronDownIcon size={16} />
+          </button>
+          <button
+            className="mobile-filter-trigger"
+            onClick={() => setIsMobileFiltersOpen(true)}
+            type="button"
+          >
+            <FilterIcon size={16} />
+            {t("filters.label")}
+            {filterCount === 0 ? null : <strong>{filterCount}</strong>}
+          </button>
+        </div>
       </section>
 
       <div className={`ranking-layout ${isSidebarCollapsed ? "ranking-layout-collapsed" : ""}`}>
@@ -2284,15 +2411,6 @@ export function RankingPage({
           onToggle={() => setIsSidebarCollapsed((collapsed) => !collapsed)}
         />
         <div className="ranking-content">
-          <button
-            className="mobile-filter-trigger"
-            onClick={() => setIsMobileFiltersOpen(true)}
-            type="button"
-          >
-            <FilterIcon size={16} />
-            {t("filters.label")}
-            {filterCount === 0 ? null : <strong>{filterCount}</strong>}
-          </button>
           <section
             aria-busy={isSnapshotLoading}
             className={`ranking-board ${isSnapshotLoading ? "ranking-board-loading" : ""}`}
@@ -2301,7 +2419,21 @@ export function RankingPage({
         <div className="board-heading">
           <div className="board-title">
             <RepoIcon size={18} />
-            <div>
+            <div className="board-title-copy">
+              <select
+                aria-label={t("ranking.model")}
+                className="ranking-view-select"
+                onChange={(event) => changeRankingView(requireRankingView(event.target.value))}
+                value={rankingView}
+              >
+                {RANKING_VIEW_ORDER.map((view) => (
+                  <option
+                    disabled={(view === "breakout" || view === "resurgence" || view === "current") && !intelligenceAvailable}
+                    key={view}
+                    value={view}
+                  >{view === "breakout" && !classificationAvailable ? t("ranking.legacyBreakout") : t(RANKING_VIEW_LABEL_KEYS[view])}</option>
+                ))}
+              </select>
               <RankingViewHeading
                 buttonLabel={t("ranking.viewInformation", { view: viewCopy.title })}
                 description={viewCopy.description}
@@ -2647,6 +2779,8 @@ function AppContent({
   const [error, setError] = useState<string | null>(null);
   const [traffic, setTraffic] = useState<TrafficState>({ status: "loading" });
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isMoreOpen, setIsMoreOpen] = useState(false);
+  const [theme, toggleTheme] = useTheme();
   const [readRepositories, setReadRepositories] = useState<ReadonlySet<string>>(() => (
     parseReadRepositories(
       localStorage.getItem(READ_REPOSITORIES_STORAGE_KEY)
@@ -3003,7 +3137,7 @@ function AppContent({
             <LanguageSwitcher locale={locale} onChange={onLocaleChange} />
           </div>
         </div>
-        <SiteNavigation currentPath={locationPath} onNavigate={navigatePath} />
+        <SiteNavigation currentPath={locationPath} onNavigate={navigatePath} onOpenMore={() => setIsMoreOpen(true)} />
       </header>
       <ServiceFreshness />
 
@@ -3046,7 +3180,16 @@ function AppContent({
           onRead={markRepositoryRead}
         />
       )}
-      <ThemeButton />
+      <ThemeButton className="theme-button" theme={theme} onToggle={toggleTheme} />
+      <MobileMoreDialog
+        open={isMoreOpen}
+        locale={locale}
+        theme={theme}
+        traffic={traffic}
+        onLocaleChange={onLocaleChange}
+        onThemeToggle={toggleTheme}
+        onClose={() => setIsMoreOpen(false)}
+      />
       <SiteFooter />
     </div>
   );

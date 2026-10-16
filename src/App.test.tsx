@@ -130,17 +130,18 @@ describe("application navigation", () => {
 
   it("marks the current primary destination", () => {
     const markup = renderToStaticMarkup(
-      <SiteNavigation currentPath="/archive" onNavigate={() => undefined} />,
+      <SiteNavigation currentPath="/archive" onNavigate={() => undefined} onOpenMore={() => undefined} />,
     );
 
     expect(markup).toContain('aria-current="page" href="/archive"');
     expect(markup).toContain("Track Record");
+    expect(markup).toContain('class="site-navigation-more"');
   });
 
   it("renders Korean navigation through the shared i18n provider", () => {
     const markup = renderToStaticMarkup(
       <I18nProvider locale="ko">
-        <SiteNavigation currentPath="/archive" onNavigate={() => undefined} />
+        <SiteNavigation currentPath="/archive" onNavigate={() => undefined} onOpenMore={() => undefined} />
       </I18nProvider>,
     );
 
@@ -379,6 +380,22 @@ it.each(["breakout", "resurgence", "current", "momentum", "github"] as const)("d
   expect(markup).not.toContain("Repositories remain unranked");
   expect(markup).toContain('role="group" aria-label="Ranking model"');
   expect(markup).not.toContain('role="tab"');
+});
+
+it("renders the mobile snapshot toggle and ranking view select for the selected view", () => {
+  const snapshot = {
+    id: "sample", captured_at: "2026-08-25T00:00:00.000Z", source: "sample", schema_version: "1.0" as const,
+    repository_count: 30, matching_count: 0, page: 1, page_size: 10, intelligence_available: false, classification_available: true,
+    track_record: emptyTrackRecord(), languages: [], topics: [], repositories: [],
+  };
+  const markup = renderToStaticMarkup(<RankingPage snapshots={[snapshot]} selectedId="sample" selectedSnapshot={snapshot}
+    isSnapshotLoading={false} snapshotError={null} readRepositories={new Set()} onSelect={() => undefined} onRead={() => undefined}
+    locationSearch="?view=momentum" onNavigate={() => undefined} />);
+  expect(markup).toContain('aria-controls="ranking-timeline" aria-expanded="false"');
+  expect(markup).toContain('id="ranking-timeline"');
+  expect(markup).toContain('<select aria-label="Ranking model" class="ranking-view-select">');
+  expect(markup).toContain('<option value="momentum" selected="">Momentum</option>');
+  expect(markup).toContain('<option disabled="" value="breakout">');
 });
 
 it("keeps unknown service status distinct from a confirmed delay", () => {

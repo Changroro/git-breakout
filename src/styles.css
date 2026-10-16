@@ -1803,7 +1803,8 @@ h1 {
   gap: 7px;
 }
 
-.mobile-filter-dialog {
+.mobile-filter-dialog,
+.mobile-more-dialog {
   width: 100%;
   max-width: none;
   max-height: 92dvh;
@@ -1815,7 +1816,8 @@ h1 {
   color: var(--text);
 }
 
-.mobile-filter-dialog::backdrop {
+.mobile-filter-dialog::backdrop,
+.mobile-more-dialog::backdrop {
   background: rgb(31 35 40 / 56%);
 }
 
@@ -1848,6 +1850,57 @@ h1 {
 .mobile-filter-heading h2 {
   margin: 0;
   font-size: 15px;
+}
+
+.mobile-more-row {
+  min-height: 56px;
+  padding: 6px 14px 6px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.mobile-more-row:last-child {
+  border-bottom: 0;
+}
+
+.mobile-more-theme {
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.site-navigation-icon,
+.site-navigation-more,
+.timeline-toggle,
+.ranking-view-select {
+  display: none;
+}
+
+.ranking-controls {
+  margin-top: 12px;
+  display: flex;
+  gap: 8px;
+}
+
+.ranking-controls .mobile-filter-trigger {
+  margin-bottom: 0;
+}
+
+@media (min-width: 901px) {
+  .ranking-controls {
+    display: none;
+  }
 }
 
 .mobile-filter-done {
@@ -3261,4 +3314,271 @@ h1 {
   background: var(--surface);
   color: var(--text);
   cursor: pointer;
+}
+
+/* 모바일 D안: 하단 탭바, 접히는 스냅샷 기록, 랭킹 선택 드롭다운 */
+@media (max-width: 720px) {
+  .app-shell {
+    padding-bottom: calc(64px + env(safe-area-inset-bottom));
+  }
+
+  .header-inner {
+    min-height: 56px;
+  }
+
+  .brand > span:last-child {
+    display: inline;
+  }
+
+  .header-actions .header-traffic,
+  .header-actions .language-switcher,
+  .theme-button {
+    display: none;
+  }
+
+  .site-navigation {
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 30;
+    padding-bottom: env(safe-area-inset-bottom);
+    background: var(--surface);
+  }
+
+  .site-navigation-inner {
+    width: 100%;
+    min-height: 64px;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+    overflow: visible;
+  }
+
+  .site-navigation a,
+  .site-navigation-more {
+    min-height: 64px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .site-navigation a[aria-current="page"] {
+    color: var(--accent-text);
+  }
+
+  .site-navigation-icon {
+    display: block;
+  }
+
+  .ranking-page {
+    width: 100%;
+    padding-block: 0 24px;
+  }
+
+  .ranking-page .page-intro {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .ranking-page .page-intro > h1,
+  .ranking-page .last-updated {
+    display: none;
+  }
+
+  .ranking-controls {
+    order: -1;
+    margin: 0;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .timeline-toggle {
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 12px;
+    display: flex;
+    flex: 1;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .timeline-toggle time {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .timeline-toggle svg {
+    flex: 0 0 auto;
+    color: var(--text-muted);
+  }
+
+  .page-intro-timeline-open .timeline-toggle > svg:last-child {
+    transform: rotate(180deg);
+  }
+
+  .ranking-page .timeline {
+    margin: 0;
+    display: none;
+    border-width: 0 0 1px;
+    border-radius: 0;
+  }
+
+  .ranking-page .page-intro-timeline-open .timeline {
+    display: block;
+  }
+
+  .timeline-tooltip {
+    min-width: 190px;
+    left: clamp(95px, var(--timeline-progress), calc(100% - 95px));
+  }
+
+  .ranking-page .ranking-board {
+    border-width: 0;
+    border-radius: 0;
+  }
+
+  .board-heading {
+    min-height: 48px;
+    padding: 2px 4px 2px 8px;
+    gap: 8px;
+  }
+
+  .board-title {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .board-title > svg,
+  .board-title-copy > p:not(.visually-hidden),
+  .result-count,
+  .evidence-evaluated,
+  .ranking-view-tabs {
+    display: none;
+  }
+
+  .board-title-copy {
+    min-width: 0;
+    display: flex;
+    flex: 1;
+    align-items: center;
+  }
+
+  .board-title-heading h2 {
+    width: 1px;
+    height: 1px;
+    position: absolute;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+
+  .ranking-view-select {
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 28px 0 8px;
+    display: block;
+    flex: 1;
+    appearance: none;
+    border: 0;
+    border-radius: 6px;
+    background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238c959f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E") no-repeat right 6px center;
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+  }
+
+  .ranking-view-select option {
+    background: var(--surface);
+    color: var(--text);
+  }
+
+  .ranking-view-info-button {
+    margin-block: 0;
+  }
+
+  .ranking-row {
+    min-height: 0;
+  }
+
+  .ranking-row-content {
+    min-height: 0;
+    padding: 12px 16px;
+    grid-template-columns: 24px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .rank-number {
+    line-height: 20px;
+    text-align: left;
+  }
+
+  .ranking-row .repository-thumbnail {
+    display: none;
+  }
+
+  .repository-title-line {
+    flex-wrap: nowrap;
+    gap: 6px;
+  }
+
+  .repository-name {
+    flex: 0 1 auto;
+    font-size: 15px;
+  }
+
+  .repository-name > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .trend-phase {
+    margin-left: auto;
+    padding: 1px 7px;
+    font-size: 11px;
+  }
+
+  .discovery-evidence-badge {
+    font-size: 10px;
+  }
+
+  .repository-copy {
+    padding-right: 36px;
+  }
+
+  .repository-copy > p {
+    margin-top: 4px;
+    font-size: 13px;
+    line-height: 18px;
+  }
+
+  .mobile-meta {
+    margin-top: 6px;
+    font-size: 12px;
+  }
 }
