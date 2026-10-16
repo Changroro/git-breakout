@@ -1,0 +1,193 @@
+diff --git a/deploy/oracle/auto-deploy.sh b/deploy/oracle/auto-deploy.sh
+index 9592ff5..5490021
+--- a/deploy/oracle/auto-deploy.sh
++++ b/deploy/oracle/auto-deploy.sh
+@@ -86,7 +86,7 @@ create table if not exists radar.schema_migrations (
+ revoke all on radar.schema_migrations from public, web_anon, collector;
+ SQL
+ pending_migrations=()
+-for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record; do
++for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record 025_classified_board_exposures; do
+   migration_file="$TREND_RADAR_REPO/deploy/oracle/db/migrations/$migration.sql"
+   test -f "$migration_file" || { echo "Database migration is unavailable: $migration" >&2; exit 1; }
+   checksum=$(sha256sum "$migration_file" | cut -d' ' -f1)
+diff --git a/deploy/oracle/operations.test.ts b/deploy/oracle/operations.test.ts
+index 60ea95f..b7ae582 100644
+--- a/deploy/oracle/operations.test.ts
++++ b/deploy/oracle/operations.test.ts
+@@ -24,7 +24,7 @@ function fixture(script: string) {
+ 
+ function deploymentFixture() {
+   const f = fixture("auto-deploy.sh");
+-  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record"];
++  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record", "025_classified_board_exposures"];
+   for (const migration of migrations) writeFileSync(join(f.repo, "deploy/oracle/db/migrations", `${migration}.sql`), "select 'fixture migration';\n");
+   writeFileSync(join(f.state, "active-image"), "sha256:previous\n");
+   writeFileSync(join(f.state, "deployed-revision"), "previous-revision\n");
+@@ -91,7 +91,7 @@ describe("Oracle operation behavior", () => {
+       expect(existsSync(join(f.state, "failed-target"))).toBe(true);
+       expect(f.run({ BROKEN_IMAGE: "1" }).status).toBe(1);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(14);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(15);
+     } finally { f.close(); }
+   });
+ 
+@@ -104,7 +104,7 @@ describe("Oracle operation behavior", () => {
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\nbuild\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(14);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(15);
+     } finally { f.close(); }
+   });
+ 
+@@ -115,7 +115,7 @@ describe("Oracle operation behavior", () => {
+       rmSync(join(f.state, "ledger"), { recursive: true });
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(28);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(30);
+     } finally { f.close(); }
+   });
+ 
+diff --git a/deploy/oracle/tests/audit-regression.mjs b/deploy/oracle/tests/audit-regression.mjs
+index 63ec86c..3750d2c 100644
+--- a/deploy/oracle/tests/audit-regression.mjs
++++ b/deploy/oracle/tests/audit-regression.mjs
+@@ -8,9 +8,9 @@ import { dirname, join, resolve } from 'node:path';
+ const directory = dirname(fileURLToPath(import.meta.url));
+ const root = resolve(directory, '../../..');
+ const selected = process.argv.slice(2);
+-const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', '023', '024', 'backup'] : selected;
++const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', '023', '024', '025', 'backup'] : selected;
+ for (const name of modules) {
+-  if (!/^(core|017|018|019|020|021|022|023|024|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
++  if (!/^(core|017|018|019|020|021|022|023|024|025|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
+ }
+ const suites = await Promise.all(modules.map(async name => ({
+   name,
+diff --git a/deploy/oracle/tests/regression-024.mjs b/deploy/oracle/tests/regression-024.mjs
+index 4c52326..8158373 100644
+--- a/deploy/oracle/tests/regression-024.mjs
++++ b/deploy/oracle/tests/regression-024.mjs
+@@ -16,7 +16,7 @@ export default async function ({ sql, json, check, repository }) {
+         $payload$${JSON.stringify(rows)}$payload$::jsonb);`);
+   }
+   const board = (full_name, score, stars, extra = {}) => repository({
+-    full_name, stars, trend_intelligence: { breakout: { score } }, ...extra,
++    full_name, stars, trend_intelligence: { score_version: 'trend-intelligence-v8-shadow', breakout: { score } }, ...extra,
+   });
+   const trending = (full_name, stars) => repository({
+     full_name, stars, observation_sources: ['official_daily'],
+diff --git a/deploy/oracle/db/migrations/025_classified_board_exposures.sql b/deploy/oracle/db/migrations/025_classified_board_exposures.sql
+new file mode 100644
+index 0000000..d4a5472
+--- /dev/null
++++ b/deploy/oracle/db/migrations/025_classified_board_exposures.sql
+@@ -0,0 +1,57 @@
++begin;
++
++-- 신규 발굴 분류(v7 이후)가 없는 스냅샷의 breakout 보드는 Star 1만 이상 저장소도 포함했으므로 노출로 세지 않는다.
++create or replace function radar.record_board_exposures(p_snapshot_id uuid)
++returns void language sql set search_path = pg_catalog, radar as $$
++  with board as (
++    select full_name_key, full_name, captured_at, stars,
++      row_number() over (
++        order by (payload_json #>> '{trend_intelligence,breakout,score}')::numeric desc, full_name_key
++      )::integer as position
++    from radar.snapshot_repositories
++    where snapshot_id = p_snapshot_id
++      and payload_json #> '{trend_intelligence,breakout,score}' <> 'null'::jsonb
++      and exists (
++        select 1 from radar.snapshot_summary
++        where snapshot_id = p_snapshot_id and classification_available
++      )
++  )
++  insert into radar.discovery_board_exposures as exposures (
++    full_name_key, full_name, first_board_at, first_board_rank, first_board_stars,
++    first_top10_at, first_top10_stars
++  )
++  select full_name_key, full_name, captured_at, position, stars,
++    case when position <= 10 then captured_at end,
++    case when position <= 10 then stars end
++  from board
++  on conflict (full_name_key) do update
++    set first_top10_at = excluded.first_top10_at, first_top10_stars = excluded.first_top10_stars
++    where exposures.first_top10_at is null and excluded.first_top10_at is not null;
++$$;
++revoke execute on function radar.record_board_exposures(uuid) from public;
++grant execute on function radar.record_board_exposures(uuid) to collector;
++
++delete from radar.discovery_board_exposures;
++
++do $$
++declare
++  snapshot record;
++begin
++  for snapshot in
++    select snapshots.id
++    from radar.snapshots
++    join radar.snapshot_summary summary on summary.snapshot_id = snapshots.id
++    where summary.classification_available
++    order by snapshots.captured_at
++  loop
++    perform radar.record_board_exposures(snapshot.id);
++  end loop;
++end;
++$$;
++select radar.settle_board_outcomes(max(captured_at)) from radar.snapshots having max(captured_at) is not null;
++
++insert into radar.track_record_summary(id, payload)
++select true, radar.compute_track_record() where exists (select 1 from radar.snapshots)
++on conflict (id) do update set payload = excluded.payload;
++
++commit;
+diff --git a/deploy/oracle/tests/regression-025.mjs b/deploy/oracle/tests/regression-025.mjs
+new file mode 100644
+index 0000000..55e5161
+--- /dev/null
++++ b/deploy/oracle/tests/regression-025.mjs
+@@ -0,0 +1,42 @@
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++
++const DAY = 24 * 60 * 60 * 1000;
++
++export default async function ({ sql, json, check, repository }) {
++  const at = days => new Date(Date.now() - days * DAY).toISOString();
++  let runIndex = 0;
++  function collect(capturedAt, rows) {
++    runIndex += 1;
++    const id = `25000000-0000-4000-8000-${String(runIndex).padStart(12, '0')}`;
++    sql(`set role collector;
++      select api.start_collection('${id}', '${capturedAt}');
++      select api.complete_collection('${id}', '${capturedAt}', 'fixture',
++        $payload$${JSON.stringify(rows.map((row, index) => ({ ...row, rank: index + 1 })))}$payload$::jsonb);`);
++  }
++  const board = (full_name, score, stars, scoreVersion) => repository({
++    full_name, stars, trend_intelligence: { ...(scoreVersion ? { score_version: scoreVersion } : {}), breakout: { score } },
++  });
++  const exposures = () => json(`select coalesce(jsonb_object_agg(full_name, jsonb_build_object(
++      'at', first_board_at, 'rank', first_board_rank)), '{}'::jsonb) from radar.discovery_board_exposures`);
++
++  await check('025 counts board exposures only from classified snapshots', () => {
++    collect(at(10), [board('big/old', 90, 50000), board('legacy/only', 80, 100)]);
++    const classifiedAt = at(9);
++    collect(classifiedAt, [board('new/one', 95, 100, 'trend-intelligence-v8-shadow'), board('big/old', 70, 50100, 'trend-intelligence-v8-shadow')]);
++    const recorded = exposures();
++    assert.deepEqual(Object.keys(recorded).sort(), ['big/old', 'new/one']);
++    assert.equal(recorded['big/old'].rank, 2);
++    assert.equal(Date.parse(recorded['big/old'].at), Date.parse(classifiedAt));
++  });
++
++  await check('025 rebuild drops unclassified exposures and is idempotent', () => {
++    sql(`insert into radar.discovery_board_exposures(full_name_key, full_name, first_board_at, first_board_rank, first_board_stars)
++      values ('legacy/only', 'legacy/only', now() - interval '10 days', 1, 100)`);
++    sql(readFileSync(new URL('../db/migrations/025_classified_board_exposures.sql', import.meta.url), 'utf8'));
++    const first = exposures();
++    assert.deepEqual(Object.keys(first).sort(), ['big/old', 'new/one']);
++    sql(readFileSync(new URL('../db/migrations/025_classified_board_exposures.sql', import.meta.url), 'utf8'));
++    assert.deepEqual(exposures(), first);
++  });
++}
