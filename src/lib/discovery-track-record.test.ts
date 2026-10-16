@@ -24,6 +24,25 @@ function validTrackRecord(): TrackRecord {
       sources: ["github_search_created"],
       coverage: "complete",
     }],
+    board: {
+      hit_rule: { window_days: 7, min_star_gain: 500 },
+      evidence_started_at: "2026-08-28T00:00:00.000Z",
+      verified_count: 1,
+      median_lead_hours: 40,
+      period_hits: { daily: 1, weekly: 0, monthly: 0 },
+      hit_rate_7d: {
+        top10: { hits: 2, eligible: 5, rate: 0.4 },
+        board: { hits: 3, eligible: 20, rate: 0.15 },
+      },
+      recent_hits: [{
+        full_name: "owner/repository",
+        first_shown_at: "2026-08-28T02:00:00.000Z",
+        first_shown_rank: 4,
+        first_trending_at: "2026-08-29T18:00:00.000Z",
+        first_trending_rank: 7,
+        lead_hours: 40,
+      }],
+    },
   };
 }
 
@@ -39,6 +58,20 @@ describe("discovery track record", () => {
       coverage: "complete",
     })).toMatchObject({ outcome: "verified", lead_hours: 18 });
     expect(parseTrackRecord(validTrackRecord())).toEqual(validTrackRecord());
+  });
+
+  it("rejects board evidence that is inconsistent or shown after Trending", () => {
+    const record = validTrackRecord();
+    expect(() => parseTrackRecord({ ...record, board: { ...record.board, verified_count: 0 } }))
+      .toThrow("median lead must exist exactly when verified outcomes exist");
+    expect(() => parseTrackRecord({ ...record, board: { ...record.board, hit_rate_7d: {
+      ...record.board.hit_rate_7d, top10: { hits: 6, eligible: 5, rate: 1 },
+    } } })).toThrow("converted cannot exceed eligible");
+    expect(() => parseTrackRecord({ ...record, board: { ...record.board, recent_hits: [{
+      ...record.board.recent_hits[0], first_shown_at: "2026-08-30T00:00:00.000Z",
+    }] } })).toThrow("first_trending_at must follow first_shown_at");
+    const { board: _board, ...legacy } = record;
+    expect(() => parseTrackRecord(legacy)).toThrow("track_record.board must contain");
   });
 
   it("preserves null provenance and rejects an empty known source list", () => {

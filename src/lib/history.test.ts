@@ -1,4 +1,5 @@
 import { timelineTickIndexes } from "./history";
+import { emptyBoardTrackRecord } from "./discovery-track-record";
 import { describe, expect, it } from "vitest";
 import {
   parseHistoryResponse,
@@ -104,6 +105,7 @@ describe("history", () => {
         conversion_14d: { converted: 0, eligible: 0, rate: null },
         period_hits: { daily: 0, weekly: 0, monthly: 0 },
         recent_hits: [],
+        board: emptyBoardTrackRecord(),
       },
       languages: [{ value: "typescript", label: "TypeScript", count: 20 }],
       topics: [{ value: "ai", label: "ai", count: 12 }],

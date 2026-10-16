@@ -80,7 +80,7 @@ import {
   parseTrackRecord,
   type DiscoveryEvidence,
   type TrackRecord,
-  type TrackRecordConversion,
+  type BoardHitRate,
 } from "./lib/discovery-track-record";
 import {
   parseArchivePageResponse,
@@ -1550,8 +1550,10 @@ function MethodologyDialog({
                   <li><strong>과거 데이터:</strong> 출처를 입증할 수 없어 검증 결과에서 제외합니다.</li>
                 </ul>
                 <p>
-                  7일·14일 진입률은 평가 기간이 지난 사례 중 공식 Trending을 빠짐없이 수집한 사례만 계산합니다.
-                  평가 중인 사례와 이미 트렌딩이었던 저장소, 과거 데이터, 수집 공백 사례는 계산에서 제외합니다.
+                  위 결과는 저장소별 배지에 쓰입니다. 발굴 성과 요약은 후보로 처음 관측한 시점이 아니라
+                  <strong>발굴 보드에 처음 보여준 시점</strong>부터 셉니다. 보드에 보여준 뒤 7일 안에 일간 트렌딩에
+                  들거나 스타가 500개 이상 늘면 적중입니다. Top 10 적중률은 처음 10위 안에 든 시점부터 같은 기준으로
+                  계산합니다. 7일이 지나지 않은 저장소는 계산에서 빼고, 수집 공백으로 관측이 없으면 적중으로 세지 않습니다.
                 </p>
               </section>
 
@@ -1661,9 +1663,12 @@ function MethodologyDialog({
               <li><strong>Legacy:</strong> provenance cannot be proved, so it is excluded from verified results.</li>
             </ul>
             <p>
-              Seven- and fourteen-day follow-through include only discoveries old enough for the
-              window with complete official coverage. Pending, already-trending, legacy, and
-              coverage-gap observations are excluded from the denominator.
+              These outcomes power the per-repository badges. The track-record summary instead counts
+              from the <strong>first time a repository appeared on the discovery board</strong>. A hit
+              means reaching Trending Daily or gaining at least 500 stars within seven days of that first
+              appearance. The Top 10 hit rate applies the same rule from a repository&apos;s first Top 10
+              appearance. Repositories younger than seven days are excluded, and missing observations
+              during collection gaps never count as hits.
             </p>
           </section>
 
@@ -1789,29 +1794,29 @@ function TrackRecordMetric({
   );
 }
 
-function conversionMetric(conversion: TrackRecordConversion, locale: Locale = "en"): {
+function hitRateMetric(hitRate: BoardHitRate, locale: Locale = "en"): {
   value: string;
   detail: string;
   collecting: boolean;
 } {
-  if (conversion.eligible === 0) {
+  if (hitRate.eligible === 0) {
     return {
       value: translate(locale, "trackRecord.collecting"),
       detail: translate(locale, "trackRecord.noEligible"),
       collecting: true,
     };
   }
-  if (conversion.rate === null) {
-    throw new TypeError("Eligible conversion evidence requires a rate");
+  if (hitRate.rate === null) {
+    throw new TypeError("Eligible hit-rate evidence requires a rate");
   }
   return {
     value: new Intl.NumberFormat(localeTag(locale), {
       style: "percent",
       maximumFractionDigits: 0,
-    }).format(conversion.rate),
-    detail: translate(locale, "trackRecord.eligible", {
-      converted: conversion.converted,
-      eligible: conversion.eligible,
+    }).format(hitRate.rate),
+    detail: translate(locale, "trackRecord.hits", {
+      hits: new Intl.NumberFormat(localeTag(locale)).format(hitRate.hits),
+      eligible: new Intl.NumberFormat(localeTag(locale)).format(hitRate.eligible),
     }),
     collecting: false,
   };
@@ -1820,15 +1825,16 @@ function conversionMetric(conversion: TrackRecordConversion, locale: Locale = "e
 export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }) {
   const { locale, t } = useI18n();
   const [isMethodologyOpen, setIsMethodologyOpen] = useState(false);
-  const sevenDay = conversionMetric(trackRecord.conversion_7d, locale);
-  const fourteenDay = conversionMetric(trackRecord.conversion_14d, locale);
-  const verifiedReady = trackRecord.verified_count > 0;
-  const medianLead = trackRecord.median_lead_hours;
+  const board = trackRecord.board;
+  const top10 = hitRateMetric(board.hit_rate_7d.top10, locale);
+  const boardWide = hitRateMetric(board.hit_rate_7d.board, locale);
+  const verifiedReady = board.verified_count > 0;
+  const medianLead = board.median_lead_hours;
   const medianReady = verifiedReady && medianLead !== null;
-  const evidenceStart = trackRecord.evidence_started_at === null
+  const evidenceStart = board.evidence_started_at === null
     ? t("trackRecord.evidencePending")
     : t("trackRecord.evidenceSince", {
-      date: formatEvidenceDate(trackRecord.evidence_started_at, locale),
+      date: formatEvidenceDate(board.evidence_started_at, locale),
     });
 
   return (
@@ -1858,16 +1864,16 @@ export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }
       </div>
 
       <div className="track-record-content">
-        <p className="evidence-evaluated">{t("discovery.evaluated")} <time dateTime={trackRecord.generated_at}>{formatCapturedAt(trackRecord.generated_at, locale)}</time></p>
+        <p className="evidence-evaluated">{t("discovery.evaluated")} <time dateTime={trackRecord.generated_at}>{formatCapturedAt(trackRecord.generated_at, locale)}</time>. {t("trackRecord.hitRule", { days: board.hit_rule.window_days, stars: board.hit_rule.min_star_gain })}</p>
         <div className="track-record-metrics">
           <TrackRecordMetric
             collecting={!verifiedReady}
             label={t("trackRecord.verifiedEarly")}
             value={verifiedReady
-              ? new Intl.NumberFormat(localeTag(locale)).format(trackRecord.verified_count)
+              ? new Intl.NumberFormat(localeTag(locale)).format(board.verified_count)
               : t("trackRecord.collecting")}
             detail={verifiedReady
-              ? t("trackRecord.periods", trackRecord.period_hits)
+              ? t("trackRecord.periods", board.period_hits)
               : t("trackRecord.excluded")}
           />
           <TrackRecordMetric
@@ -1878,8 +1884,8 @@ export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }
               : t("trackRecord.collecting")}
             detail={medianReady ? t("trackRecord.interval") : t("trackRecord.waiting")}
           />
-          <TrackRecordMetric label={t("trackRecord.follow7")} {...sevenDay} />
-          <TrackRecordMetric label={t("trackRecord.follow14")} {...fourteenDay} />
+          <TrackRecordMetric label={t("trackRecord.hitTop10")} {...top10} />
+          <TrackRecordMetric label={t("trackRecord.hitBoard")} {...boardWide} />
         </div>
 
         <div className="track-record-recent">
@@ -1887,11 +1893,11 @@ export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }
             <GraphIcon size={14} />
             <h3>{t("trackRecord.recent")}</h3>
           </div>
-          {trackRecord.recent_hits.length === 0 ? (
+          {board.recent_hits.length === 0 ? (
             <p className="track-record-empty">{t("trackRecord.recentEmpty")}</p>
           ) : (
             <ol>
-              {trackRecord.recent_hits.map((hit) => (
+              {board.recent_hits.map((hit) => (
                 <li key={`${hit.full_name}-${hit.first_trending_at}`}>
                   <a
                     href={`https://github.com/${hit.full_name.split("/").map(encodeURIComponent).join("/")}`}
@@ -1902,12 +1908,13 @@ export function TrackRecordSection({ trackRecord }: { trackRecord: TrackRecord }
                     <span>{hit.full_name}</span>
                   </a>
                   <dl className="track-record-observations">
-                    <div><dt>{t("trackRecord.firstObserved")}</dt><dd><time dateTime={hit.first_observed_at}>{formatEvidenceDate(hit.first_observed_at, locale)}</time></dd></div>
+                    <div><dt>{t("trackRecord.firstShown")}</dt><dd><time dateTime={hit.first_shown_at}>{formatEvidenceDate(hit.first_shown_at, locale)}</time></dd></div>
                     <div><dt>{t("trackRecord.firstTrending")}</dt><dd><time dateTime={hit.first_trending_at}>{formatEvidenceDate(hit.first_trending_at, locale)}</time></dd></div>
                   </dl>
                   <span>
                     {t("trackRecord.recentHit", {
                       lead: formatObservedLeadDuration(hit.lead_hours, locale),
+                      shownRank: hit.first_shown_rank,
                       rank: hit.first_trending_rank,
                     })}
                   </span>

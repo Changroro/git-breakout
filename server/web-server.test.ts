@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWebServer } from "./web-server.ts";
+import { emptyBoardTrackRecord } from "../src/lib/discovery-track-record.ts";
 
 const snapshotId = "11111111-1111-4111-8111-111111111111";
 const servers: ReturnType<typeof createWebServer>[] = [];
@@ -351,6 +352,7 @@ describe("createWebServer", () => {
           conversion_14d: { converted: 0, eligible: 0, rate: null },
           period_hits: { daily: 0, weekly: 0, monthly: 0 },
           recent_hits: [],
+          board: emptyBoardTrackRecord(),
         },
         languages: [{ value: "typescript", label: "TypeScript", count: 1 }],
         topics: [{ value: "ai", label: "ai", count: 1 }],

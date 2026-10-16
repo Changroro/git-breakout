@@ -12,7 +12,7 @@ import {
 } from "../src/lib/repository-filters.ts";
 import { searchRepositories } from "../src/lib/repository-search.ts";
 import { trendIntelligenceFor } from "../src/lib/trend-intelligence.ts";
-import type { TrackRecord } from "../src/lib/discovery-track-record.ts";
+import { emptyBoardTrackRecord, type TrackRecord } from "../src/lib/discovery-track-record.ts";
 
 const MAX_TOPIC_FACETS = 500;
 
@@ -27,6 +27,7 @@ export function emptyTrackRecord(generatedAt: string): TrackRecord {
     conversion_14d: { converted: 0, eligible: 0, rate: null },
     period_hits: { daily: 0, weekly: 0, monthly: 0 },
     recent_hits: [],
+    board: emptyBoardTrackRecord(),
   };
 }
 

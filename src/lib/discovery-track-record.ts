@@ -39,6 +39,46 @@ export type TrackRecordRecentHit = {
   coverage: "complete";
 };
 
+export type BoardHitRate = {
+  hits: number;
+  eligible: number;
+  rate: number | null;
+};
+
+export type BoardRecentHit = {
+  full_name: string;
+  first_shown_at: string;
+  first_shown_rank: number;
+  first_trending_at: string;
+  first_trending_rank: number;
+  lead_hours: number;
+};
+
+export type BoardTrackRecord = {
+  hit_rule: { window_days: number; min_star_gain: number };
+  evidence_started_at: string | null;
+  verified_count: number;
+  median_lead_hours: number | null;
+  period_hits: { daily: number; weekly: number; monthly: number };
+  hit_rate_7d: { top10: BoardHitRate; board: BoardHitRate };
+  recent_hits: BoardRecentHit[];
+};
+
+export function emptyBoardTrackRecord(): BoardTrackRecord {
+  return {
+    hit_rule: { window_days: 7, min_star_gain: 500 },
+    evidence_started_at: null,
+    verified_count: 0,
+    median_lead_hours: null,
+    period_hits: { daily: 0, weekly: 0, monthly: 0 },
+    hit_rate_7d: {
+      top10: { hits: 0, eligible: 0, rate: null },
+      board: { hits: 0, eligible: 0, rate: null },
+    },
+    recent_hits: [],
+  };
+}
+
 export type TrackRecord = {
   schema_version: "1.0";
   evidence_started_at: string | null;
@@ -53,6 +93,7 @@ export type TrackRecord = {
     monthly: number;
   };
   recent_hits: TrackRecordRecentHit[];
+  board: BoardTrackRecord;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -187,6 +228,78 @@ function parseRecentHit(value: unknown, index: number): TrackRecordRecentHit {
     lead_hours: requireNonNegativeNumber(value.lead_hours, `${field}.lead_hours`),
     sources,
     coverage,
+  };
+}
+
+function parseHitRate(value: unknown, field: string): BoardHitRate {
+  const { converted, eligible, rate } = parseConversion(
+    isRecord(value) ? { converted: value.hits, eligible: value.eligible, rate: value.rate } : value,
+    field,
+  );
+  return { hits: converted, eligible, rate };
+}
+
+function parseBoardRecentHit(value: unknown, index: number): BoardRecentHit {
+  const field = `track_record.board.recent_hits[${index}]`;
+  if (!isRecord(value)) {
+    throw new TypeError(`${field} must be an object`);
+  }
+  if (typeof value.full_name !== "string" || !/^[^/\s]+\/[^/\s]+$/.test(value.full_name)) {
+    throw new TypeError(`${field}.full_name must use owner/name format`);
+  }
+  const firstShownAt = requireTimestamp(value.first_shown_at, `${field}.first_shown_at`);
+  const firstTrendingAt = requireTimestamp(value.first_trending_at, `${field}.first_trending_at`);
+  if (Date.parse(firstTrendingAt) <= Date.parse(firstShownAt)) {
+    throw new RangeError(`${field}.first_trending_at must follow first_shown_at`);
+  }
+  return {
+    full_name: value.full_name,
+    first_shown_at: firstShownAt,
+    first_shown_rank: requirePositiveInteger(value.first_shown_rank, `${field}.first_shown_rank`),
+    first_trending_at: firstTrendingAt,
+    first_trending_rank: requirePositiveInteger(value.first_trending_rank, `${field}.first_trending_rank`),
+    lead_hours: requireNonNegativeNumber(value.lead_hours, `${field}.lead_hours`),
+  };
+}
+
+function parseBoardTrackRecord(value: unknown): BoardTrackRecord {
+  if (!isRecord(value) || !isRecord(value.hit_rule) || !isRecord(value.period_hits) || !isRecord(value.hit_rate_7d)) {
+    throw new TypeError("track_record.board must contain hit_rule, period_hits and hit_rate_7d objects");
+  }
+  if (!Array.isArray(value.recent_hits) || value.recent_hits.length > 5) {
+    throw new TypeError("track_record.board.recent_hits must be an array of at most five repositories");
+  }
+  const verifiedCount = requireNonNegativeInteger(value.verified_count, "track_record.board.verified_count");
+  const medianLeadHours = parseNullableNonNegativeNumber(value.median_lead_hours, "track_record.board.median_lead_hours");
+  if ((verifiedCount === 0) !== (medianLeadHours === null)) {
+    throw new TypeError("track_record.board median lead must exist exactly when verified outcomes exist");
+  }
+  const periodHits = {
+    daily: requireNonNegativeInteger(value.period_hits.daily, "track_record.board.period_hits.daily"),
+    weekly: requireNonNegativeInteger(value.period_hits.weekly, "track_record.board.period_hits.weekly"),
+    monthly: requireNonNegativeInteger(value.period_hits.monthly, "track_record.board.period_hits.monthly"),
+  };
+  if (periodHits.daily !== verifiedCount) {
+    throw new TypeError("track_record.board Daily hits must equal verified outcomes");
+  }
+  const recentHits = value.recent_hits.map(parseBoardRecentHit);
+  if (recentHits.length > verifiedCount) {
+    throw new RangeError("track_record.board recent hits cannot exceed verified outcomes");
+  }
+  return {
+    hit_rule: {
+      window_days: requirePositiveInteger(value.hit_rule.window_days, "track_record.board.hit_rule.window_days"),
+      min_star_gain: requirePositiveInteger(value.hit_rule.min_star_gain, "track_record.board.hit_rule.min_star_gain"),
+    },
+    evidence_started_at: parseNullableTimestamp(value.evidence_started_at, "track_record.board.evidence_started_at"),
+    verified_count: verifiedCount,
+    median_lead_hours: medianLeadHours,
+    period_hits: periodHits,
+    hit_rate_7d: {
+      top10: parseHitRate(value.hit_rate_7d.top10, "track_record.board.hit_rate_7d.top10"),
+      board: parseHitRate(value.hit_rate_7d.board, "track_record.board.hit_rate_7d.board"),
+    },
+    recent_hits: recentHits,
   };
 }
 
@@ -354,5 +467,6 @@ export function parseTrackRecord(value: unknown): TrackRecord {
     conversion_14d: parseConversion(value.conversion_14d, "track_record.conversion_14d"),
     period_hits: periodHits,
     recent_hits: recentHits,
+    board: parseBoardTrackRecord(value.board),
   };
 }

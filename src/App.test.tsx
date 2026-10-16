@@ -27,7 +27,7 @@ import {
   SiteFooter,
   TrackRecordSection,
 } from "./App";
-import type { DiscoveryEvidence, TrackRecord } from "./lib/discovery-track-record";
+import { emptyBoardTrackRecord, type DiscoveryEvidence, type TrackRecord } from "./lib/discovery-track-record";
 import { I18nProvider, translate } from "./lib/i18n";
 import type { RankingPageResponse } from "./lib/history";
 
@@ -162,6 +162,7 @@ function emptyTrackRecord(): TrackRecord {
     conversion_14d: { converted: 0, eligible: 0, rate: null },
     period_hits: { daily: 0, weekly: 0, monthly: 0 },
     recent_hits: [],
+    board: emptyBoardTrackRecord(),
   };
 }
 
@@ -275,31 +276,40 @@ describe("TrackRecordSection", () => {
     expect(markup).not.toContain("Collecting evidence");
   });
 
-  it("renders verified outcomes, recent repositories, and methodology details", () => {
+  it("renders board-based outcomes, recent repositories, and methodology details", () => {
     const record: TrackRecord = {
       ...emptyTrackRecord(),
-      verified_count: 4,
-      median_lead_hours: 30,
-      conversion_7d: { converted: 2, eligible: 4, rate: 0.5 },
-      conversion_14d: { converted: 3, eligible: 4, rate: 0.75 },
-      period_hits: { daily: 4, weekly: 2, monthly: 1 },
-      recent_hits: [{
-        full_name: "owner/repository",
-        first_observed_at: "2026-08-29T00:00:00.000Z",
-        first_trending_at: "2026-08-30T06:00:00.000Z",
-        first_trending_rank: 5,
-        lead_hours: 30,
-        sources: ["github_search_created"],
-        coverage: "complete",
-      }],
+      board: {
+        ...emptyBoardTrackRecord(),
+        evidence_started_at: "2026-08-28T00:00:00.000Z",
+        verified_count: 4,
+        median_lead_hours: 30,
+        period_hits: { daily: 4, weekly: 2, monthly: 1 },
+        hit_rate_7d: {
+          top10: { hits: 2, eligible: 10, rate: 0.2 },
+          board: { hits: 8, eligible: 100, rate: 0.08 },
+        },
+        recent_hits: [{
+          full_name: "owner/repository",
+          first_shown_at: "2026-08-29T00:00:00.000Z",
+          first_shown_rank: 3,
+          first_trending_at: "2026-08-30T06:00:00.000Z",
+          first_trending_rank: 5,
+          lead_hours: 30,
+        }],
+      },
     };
     const markup = renderToStaticMarkup(<TrackRecordSection trackRecord={record} />);
 
-    expect(markup).toContain("Observed 1.3d before Daily");
-    expect(markup).toContain("Daily #5");
+    expect(markup).toContain("Shown 1.3d before Daily · board #3 → Daily #5");
+    expect(markup).toContain("Top 10 7-day hit rate");
+    expect(markup).toContain("<strong>20%</strong>");
+    expect(markup).toContain("2 of 10 repositories");
+    expect(markup).toContain("<strong>8%</strong>");
+    expect(markup).toContain("gains 500+ stars within 7 days");
     expect(markup).toContain('dateTime="2026-08-29T00:00:00.000Z"');
     expect(markup).toContain('dateTime="2026-08-30T06:00:00.000Z"');
-    expect(markup).toContain("First observed");
+    expect(markup).toContain("First shown");
     expect(markup).toContain("Observed in Daily");
     expect(markup).toContain("log1p(value) × 55");
     expect(markup).toContain("Official Trending signal");

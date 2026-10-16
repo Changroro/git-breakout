@@ -1,6 +1,6 @@
 # Git Breakout methodology
 
-Updated: 2026-09-12
+Updated: 2026-10-16
 
 Git Breakout discovers public repositories from GitHub Trending, GitHub Search, recent public activity, and previously observed candidates. It then ranks only values that were observed directly. A missing observation is not replaced with an estimated historical value or a zero.
 
@@ -74,7 +74,7 @@ Persistence describes the relative rate of short-window and longer-window actor 
 
 Every optional trend score records its evidence window, confidence, and missing inputs. Incomplete windows, stale activity data, or undersized comparison cohorts remain partial or `insufficient_data` instead of being silently converted into positive evidence.
 
-Each ranking row offers expandable score evidence: the score's axis and confidence, known component count and values, missing inputs, readable reasons and available observation/event/history timestamps. Baseline components are weighted contributions; trend components are normalized values shown on a 0–100 scale. When recorded, the actual elapsed star window and the baseline period and gap are shown as well. Missing optional inputs can coexist with a displayed score, so confidence and completeness should be read alongside the number.
+Ranking rows show their score without an expandable score-evidence panel or confidence label. Repeated low-confidence labels were not useful for comparing repositories and could be mistaken for repository quality ratings. Confidence, missing inputs and observation timestamps remain in the underlying data and offline evaluation; removing their row-level display does not change scores or ranking order. The ranking-view help and this document explain the calculation. Baseline components are weighted contributions; trend components are normalized values. Missing optional inputs can coexist with a displayed score.
 
 Public event archives are treated as lower-bound evidence because event coverage can vary over time. Direct GitHub star snapshots remain the primary source for observed point-in-time growth.
 
@@ -84,9 +84,19 @@ A completed event hour means its archive was fully processed for valid repositor
 
 A repository counts as verified early only when its first recorded source was GitHub Search or public activity and it later appears in a collected GitHub Trending Daily snapshot. Lead time is the interval between the two observation timestamps, not GitHub's exact entry time.
 
-Cases with unknown historical provenance, collection gaps, or an initial observation already inside Trending are excluded from conversion denominators.
+Cases with unknown historical provenance, collection gaps, or an initial observation already inside Trending are excluded from the per-repository outcome. These outcomes power the row badges.
 
-Track Record evaluates the collector's early observations across its eligible discovery sources. It does not restrict the denominator to repositories displayed in the New discoveries top results and does not establish the predictive quality of that ranking.
+### Board track record
+
+Since 2026-10-16 the Track Record summary measures what the New discoveries board actually showed, not every early observation. `radar.discovery_board_exposures` stores, per repository, the first snapshot where it appeared on the board (breakout score present, ordered by score as `api.snapshot_page` does), its rank and stars at that moment, and the first snapshot where it reached the Top 10. The 024 migration backfilled this from every stored snapshot; each completed collection adds its own snapshot.
+
+- **Shown before Trending**: repositories whose first observed Trending Daily appearance follows their first board appearance. The median lead is measured from the first board appearance.
+- **7-day hit**: within seven days of the first board appearance, the repository reaches Trending Daily or its highest observed star count is at least 500 above the count at that appearance. The Top 10 hit rate applies the same rule from the first Top 10 appearance. The rule is returned as `track_record.board.hit_rule` and was fixed before the first evaluation.
+- Repositories are evaluated only after seven days have elapsed. A missing observation during a collection gap never counts as a hit, so gaps can only lower the rate.
+
+The board measures were introduced because the earlier 7- and 14-day conversion rates divided Trending Daily entries by every eligible early observation (about 10,000), including repositories that could never appear on the board. Those fields remain in the API for compatibility but are no longer displayed. Rates from the new definition are not comparable with the old ones.
+
+The Track Record page separates the evaluation timestamp and hit rule, summary metrics and recent verified cases into a vertical stack. Metrics use four columns on desktop and two on mobile: shown before Trending, median lead, Top 10 hit rate and board hit rate. Recent cases show the first board appearance and rank, first observed Daily date, lead interval and Daily rank. Windows without evaluated repositories display an evidence-collection state rather than a zero rate.
 
 Historical rankings preserve the score at the selected snapshot, while discovery outcomes can be evaluated using later observations. The interface distinguishes the ranking timestamp from the outcome evaluation timestamp. Verified badge details show the first observation, first observed Daily appearance and evaluation time; they do not claim GitHub's exact entry time.
 

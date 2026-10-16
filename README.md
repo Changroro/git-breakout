@@ -4,6 +4,8 @@
 
 **실제 성장과 활동 신호를 관측해 떠오르는 GitHub 저장소를 찾는 오픈소스 랭킹.**
 
+[![지금 랭킹 보기](https://img.shields.io/badge/%EC%A7%80%EA%B8%88%20%EB%9E%AD%ED%82%B9%20%EB%B3%B4%EA%B8%B0-gitbreakout.imbch.dev-2ea44f?style=for-the-badge)](https://gitbreakout.imbch.dev)
+
 [![License](https://img.shields.io/badge/License-MIT-f1e05a?style=flat-square)](LICENSE)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -17,6 +19,8 @@
 ## Intro
 
 GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하지만, 이미 알려진 저장소가 반복해서 노출되거나 성장 초기의 프로젝트를 놓칠 수 있다. Git Breakout은 Trending 목록뿐 아니라 최근 생성·푸시된 저장소와 공개 이벤트를 함께 관측하고, 누적 인기도보다 **최근의 변화**에 무게를 둔다.
+
+2026-10-16 기준, 신규 발굴 보드 Top 10에 오른 저장소의 약 20%가 그 뒤 7일 안에 GitHub 일간 Trending에 들거나 Star를 500개 이상 얻었다. 보드 전체에서는 약 8%이고, 26위 아래로 내려가면 약 6%로 낮아진다. 순위가 높을수록 실제로 뜨는 저장소를 더 잘 고른다는 뜻이다. 계산 방식은 [방법론](docs/methodology.md#board-track-record)에 있다.
 
 이 프로젝트는 GitHub 전체 저장소의 완전한 색인이 아니다. API 검색 한계 안에서 후보를 넓게 발견한다. Star 그래프는 GitHub API의 현재 유지 스타 획득 기록과 Git Breakout의 시점별 관측을 서로 구분해 사용한다.
 
@@ -38,7 +42,7 @@ GitHub Trending은 지금 주목받는 저장소를 확인하기에는 유용하
 - **히스토리**: 2시간 단위 스냅샷 타임라인으로 과거 순위와 당시 저장소 상태를 조회한다.
 - **Star 시계열**: GitHub API를 쓸 때는 최근 90일에 획득해 현재도 유지된 Star를 표시하고, API를 쓸 수 없을 때만 Git Breakout의 시점별 관측을 표시한다. 서로 의미가 다른 두 값은 한 선으로 합치지 않는다.
 - **아카이브**: 최신 후보군에서 제외된 저장소도 과거 스냅샷과 함께 보존한다.
-- **발굴 성과**: Git Breakout이 먼저 관측한 저장소가 이후 Daily Trending에 진입했는지 검증한다.
+- **발굴 성과**: 신규 발굴 보드에 처음 보여준 뒤 7일 안에 Daily Trending에 들거나 Star를 500개 이상 얻었는지로 Top 10과 보드 전체 적중률을 공개하고, Trending보다 먼저 보여준 사례와 앞선 시간을 기록한다.
 - **탐색 UI**: 저장소 검색, 언어·토픽 필터, 페이지네이션, 읽은 항목 표시, 한·영 전환, 반응형 라이트·다크 테마를 제공한다.
 
 ## Data Flow
@@ -90,7 +94,7 @@ score = log1p(observedStarsPerDay) × 55
 - 데이터가 부족한 값은 0점으로 꾸미지 않고 `insufficient_data`로 남긴다.
 - 신규 발굴·재부상·현재 관심도는 `trend-intelligence-v8-shadow` 모델로 별도 계산한다. 관측 창의 실제 경과 시간이 기록되어 있으면 그 값으로 속도를 환산하고, 유지 Star 이력의 조회 시각과 자기 기준선의 기간·공백을 근거로 남긴다.
 
-기본 화면은 신규 발굴이며 모멘텀도 별도로 제공한다. 기본 화면 선택이 신규 점수의 예측력 검증을 뜻하지는 않는다. 발굴 성과는 수집기가 먼저 관측한 사례의 이후 Trending 진입을 측정하며, 신규 발굴 상위 목록의 유용성을 검증하는 지표와는 범위가 다르다. 반복된 Watch 활동도 관심도·지속성에 반영될 수 있으므로 점수를 조작 없는 관심이나 지속적인 개발의 증거로 해석하면 안 된다.
+기본 화면은 신규 발굴이며 모멘텀도 별도로 제공한다. 기본 화면 선택이 신규 점수의 예측력 검증을 뜻하지는 않는다. 발굴 성과는 보드에 실제로 보여준 저장소의 이후 성장을 측정하지만, 적중 기준(7일 안 Trending 진입 또는 Star +500)은 하나의 정의일 뿐이며 Star 파밍처럼 인위적인 성장도 적중으로 셀 수 있다. 반복된 Watch 활동도 관심도·지속성에 반영될 수 있으므로 점수를 조작 없는 관심이나 지속적인 개발의 증거로 해석하면 안 된다.
 
 자세한 산식과 한계는 [공개 방법론](docs/methodology.md)에 정리돼 있다. 웹 화면의 각 지표 옆 물음표에서도 현재 계산 방식을 확인할 수 있다.
 

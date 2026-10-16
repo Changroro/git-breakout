@@ -4,6 +4,8 @@
 
 `README.md` keeps Korean body text and `README.en.md` keeps English body text. Both use English section and subsection headings, including `Intro`, `Features`, `Data Flow`, `Ranking Model` and `Getting Started`.
 
+A large live-rankings badge linking to `https://gitbreakout.imbch.dev` sits under the tagline. The Intro states dated Track Record hit rates (Top 10, whole board and below rank 25) and links to `docs/methodology.md#board-track-record`; update the numbers and date together when refreshing them.
+
 Both READMEs show the desktop screenshot only. The mobile screenshot asset can remain in `docs/screenshots/`, but is not embedded in either README. The collection badge links to `#collection-and-storage`.
 
 The footer puts the GitHub non-affiliation notice before a separate blank line (`<br />`). The centered `Built by Changroro` credit is the final content. This is the README footer; the website footer is a separate component.

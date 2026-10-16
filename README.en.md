@@ -4,6 +4,8 @@
 
 **An open-source ranking that observes real growth and activity signals to find rising GitHub repositories.**
 
+[![See the live rankings](https://img.shields.io/badge/See%20the%20live%20rankings-gitbreakout.imbch.dev-2ea44f?style=for-the-badge)](https://gitbreakout.imbch.dev)
+
 [![License](https://img.shields.io/badge/License-MIT-f1e05a?style=flat-square)](LICENSE)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -15,6 +17,8 @@
 </div>
 
 ## Intro
+
+As of 2026-10-16, about 20% of repositories that reached the New discoveries Top 10 went on to enter GitHub Trending Daily or gain 500+ stars within seven days. Across the whole board the rate is about 8%, falling to about 6% below rank 25, so higher ranks do pick more of the repositories that actually take off. See the [methodology](docs/methodology.md#board-track-record) for the definition.
 
 GitHub Trending is useful for seeing what is popular now, but established repositories can appear repeatedly while early-stage growth goes unnoticed. Git Breakout combines Trending with recently created and pushed repositories plus public activity events, then emphasizes **recent change** over lifetime popularity.
 
@@ -38,7 +42,7 @@ Git Breakout is not a complete index of every repository on GitHub. It discovers
 - **History** lets visitors inspect past rankings and repository state through two-hour snapshots.
 - **Star series** shows stars acquired in the last 90 days that are still retained when GitHub history is available, and falls back to Git Breakout's point-in-time observations otherwise. The two meanings are never joined into one line.
 - **Archive** retains repositories that leave the latest candidate pool together with their historical snapshots.
-- **Track record** verifies whether repositories observed early by Git Breakout later enter GitHub Trending Daily.
+- **Track record** publishes Top 10 and board-wide hit rates (Trending Daily or 500+ stars within seven days of first appearing on the New discoveries board) and records repositories shown before Trending with their lead time.
 - **Discovery UI** includes repository search, language and topic filters, pagination, read-state dimming, Korean and English, responsive layouts, and light and dark themes.
 
 ## Data Flow
@@ -90,7 +94,7 @@ score = log1p(observedStarsPerDay) × 55
 - Missing evidence remains `insufficient_data` instead of being converted into a zero score.
 - New discoveries, Resurgence and Current heat are stored separately under `trend-intelligence-v8-shadow`. Rates use actual elapsed observation time when recorded; evidence records the history fetch timestamp and the self-baseline period and gap.
 
-New discoveries is the default view, with Momentum available separately. This navigation choice does not establish the new model's predictive quality. Track Record measures whether the collector observed a repository before a later Trending appearance; it does not specifically evaluate the usefulness of top-ranked new discoveries. Repeated Watch activity can contribute to heat and persistence, so scores do not establish organic interest or sustained development.
+New discoveries is the default view, with Momentum available separately. This navigation choice does not establish the new model's predictive quality. Track Record measures what happened after the board showed a repository, but its hit rule (Trending Daily or +500 stars within seven days) is one definition, and artificial growth such as star farming can still count as a hit. Repeated Watch activity can contribute to heat and persistence, so scores do not establish organic interest or sustained development.
 
 See the [public methodology](docs/methodology.md) for formulas and limitations. The question-mark control beside each ranking view also exposes the current methodology in the web app.
 
