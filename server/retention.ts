@@ -78,11 +78,8 @@ export function selectRetainedRepositoryNames(
         repository.latestPushedAt,
         `Retention latestPushedAt for ${repository.fullName}`,
       );
-    if (
-      firstSeenTimestamp > latestCapturedTimestamp
-      || latestCapturedTimestamp > referenceTimestamp
-      || (latestPushedTimestamp !== null && latestPushedTimestamp > referenceTimestamp)
-    ) {
+    // pushed_at comes from GitHub and can be later than our capture time (seen around the US DST fallback).
+    if (firstSeenTimestamp > latestCapturedTimestamp || latestCapturedTimestamp > referenceTimestamp) {
       throw new RangeError(`Retention timestamps for ${repository.fullName} are inconsistent`);
     }
     const withinGrace = referenceTimestamp - firstSeenTimestamp <= policy.graceDays * DAY_MS;

@@ -54,6 +54,12 @@ describe("selectRetainedRepositoryNames", () => {
     ]);
   });
 
+  it("treats a GitHub push time later than the reference as a recent push", () => {
+    expect(selectRetainedRepositoryNames([
+      candidate("future/pushed", { latestPushedAt: "2026-08-27T00:56:04.000Z" }),
+    ], "2026-08-27T00:00:00.000Z", policy)).toEqual(["future/pushed"]);
+  });
+
   it("rejects duplicate repositories and invalid policy values", () => {
     expect(() => selectRetainedRepositoryNames([
       candidate("alpha/one"),
