@@ -1,0 +1,996 @@
+diff --git a/deploy/oracle/auto-deploy.sh b/deploy/oracle/auto-deploy.sh
+index d65faee..0be8c40 100755
+--- a/deploy/oracle/auto-deploy.sh
++++ b/deploy/oracle/auto-deploy.sh
+@@ -86,7 +86,7 @@ create table if not exists radar.schema_migrations (
+ revoke all on radar.schema_migrations from public, web_anon, collector;
+ SQL
+ pending_migrations=()
+-for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record 025_classified_board_exposures 026_identity_context_state 027_collection_summary_comparisons 028_retention_candidate_summary 029_classification_version_floor; do
++for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record 025_classified_board_exposures 026_identity_context_state 027_collection_summary_comparisons 028_retention_candidate_summary 029_classification_version_floor 030_collection_cold_path; do
+   migration_file="$TREND_RADAR_REPO/deploy/oracle/db/migrations/$migration.sql"
+   test -f "$migration_file" || { echo "Database migration is unavailable: $migration" >&2; exit 1; }
+   checksum=$(sha256sum "$migration_file" | cut -d' ' -f1)
+diff --git a/deploy/oracle/db/migrations/030_collection_cold_path.sql b/deploy/oracle/db/migrations/030_collection_cold_path.sql
+new file mode 100644
+index 0000000..93e5818
+--- /dev/null
++++ b/deploy/oracle/db/migrations/030_collection_cold_path.sql
+@@ -0,0 +1,725 @@
++begin;
++
++set local lock_timeout = '5s';
++-- Block collector inserts until both summaries and their triggers are installed.
++lock table radar.snapshot_repositories in share row exclusive mode;
++
++-- Rows without a valid GitHub ID never gain observations (026), so a name's summary changes only when such a row is written.
++create table if not exists radar.repository_legacy_summary (
++  full_name_key text primary key,
++  first_seen_at timestamptz not null,
++  first_stars integer not null,
++  first_is_trending boolean not null,
++  episode_count integer not null check (episode_count >= 0),
++  latest_captured_at timestamptz not null,
++  latest_stars integer not null,
++  latest_is_trending boolean not null
++);
++alter table radar.repository_legacy_summary enable row level security;
++alter table radar.repository_legacy_summary force row level security;
++drop policy if exists repository_legacy_summary_collector on radar.repository_legacy_summary;
++create policy repository_legacy_summary_collector on radar.repository_legacy_summary
++  for all to collector using (true) with check (true);
++grant select, insert, update, delete on radar.repository_legacy_summary to collector;
++
++create or replace function radar.rebuild_repository_legacy_summary(p_names text[])
++returns void language sql set search_path = pg_catalog, radar as $$
++  delete from radar.repository_legacy_summary where p_names is null or full_name_key = any(p_names);
++  insert into radar.repository_legacy_summary
++  select full_name_key, min(captured_at), max(stars) filter(where first_number = 1), bool_or(trending) filter(where first_number = 1),
++    count(*) filter(where trending and not was_trending)::integer, max(captured_at),
++    max(stars) filter(where last_number = 1), bool_or(trending) filter(where last_number = 1)
++  from (
++    select r.full_name_key, r.captured_at, r.stars, r.identity_is_trending as trending,
++      row_number() over(partition by r.full_name_key order by r.captured_at) as first_number,
++      row_number() over(partition by r.full_name_key order by r.captured_at desc) as last_number,
++      lag(r.identity_is_trending, 1, false) over(partition by r.full_name_key order by r.captured_at) as was_trending
++    from radar.snapshot_repositories r
++    where coalesce(jsonb_typeof(r.payload_json->'repository_id') <> 'string' or btrim(r.payload_json->>'repository_id') = '', true)
++      and (p_names is null or r.full_name_key = any(p_names))
++  ) o group by full_name_key;
++$$;
++revoke execute on function radar.rebuild_repository_legacy_summary(text[]) from public;
++grant execute on function radar.rebuild_repository_legacy_summary(text[]) to collector;
++
++create or replace function radar.refresh_repository_legacy_summary()
++returns trigger language plpgsql set search_path = pg_catalog, radar as $$
++declare
++  names text[];
++begin
++  if tg_op = 'INSERT' then
++    names := array(select distinct full_name_key from new_rows
++      where coalesce(jsonb_typeof(payload_json->'repository_id') <> 'string' or btrim(payload_json->>'repository_id') = '', true));
++  elsif tg_op = 'UPDATE' then
++    names := array(select full_name_key from old_rows union select full_name_key from new_rows);
++  elsif tg_op = 'DELETE' then
++    names := array(select distinct full_name_key from old_rows);
++  end if;
++  -- TRUNCATE leaves names null, which rebuilds every name.
++  if names is null or cardinality(names) > 0 then
++    perform radar.rebuild_repository_legacy_summary(names);
++  end if;
++  return null;
++end;
++$$;
++revoke execute on function radar.refresh_repository_legacy_summary() from public;
++drop trigger if exists refresh_repository_legacy_summary_insert on radar.snapshot_repositories;
++create trigger refresh_repository_legacy_summary_insert after insert on radar.snapshot_repositories
++referencing new table as new_rows for each statement execute function radar.refresh_repository_legacy_summary();
++drop trigger if exists refresh_repository_legacy_summary_update on radar.snapshot_repositories;
++create trigger refresh_repository_legacy_summary_update after update on radar.snapshot_repositories
++referencing old table as old_rows new table as new_rows for each statement execute function radar.refresh_repository_legacy_summary();
++drop trigger if exists refresh_repository_legacy_summary_delete on radar.snapshot_repositories;
++create trigger refresh_repository_legacy_summary_delete after delete on radar.snapshot_repositories
++referencing old table as old_rows for each statement execute function radar.refresh_repository_legacy_summary();
++drop trigger if exists refresh_repository_legacy_summary_truncate on radar.snapshot_repositories;
++create trigger refresh_repository_legacy_summary_truncate after truncate on radar.snapshot_repositories
++for each statement execute function radar.refresh_repository_legacy_summary();
++
++select radar.rebuild_repository_legacy_summary(null);
++
++-- Nullable because the 026 functions do not write them; a row that lacks them is rebuilt on its next observation and rejected by the context.
++alter table radar.repository_identity_state
++  add column if not exists first_captured_at timestamptz,
++  add column if not exists first_stars integer,
++  add column if not exists first_is_trending boolean,
++  add column if not exists latest_rank integer,
++  add column if not exists latest_pushed_at text,
++  add column if not exists recent_captured_at timestamptz[],
++  add column if not exists recent_stars integer[];
++-- Every collection updates the row of each collected repository; half-empty pages let each new version stay beside the old one.
++alter table radar.repository_identity_state set (fillfactor = 50);
++
++-- recent_* hold the 20 latest observations, newest first.
++create or replace function radar.rebuild_repository_identity_state(p_repository_ids text[])
++returns void language sql set search_path = pg_catalog, radar as $$
++  delete from radar.repository_identity_state where p_repository_ids is null or repository_id = any(p_repository_ids);
++  insert into radar.repository_identity_state(repository_id, verified_episode_count, latest_captured_at, latest_is_trending,
++    first_captured_at, first_stars, first_is_trending, latest_rank, latest_pushed_at, recent_captured_at, recent_stars)
++  select repository_id, count(*) filter(where trending and not was_trending)::integer, max(captured_at),
++    bool_or(trending) filter(where last_number = 1),
++    min(captured_at), max(stars) filter(where first_number = 1), bool_or(trending) filter(where first_number = 1),
++    max(rank) filter(where last_number = 1), max(pushed_at) filter(where last_number = 1),
++    array_agg(row_captured_at order by captured_at desc) filter(where last_number <= 20),
++    array_agg(stars order by captured_at desc) filter(where last_number <= 20)
++  from (
++    select i.repository_id, i.captured_at, r.captured_at as row_captured_at, r.rank, r.stars,
++      r.identity_pushed_at as pushed_at, r.identity_is_trending as trending,
++      lag(r.identity_is_trending, 1, false) over history as was_trending, row_number() over history as first_number,
++      count(*) over(partition by i.repository_id) - row_number() over history + 1 as last_number
++    from radar.repository_identity_observations i
++    join radar.snapshot_repositories r using(snapshot_id, full_name_key)
++    where p_repository_ids is null or i.repository_id = any(p_repository_ids)
++    window history as (partition by i.repository_id order by i.captured_at)
++  ) o group by repository_id
++  -- Repositories collected together are updated together, so they are stored on neighbouring pages.
++  order by max(captured_at) desc, repository_id;
++$$;
++
++-- An appended observation is later than every stored one, so it leaves the first_* columns alone.
++create or replace function radar.update_repository_identity_state()
++returns trigger language plpgsql set search_path = pg_catalog, radar as $$
++begin
++  perform radar.rebuild_repository_identity_state(ids) from (
++    select array_agg(distinct n.repository_id) as ids from new_rows n
++    left join radar.repository_identity_state s using(repository_id)
++    where s.repository_id is null or n.captured_at <= s.latest_captured_at or s.recent_captured_at is null
++  ) stale where ids is not null;
++  update radar.repository_identity_state s set
++    verified_episode_count = s.verified_episode_count + o.episode_count,
++    latest_captured_at = o.latest_captured_at, latest_is_trending = o.latest_is_trending,
++    latest_rank = o.latest_rank, latest_pushed_at = o.latest_pushed_at,
++    recent_captured_at = (o.recent_captured_at || s.recent_captured_at)[1:20],
++    recent_stars = (o.recent_stars || s.recent_stars)[1:20]
++  from (
++    select repository_id, count(*) filter(where trending and not was_trending)::integer as episode_count,
++      max(captured_at) as latest_captured_at, (array_agg(trending order by captured_at desc))[1] as latest_is_trending,
++      (array_agg(rank order by captured_at desc))[1] as latest_rank,
++      (array_agg(pushed_at order by captured_at desc))[1] as latest_pushed_at,
++      array_agg(row_captured_at order by captured_at desc) as recent_captured_at,
++      array_agg(stars order by captured_at desc) as recent_stars
++    from (
++      select n.repository_id, n.captured_at, r.captured_at as row_captured_at, r.rank, r.stars,
++        r.identity_pushed_at as pushed_at, r.identity_is_trending as trending,
++        lag(r.identity_is_trending, 1, s.latest_is_trending) over(partition by n.repository_id order by n.captured_at) as was_trending
++      from new_rows n
++      join radar.repository_identity_state s using(repository_id)
++      join radar.snapshot_repositories r using(snapshot_id, full_name_key)
++      where n.captured_at > s.latest_captured_at
++    ) o group by repository_id
++  ) o where s.repository_id = o.repository_id;
++  return null;
++end;
++$$;
++
++select radar.rebuild_repository_identity_state(null);
++
++-- The 026 context query, kept for repositories whose legacy rows the summaries cannot describe.
++create or replace function radar.repository_identity_row_context(p_repositories jsonb)
++returns setof jsonb language sql stable strict set search_path = pg_catalog, radar as $$
++  with requested as (
++    select r->>'repository_id' as repository_id, r->>'full_name' as full_name, r->'requested_names' as requested_names
++    from jsonb_array_elements(p_repositories) r
++  ), names as (
++    select repository_id, full_name as canonical_name, lower(full_name) as full_name_key from requested
++    union
++    select q.repository_id, q.full_name, lower(n) from requested q
++    cross join lateral jsonb_array_elements_text(q.requested_names) n
++    union
++    select q.repository_id, q.full_name, a.full_name_key from requested q
++    join radar.repository_identity_aliases a using(repository_id)
++  ), allowed_names as (
++    select n.* from names n where not exists(
++      select 1 from radar.repository_identity_aliases a
++      where a.full_name_key = n.full_name_key and a.repository_id <> n.repository_id
++    )
++  ), policy as (select * from radar.collector_settings where id limit 1),
++  latest as (select max(captured_at) as captured_at from radar.snapshots),
++  verified_first as (
++    select q.repository_id, f.captured_at, f.stars, f.trending from requested q
++    cross join lateral (select i.captured_at, r.stars, r.identity_is_trending as trending
++      from radar.repository_identity_observations i join radar.snapshot_repositories r using(snapshot_id, full_name_key)
++      where i.repository_id = q.repository_id order by i.captured_at limit 1) f
++  ), legacy as (
++    select n.repository_id, r.captured_at, r.rank, r.stars, r.identity_pushed_at as pushed_at, r.identity_is_trending as trending
++    from allowed_names n join radar.snapshot_repositories r using(full_name_key)
++    left join verified_first v on v.repository_id = n.repository_id
++    where coalesce(jsonb_typeof(r.payload_json->'repository_id') <> 'string' or btrim(r.payload_json->>'repository_id') = '', true)
++      -- Only rows at or after the first verified row can share a capture time with a verified row.
++      and (v.captured_at is null or r.captured_at < v.captured_at or not exists(
++        select 1 from radar.repository_identity_observations i
++        where i.repository_id = n.repository_id and i.captured_at = r.captured_at))
++  ),
++  -- Legacy rows after the first verified row break the append-only order, so those repositories use full history.
++  interleaved as (
++    select distinct l.repository_id from legacy l join verified_first v using(repository_id)
++    where l.captured_at > v.captured_at
++  ), full_history as (
++    select i.repository_id, r.captured_at, r.rank, r.stars, 'verified'::text as identity_status,
++      r.identity_pushed_at as pushed_at, r.identity_is_trending as trending
++    from interleaved x join radar.repository_identity_observations i using(repository_id)
++    join radar.snapshot_repositories r using(snapshot_id, full_name_key)
++    union all
++    select l.repository_id, l.captured_at, l.rank, l.stars, 'legacy_unverified', l.pushed_at, l.trending
++    from legacy l join interleaved x using(repository_id)
++  ), full_ordered as (
++    select *, row_number() over(partition by repository_id order by captured_at) as first_number,
++      row_number() over(partition by repository_id order by captured_at desc) as last_number,
++      lag(trending, 1, false) over(partition by repository_id order by captured_at) as was_trending
++    from full_history
++  ), full_summaries as (
++    select repository_id, min(captured_at) as first_seen_at,
++      case when bool_or(identity_status = 'legacy_unverified') then 'legacy_unverified' else 'verified' end as identity_status,
++      max(stars) filter(where first_number = 1) as first_observed_stars,
++      bool_or(trending) filter(where first_number = 1) as first_observation_was_trending,
++      count(*) filter(where trending and not was_trending)::integer as official_trending_episode_count,
++      max(captured_at) as latest_captured_at, max(rank) filter(where last_number = 1) as latest_rank,
++      max(stars) filter(where last_number = 1) as latest_stars,
++      max(pushed_at) filter(where last_number = 1) as latest_pushed_at,
++      jsonb_agg(jsonb_build_object('captured_at', captured_at, 'stars', stars) order by captured_at desc)
++        filter(where last_number <= 20) as observations
++    from full_ordered group by repository_id
++  ), full_comparisons as (
++    select distinct on(h.repository_id) h.repository_id, h.captured_at, h.stars
++    from full_history h cross join policy cross join latest
++    where h.captured_at <= latest.captured_at - make_interval(days => policy.retention_growth_days)
++    order by h.repository_id, h.captured_at desc
++  ), legacy_ordered as (
++    select l.*, row_number() over(partition by repository_id order by captured_at) as first_number,
++      row_number() over(partition by repository_id order by captured_at desc) as last_number,
++      lag(trending, 1, false) over(partition by repository_id order by captured_at) as was_trending
++    from legacy l where not exists(select 1 from interleaved x where x.repository_id = l.repository_id)
++  ), legacy_summaries as (
++    select repository_id, min(captured_at) as first_seen_at,
++      max(stars) filter(where first_number = 1) as first_stars, bool_or(trending) filter(where first_number = 1) as first_trending,
++      count(*) filter(where trending and not was_trending)::integer as episodes,
++      max(captured_at) as latest_captured_at, max(rank) filter(where last_number = 1) as latest_rank,
++      max(stars) filter(where last_number = 1) as latest_stars, max(pushed_at) filter(where last_number = 1) as latest_pushed_at,
++      bool_or(trending) filter(where last_number = 1) as latest_trending
++    from legacy_ordered group by repository_id
++  ), verified_summaries as (
++    select v.repository_id, v.captured_at as first_seen_at, v.stars as first_stars, v.trending as first_trending,
++      s.verified_episode_count as episodes, l.captured_at as latest_captured_at, l.rank as latest_rank,
++      l.stars as latest_stars, l.pushed_at as latest_pushed_at
++    from verified_first v join radar.repository_identity_state s using(repository_id)
++    cross join lateral (select r.captured_at, r.rank, r.stars, r.identity_pushed_at as pushed_at
++      from radar.repository_identity_observations i join radar.snapshot_repositories r using(snapshot_id, full_name_key)
++      where i.repository_id = v.repository_id order by i.captured_at desc limit 1) l
++    where not exists(select 1 from interleaved x where x.repository_id = v.repository_id)
++  ), appended_points as (
++    select q.repository_id, p.captured_at, p.stars from requested q
++    cross join lateral (select r.captured_at, r.stars
++      from radar.repository_identity_observations i join radar.snapshot_repositories r using(snapshot_id, full_name_key)
++      where i.repository_id = q.repository_id order by i.captured_at desc limit 20) p
++    where not exists(select 1 from interleaved x where x.repository_id = q.repository_id)
++    union all
++    select l.repository_id, l.captured_at, l.stars from legacy l
++    where not exists(select 1 from interleaved x where x.repository_id = l.repository_id)
++  ), appended_observations as (
++    select repository_id, jsonb_agg(jsonb_build_object('captured_at', captured_at, 'stars', stars) order by captured_at desc)
++      filter(where point_number <= 20) as observations
++    from (select *, row_number() over(partition by repository_id order by captured_at desc) as point_number
++      from appended_points) p group by repository_id
++  ),
++  -- Here every legacy row precedes every verified row, so the two summaries join end to end.
++  appended_summaries as (
++    select repository_id, coalesce(l.first_seen_at, v.first_seen_at) as first_seen_at,
++      case when l.repository_id is null then 'verified' else 'legacy_unverified' end as identity_status,
++      case when l.repository_id is null then v.first_stars else l.first_stars end as first_observed_stars,
++      case when l.repository_id is null then v.first_trending else l.first_trending end as first_observation_was_trending,
++      coalesce(l.episodes, 0) + coalesce(v.episodes, 0)
++        - case when l.latest_trending and v.first_trending then 1 else 0 end as official_trending_episode_count,
++      coalesce(v.latest_captured_at, l.latest_captured_at) as latest_captured_at,
++      case when v.repository_id is null then l.latest_rank else v.latest_rank end as latest_rank,
++      case when v.repository_id is null then l.latest_stars else v.latest_stars end as latest_stars,
++      case when v.repository_id is null then l.latest_pushed_at else v.latest_pushed_at end as latest_pushed_at,
++      o.observations
++    from verified_summaries v full join legacy_summaries l using(repository_id)
++    join appended_observations o using(repository_id)
++  ), appended_comparisons as (
++    select distinct on(c.repository_id) c.repository_id, c.captured_at, c.stars from (
++      select q.repository_id, p.captured_at, p.stars from requested q cross join policy cross join latest
++      cross join lateral (select r.captured_at, r.stars
++        from radar.repository_identity_observations i join radar.snapshot_repositories r using(snapshot_id, full_name_key)
++        where i.repository_id = q.repository_id
++          and i.captured_at <= latest.captured_at - make_interval(days => policy.retention_growth_days)
++        order by i.captured_at desc limit 1) p
++      where not exists(select 1 from interleaved x where x.repository_id = q.repository_id)
++      union all
++      select l.repository_id, l.captured_at, l.stars from legacy l cross join policy cross join latest
++      where l.captured_at <= latest.captured_at - make_interval(days => policy.retention_growth_days)
++        and not exists(select 1 from interleaved x where x.repository_id = l.repository_id)
++    ) c order by c.repository_id, c.captured_at desc
++  ), summaries as (
++    select q.full_name as canonical_name, s.* from (
++      select * from full_summaries union all select * from appended_summaries
++    ) s join requested q using(repository_id)
++  ), comparisons as (
++    select * from full_comparisons union all select * from appended_comparisons
++  )
++  select jsonb_build_object(
++    'repository_id', s.repository_id, 'identity_status', s.identity_status, 'full_name', s.canonical_name,
++    'first_seen_at', s.first_seen_at, 'first_observed_stars', s.first_observed_stars,
++    'first_observation_was_trending', s.first_observation_was_trending,
++    'official_trending_episode_count', s.official_trending_episode_count,
++    'latest_captured_at', s.latest_captured_at, 'latest_rank', s.latest_rank, 'latest_stars', s.latest_stars,
++    'latest_pushed_at', s.latest_pushed_at, 'observations', s.observations,
++    'growth_comparison_captured_at', comparison.captured_at, 'growth_comparison_stars', comparison.stars
++  ) from summaries s left join comparisons comparison using(repository_id);
++$$;
++revoke execute on function radar.repository_identity_row_context(jsonb) from public;
++grant execute on function radar.repository_identity_row_context(jsonb) to collector;
++
++create or replace function api.repository_identity_context(p_repositories jsonb)
++returns jsonb language plpgsql stable set search_path = pg_catalog, radar set jit = off set work_mem = '32MB' as $$
++declare
++  result jsonb;
++  stale boolean;
++begin
++  if jsonb_typeof(p_repositories) is distinct from 'array' then
++    raise exception 'Repository identity context requires an array';
++  end if;
++  if jsonb_array_length(p_repositories) not between 1 and 10000 then
++    raise exception 'Repository identity context requires 1-10000 repositories';
++  end if;
++  if exists(select 1 from jsonb_array_elements(p_repositories) r where
++      jsonb_typeof(r->'repository_id') is distinct from 'string' or btrim(r->>'repository_id') = ''
++      or jsonb_typeof(r->'full_name') is distinct from 'string' or (r->>'full_name') !~ '^[^/[:space:]]+/[^/[:space:]]+$'
++      or jsonb_typeof(r->'requested_names') is distinct from 'array') then
++    raise exception 'Invalid repository identity proof';
++  end if;
++  if exists(select 1 from jsonb_array_elements(p_repositories) r
++      cross join lateral jsonb_array_elements(r->'requested_names') n
++      where jsonb_typeof(n) <> 'string' or (n #>> '{}') !~ '^[^/[:space:]]+/[^/[:space:]]+$') then
++    raise exception 'Invalid requested repository name';
++  end if;
++  if exists(select 1 from jsonb_array_elements(p_repositories) r group by r->>'repository_id' having count(*) > 1)
++    or exists(select 1 from jsonb_array_elements(p_repositories) r group by lower(r->>'full_name') having count(*) > 1) then
++    raise exception 'Duplicate repository identity proof';
++  end if;
++  with requested as (
++    select r->>'repository_id' as repository_id, r->>'full_name' as full_name, r->'requested_names' as requested_names
++    from jsonb_array_elements(p_repositories) r
++  ), names as (
++    select repository_id, lower(full_name) as full_name_key from requested
++    union
++    select q.repository_id, lower(n) from requested q
++    cross join lateral jsonb_array_elements_text(q.requested_names) n
++    union
++    select q.repository_id, a.full_name_key from requested q
++    join radar.repository_identity_aliases a using(repository_id)
++  ),
++  -- Every column but name_count is one name's value and is read only where name_count = 1.
++  legacy as (
++    select n.repository_id, count(*) as name_count, min(l.first_seen_at) as first_seen_at, max(l.first_stars) as first_stars,
++      bool_or(l.first_is_trending) as first_is_trending, max(l.episode_count) as episode_count,
++      max(l.latest_captured_at) as latest_captured_at, max(l.latest_stars) as latest_stars,
++      bool_or(l.latest_is_trending) as latest_is_trending
++    from names n join radar.repository_legacy_summary l using(full_name_key)
++    where not exists(
++      select 1 from radar.repository_identity_aliases a
++      where a.full_name_key = n.full_name_key and a.repository_id <> n.repository_id
++    ) group by n.repository_id
++  ), policy as (select * from radar.collector_settings where id limit 1),
++  latest as (select max(captured_at) as captured_at from radar.snapshots),
++  threshold as (
++    select (select captured_at from latest) - make_interval(days => (select retention_growth_days from policy)) as captured_at
++  ), states as (
++    select q.repository_id, q.full_name, s.repository_id is not null as stored, s.verified_episode_count, s.latest_captured_at,
++      s.first_captured_at, s.first_stars, s.first_is_trending, s.latest_rank, s.latest_pushed_at, s.recent_captured_at, s.recent_stars,
++      (select max(i.captured_at) from radar.repository_identity_observations i where i.repository_id = q.repository_id) as observed_at
++    from requested q left join radar.repository_identity_state s using(repository_id)
++  ),
++  -- One name's legacy rows before 20 verified points and the growth threshold add only a first row, episodes and a fallback comparison.
++  summarized as (
++    select v.repository_id, jsonb_build_object(
++      'repository_id', v.repository_id,
++      'identity_status', case when l.repository_id is null then 'verified' else 'legacy_unverified' end,
++      'full_name', v.full_name, 'first_seen_at', coalesce(l.first_seen_at, v.first_captured_at),
++      'first_observed_stars', case when l.repository_id is null then v.first_stars else l.first_stars end,
++      'first_observation_was_trending', case when l.repository_id is null then v.first_is_trending else l.first_is_trending end,
++      'official_trending_episode_count', coalesce(l.episode_count, 0) + v.verified_episode_count
++        - case when l.latest_is_trending and v.first_is_trending then 1 else 0 end,
++      'latest_captured_at', v.recent_captured_at[1], 'latest_rank', v.latest_rank, 'latest_stars', v.recent_stars[1],
++      'latest_pushed_at', v.latest_pushed_at,
++      'observations', (select jsonb_agg(jsonb_build_object('captured_at', p.captured_at, 'stars', p.stars) order by p.captured_at desc)
++        from unnest(v.recent_captured_at, v.recent_stars) p(captured_at, stars)),
++      'growth_comparison_captured_at', coalesce(comparison.captured_at, l.latest_captured_at),
++      'growth_comparison_stars', case when comparison.captured_at is null then l.latest_stars else comparison.stars end
++    ) as repository
++    from states v left join legacy l using(repository_id)
++    -- No observation precedes the first one, so a later first observation needs no lookup.
++    left join lateral (select r.captured_at, r.stars
++      from radar.repository_identity_observations i join radar.snapshot_repositories r using(snapshot_id, full_name_key)
++      where v.first_captured_at <= (select captured_at from threshold)
++        and i.repository_id = v.repository_id and i.captured_at <= (select captured_at from threshold)
++      order by i.captured_at desc limit 1) comparison on true
++    where v.stored and (l.repository_id is null or (l.name_count = 1 and cardinality(v.recent_captured_at) = 20
++      and l.latest_captured_at < v.first_captured_at and l.latest_captured_at <= (select captured_at from threshold)))
++  )
++  select jsonb_build_object(
++    'latest_captured_at', (select captured_at from latest),
++    'interval_minutes', (select interval_minutes from policy),
++    'retention_policy', (select jsonb_build_object('grace_days', retention_grace_days, 'growth_days', retention_growth_days,
++      'push_days', retention_push_days, 'repository_limit', retention_repository_limit) from policy),
++    'repositories', coalesce((select jsonb_agg(repository order by lower(repository->>'full_name')) from (
++      select repository from summarized
++      union all
++      select repository from radar.repository_identity_row_context((
++        select jsonb_agg(jsonb_build_object('repository_id', q.repository_id, 'full_name', q.full_name,
++          'requested_names', q.requested_names))
++        from requested q join legacy l using(repository_id)
++        where not exists(select 1 from summarized s where s.repository_id = q.repository_id)
++      )) repository
++    ) r), '[]'::jsonb)
++  ), exists(select 1 from states where latest_captured_at is distinct from observed_at
++    or (stored and (first_captured_at is null or recent_captured_at is null)))
++  into result, stale;
++  if stale then
++    raise exception 'Repository identity state is out of date';
++  end if;
++  return result;
++end;
++$$;
++revoke execute on function api.repository_identity_context(jsonb) from public;
++grant execute on function api.repository_identity_context(jsonb) to collector;
++
++create or replace function api.complete_collection(
++  p_run_id uuid,
++  p_captured_at timestamptz,
++  p_source text,
++  p_repositories jsonb
++)
++returns void
++language plpgsql
++volatile
++set search_path = pg_catalog, radar
++-- The inserted rows and their trigger transition tables hold every payload of the collection.
++set work_mem = '64MB'
++as $$
++declare
++  repository_count integer;
++  inserted_rows integer;
++  previous_captured_at timestamptz;
++  configured_interval_minutes integer;
++  run_record radar.collector_runs%rowtype;
++  snapshot_record radar.snapshots%rowtype;
++  saved_repositories jsonb;
++  requested_repositories jsonb;
++begin
++  perform pg_advisory_xact_lock(781642, 1);
++  if p_run_id is null or p_captured_at is null or not isfinite(p_captured_at) then
++    raise exception 'Collection run and finite capture timestamp are required';
++  end if;
++  if jsonb_typeof(p_repositories) is distinct from 'array' then
++    raise exception 'Repositories must be a JSON array';
++  end if;
++  repository_count := jsonb_array_length(p_repositories);
++  if repository_count = 0 then
++    raise exception 'Collection must contain repositories';
++  end if;
++  if p_source is null or btrim(p_source) = '' then
++    raise exception 'Collection source is required';
++  end if;
++  if exists (
++    select 1
++    from jsonb_array_elements(p_repositories) repository(value)
++    where jsonb_typeof(repository.value->'observation_sources') is distinct from 'array'
++      or case
++        when jsonb_typeof(repository.value->'observation_sources') = 'array' then (
++          jsonb_array_length(repository.value->'observation_sources') = 0
++          or exists (
++            select 1
++            from jsonb_array_elements(repository.value->'observation_sources') source(value)
++            where jsonb_typeof(source.value) <> 'string'
++              or source.value #>> '{}' not in (
++                'official_daily',
++                'official_weekly',
++                'official_monthly',
++                'github_search_created',
++                'github_search_pushed',
++                'gh_archive',
++                'retained'
++              )
++          )
++          or jsonb_array_length(repository.value->'observation_sources') <> (
++            select count(distinct source.value)
++            from jsonb_array_elements_text(
++              repository.value->'observation_sources'
++            ) source(value)
++          )
++          or ((repository.value #>> '{official_ranks,daily}') is null)
++            = (repository.value->'observation_sources' ? 'official_daily')
++          or ((repository.value #>> '{official_ranks,weekly}') is null)
++            = (repository.value->'observation_sources' ? 'official_weekly')
++          or ((repository.value #>> '{official_ranks,monthly}') is null)
++            = (repository.value->'observation_sources' ? 'official_monthly')
++        )
++        else false
++      end
++  ) then
++    raise exception 'Repositories contain invalid observation_sources';
++  end if;
++  select * into run_record from radar.collector_runs where id = p_run_id;
++  if not found then
++    raise exception 'Collector run % does not exist', p_run_id;
++  end if;
++  if run_record.status = 'completed' then
++    select * into strict snapshot_record from radar.snapshots where id = p_run_id;
++    select jsonb_agg(payload_json order by rank) into saved_repositories
++    from radar.snapshot_repositories where snapshot_id = p_run_id;
++    select jsonb_agg(value order by (value->>'rank')::integer) into requested_repositories
++    from jsonb_array_elements(p_repositories);
++    if snapshot_record.captured_at is distinct from p_captured_at
++      or snapshot_record.source is distinct from p_source
++      or snapshot_record.repository_count is distinct from repository_count
++      or saved_repositories is distinct from requested_repositories then
++      raise exception 'Completed collection % conflicts with retry', p_run_id;
++    end if;
++    return;
++  end if;
++  if run_record.status <> 'running' or p_captured_at < run_record.started_at
++    or not exists (
++      select 1 from radar.collector_lease
++      where run_id = p_run_id and expires_at > p_captured_at
++    ) then
++    raise exception 'Active collector run % does not exist', p_run_id;
++  end if;
++
++  select max(captured_at) into previous_captured_at from radar.snapshots;
++  select interval_minutes into strict configured_interval_minutes
++  from radar.collector_settings
++  where id;
++
++  insert into radar.snapshots (id, captured_at, source, repository_count)
++  values (p_run_id, p_captured_at, p_source, repository_count);
++
++  insert into radar.snapshot_repositories (
++    snapshot_id,
++    captured_at,
++    full_name,
++    rank,
++    stars,
++    payload_json
++  )
++  select
++    p_run_id,
++    p_captured_at,
++    repository->>'full_name',
++    (repository->>'rank')::integer,
++    (repository #>> '{metrics,stars}')::integer,
++    repository
++  from jsonb_array_elements(p_repositories) as repository;
++  get diagnostics inserted_rows = row_count;
++  if inserted_rows <> repository_count then
++    raise exception 'Inserted % of % repositories', inserted_rows, repository_count;
++  end if;
++
++  insert into radar.repository_discovery_milestones (
++    full_name_key,
++    full_name,
++    first_observed_at,
++    first_observation_sources,
++    first_official_daily_at,
++    first_official_daily_rank,
++    first_official_weekly_at,
++    first_official_weekly_rank,
++    first_official_monthly_at,
++    first_official_monthly_rank
++  )
++  select
++    lower(repository->>'full_name'),
++    repository->>'full_name',
++    p_captured_at,
++    array(select jsonb_array_elements_text(repository->'observation_sources')),
++    case when repository #>> '{official_ranks,daily}' is null then null else p_captured_at end,
++    (repository #>> '{official_ranks,daily}')::integer,
++    case when repository #>> '{official_ranks,weekly}' is null then null else p_captured_at end,
++    (repository #>> '{official_ranks,weekly}')::integer,
++    case when repository #>> '{official_ranks,monthly}' is null then null else p_captured_at end,
++    (repository #>> '{official_ranks,monthly}')::integer
++  from jsonb_array_elements(p_repositories) repository
++  left join radar.repository_discovery_milestones milestone on milestone.full_name_key = lower(repository->>'full_name')
++  -- Rows the update below would leave unchanged are skipped, so they are neither locked nor rewritten.
++  where milestone.full_name_key is null
++    or milestone.full_name <> repository->>'full_name'
++    or p_captured_at < milestone.first_observed_at
++    or repository #>> '{official_ranks,daily}' is not null
++      and (milestone.first_official_daily_at is null or p_captured_at < milestone.first_official_daily_at)
++    or repository #>> '{official_ranks,weekly}' is not null
++      and (milestone.first_official_weekly_at is null or p_captured_at < milestone.first_official_weekly_at)
++    or repository #>> '{official_ranks,monthly}' is not null
++      and (milestone.first_official_monthly_at is null or p_captured_at < milestone.first_official_monthly_at)
++  on conflict (full_name_key) do update
++  set
++    full_name = excluded.full_name,
++    first_observation_sources = case
++      when excluded.first_observed_at < repository_discovery_milestones.first_observed_at
++        then excluded.first_observation_sources
++      else repository_discovery_milestones.first_observation_sources
++    end,
++    first_observed_at = least(
++      repository_discovery_milestones.first_observed_at,
++      excluded.first_observed_at
++    ),
++    first_official_daily_rank = case
++      when repository_discovery_milestones.first_official_daily_at is null
++        or excluded.first_official_daily_at < repository_discovery_milestones.first_official_daily_at
++        then excluded.first_official_daily_rank
++      else repository_discovery_milestones.first_official_daily_rank
++    end,
++    first_official_daily_at = case
++      when repository_discovery_milestones.first_official_daily_at is null
++        or excluded.first_official_daily_at < repository_discovery_milestones.first_official_daily_at
++        then excluded.first_official_daily_at
++      else repository_discovery_milestones.first_official_daily_at
++    end,
++    first_official_weekly_rank = case
++      when repository_discovery_milestones.first_official_weekly_at is null
++        or excluded.first_official_weekly_at < repository_discovery_milestones.first_official_weekly_at
++        then excluded.first_official_weekly_rank
++      else repository_discovery_milestones.first_official_weekly_rank
++    end,
++    first_official_weekly_at = case
++      when repository_discovery_milestones.first_official_weekly_at is null
++        or excluded.first_official_weekly_at < repository_discovery_milestones.first_official_weekly_at
++        then excluded.first_official_weekly_at
++      else repository_discovery_milestones.first_official_weekly_at
++    end,
++    first_official_monthly_rank = case
++      when repository_discovery_milestones.first_official_monthly_at is null
++        or excluded.first_official_monthly_at < repository_discovery_milestones.first_official_monthly_at
++        then excluded.first_official_monthly_rank
++      else repository_discovery_milestones.first_official_monthly_rank
++    end,
++    first_official_monthly_at = case
++      when repository_discovery_milestones.first_official_monthly_at is null
++        or excluded.first_official_monthly_at < repository_discovery_milestones.first_official_monthly_at
++        then excluded.first_official_monthly_at
++      else repository_discovery_milestones.first_official_monthly_at
++    end;
++
++  if previous_captured_at is not null
++    and p_captured_at - previous_captured_at
++      > make_interval(mins => configured_interval_minutes * 3 / 2)
++  then
++    update radar.repository_discovery_milestones
++    set coverage_gap = true
++    where first_observation_sources is not null
++      and first_observed_at <= previous_captured_at
++      and (
++        first_official_daily_at >= p_captured_at
++        or first_official_daily_at is null
++          and first_observed_at + interval '14 days' > previous_captured_at
++      );
++  end if;
++
++  update radar.collector_runs
++  set finished_at = p_captured_at,
++      status = 'completed',
++      error_message = null
++  where id = p_run_id and status = 'running';
++  get diagnostics inserted_rows = row_count;
++  if inserted_rows <> 1 then
++    raise exception 'Running collector run % changed during completion', p_run_id;
++  end if;
++
++  delete from radar.collector_lease where run_id = p_run_id;
++end;
++$$;
++revoke execute on function api.complete_collection(uuid,timestamptz,text,jsonb) from public;
++grant execute on function api.complete_collection(uuid,timestamptz,text,jsonb) to collector;
++
++-- Returns every repository the collector's retention filter can accept, plus a day of slack on each window;
++-- the collector still applies the exact filter. A repository passes that filter only when first seen within
++-- grace_days (so observed since then), pushed within push_days, or observed within growth_days with more stars.
++create or replace function api.collection_summary()
++returns jsonb language sql stable set search_path=pg_catalog,radar set work_mem='32MB' as $$
++  with policy as (select * from radar.collector_settings where id),
++  latest as (select max(captured_at) as captured_at from radar.snapshots),
++  bounds as (
++    select latest.captured_at - make_interval(days=>policy.retention_growth_days) as growth_at,
++      latest.captured_at - make_interval(days=>greatest(policy.retention_grace_days,policy.retention_growth_days)+1) as observed_after,
++      to_char((latest.captured_at - make_interval(days=>policy.retention_push_days+1)) at time zone 'UTC',
++        'YYYY-MM-DD"T"HH24:MI:SS"Z"') as pushed_from
++    from policy cross join latest
++  ),
++  summaries as (
++    select s.*,
++      -- A repository unseen since the threshold compares against its latest row; capture times are unique.
++      case when s.latest_captured_at<=(select growth_at from bounds) then s.latest_captured_at else comparison.captured_at end
++        as growth_comparison_captured_at,
++      case when s.latest_captured_at<=(select growth_at from bounds) then s.latest_stars else comparison.stars end
++        as growth_comparison_stars
++    from radar.repository_state s
++    left join lateral (select captured_at,stars from radar.snapshot_repositories r
++      -- No row precedes first_seen_at, so a repository first seen after the threshold needs no lookup.
++      where s.latest_captured_at>(select growth_at from bounds) and s.first_seen_at<=(select growth_at from bounds)
++        and r.full_name_key=s.full_name_key and r.captured_at<=(select growth_at from bounds)
++      order by captured_at desc limit 1) comparison on true
++    where s.latest_captured_at>(select observed_after from bounds)
++      or s.latest_pushed_at collate "C">=(select pushed_from from bounds)
++      or s.latest_pushed_at !~ '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$'
++  )
++  select jsonb_build_object(
++    'latest_captured_at',(select captured_at from latest),
++    'interval_minutes',(select interval_minutes from policy),
++    'retention_policy',(select jsonb_build_object('grace_days',retention_grace_days,'growth_days',retention_growth_days,
++      'push_days',retention_push_days,'repository_limit',retention_repository_limit) from policy),
++    'observed_repository_count',(select count(*) from radar.repository_state),
++    'repositories',coalesce((select jsonb_agg(jsonb_build_object(
++      'full_name',full_name,'first_seen_at',first_seen_at,'first_observed_stars',first_observed_stars,
++      'first_observation_was_trending',first_observation_was_trending,'official_trending_episode_count',official_trending_episode_count,
++      'latest_captured_at',latest_captured_at,'latest_pushed_at',latest_pushed_at,'latest_rank',latest_rank,'latest_stars',latest_stars,
++      'growth_comparison_captured_at',growth_comparison_captured_at,'growth_comparison_stars',growth_comparison_stars,
++      'observations','[]'::jsonb) order by full_name_key) from summaries),'[]'::jsonb)
++  );
++$$;
++revoke execute on function api.collection_summary() from public;
++grant execute on function api.collection_summary() to collector;
++
++-- The context reads recent rows through index-only scans, so each collection's rows need a visibility map before the next one.
++alter table radar.snapshot_repositories set (autovacuum_vacuum_insert_scale_factor = 0, autovacuum_vacuum_insert_threshold = 1000);
++
++notify pgrst, 'reload schema';
++commit;
+diff --git a/deploy/oracle/operations.test.ts b/deploy/oracle/operations.test.ts
+index c327588..ad61bb6 100644
+--- a/deploy/oracle/operations.test.ts
++++ b/deploy/oracle/operations.test.ts
+@@ -24,7 +24,7 @@ function fixture(script: string) {
+ 
+ function deploymentFixture() {
+   const f = fixture("auto-deploy.sh");
+-  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record", "025_classified_board_exposures", "026_identity_context_state", "027_collection_summary_comparisons", "028_retention_candidate_summary", "029_classification_version_floor"];
++  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record", "025_classified_board_exposures", "026_identity_context_state", "027_collection_summary_comparisons", "028_retention_candidate_summary", "029_classification_version_floor", "030_collection_cold_path"];
+   for (const migration of migrations) writeFileSync(join(f.repo, "deploy/oracle/db/migrations", `${migration}.sql`), "select 'fixture migration';\n");
+   writeFileSync(join(f.state, "active-image"), "sha256:previous\n");
+   writeFileSync(join(f.state, "deployed-revision"), "previous-revision\n");
+@@ -91,7 +91,7 @@ describe("Oracle operation behavior", () => {
+       expect(existsSync(join(f.state, "failed-target"))).toBe(true);
+       expect(f.run({ BROKEN_IMAGE: "1" }).status).toBe(1);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(19);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(20);
+     } finally { f.close(); }
+   });
+ 
+@@ -104,7 +104,7 @@ describe("Oracle operation behavior", () => {
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\nbuild\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(19);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(20);
+     } finally { f.close(); }
+   });
+ 
+@@ -115,7 +115,7 @@ describe("Oracle operation behavior", () => {
+       rmSync(join(f.state, "ledger"), { recursive: true });
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(38);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(40);
+     } finally { f.close(); }
+   });
+ 
+diff --git a/deploy/oracle/tests/audit-regression.mjs b/deploy/oracle/tests/audit-regression.mjs
+index 7d9af69..e92b7e0 100644
+--- a/deploy/oracle/tests/audit-regression.mjs
++++ b/deploy/oracle/tests/audit-regression.mjs
+@@ -8,9 +8,9 @@ import { dirname, join, resolve } from 'node:path';
+ const directory = dirname(fileURLToPath(import.meta.url));
+ const root = resolve(directory, '../../..');
+ const selected = process.argv.slice(2);
+-const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', '023', '024', '025', '026', '027', '028', '029', 'backup'] : selected;
++const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', '023', '024', '025', '026', '027', '028', '029', '030', 'backup'] : selected;
+ for (const name of modules) {
+-  if (!/^(core|017|018|019|020|021|022|023|024|025|026|027|028|029|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
++  if (!/^(core|017|018|019|020|021|022|023|024|025|026|027|028|029|030|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
+ }
+ const suites = await Promise.all(modules.map(async name => ({
+   name,
+diff --git a/deploy/oracle/tests/regression-026.mjs b/deploy/oracle/tests/regression-026.mjs
+index 8ddd7c5..d7a9f90 100644
+--- a/deploy/oracle/tests/regression-026.mjs
++++ b/deploy/oracle/tests/regression-026.mjs
+@@ -26,7 +26,9 @@ export default async function ({ sql, json, check, repository }) {
+     ['R_absent', 'absent/project', []], ['R_same', 'same/new', ['same/old']],
+   ].map(([repository_id, full_name, requested]) => ({ repository_id, full_name, requested_names: [full_name, ...requested] }));
+   const context = () => json(`set role collector; select api.repository_identity_context($proofs$${JSON.stringify(proofs)}$proofs$::jsonb)`);
+-  const state = () => json(`select coalesce(jsonb_agg(to_jsonb(s) order by repository_id), '[]') from radar.repository_identity_state s`);
++  // 030 adds columns that the 026 functions reapplied below do not write.
++  const state = () => json(`select coalesce(jsonb_agg(to_jsonb(s) order by repository_id), '[]') from (select repository_id,
++    verified_episode_count, latest_captured_at, latest_is_trending from radar.repository_identity_state) s`);
+   const byId = (value, id) => value.repositories.find(row => row.repository_id === id);
+ 
+   await check('026 append-only state matches the full-history identity context exactly', () => {
+diff --git a/deploy/oracle/tests/regression-030.mjs b/deploy/oracle/tests/regression-030.mjs
+new file mode 100644
+index 0000000..70837d5
+--- /dev/null
++++ b/deploy/oracle/tests/regression-030.mjs
+@@ -0,0 +1,175 @@
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++
++const source = name => readFileSync(new URL(`../db/migrations/${name}.sql`, import.meta.url), 'utf8');
++
++export default async function ({ sql, json, check, repository }) {
++  let sequence = 0;
++  function save(name, repositoryId, trending, day, aliases = [name]) {
++    sequence += 1;
++    const id = `30000000-0000-4000-8000-${String(sequence).padStart(12, '0')}`;
++    const capturedAt = new Date(Date.UTC(2026, 7, 1) + day * 86400000 + sequence * 1000).toISOString();
++    const value = repository({ full_name: name, pushed_at: capturedAt, stars: 1000 + sequence,
++      official_ranks: { daily: trending ? 1 : null, weekly: null, monthly: null } });
++    if (repositoryId !== null) Object.assign(value, { repository_id: repositoryId, repository_aliases: aliases });
++    sql(`begin; set local role collector;
++      insert into radar.collector_runs(id,started_at,finished_at,status) values('${id}','${capturedAt}','${capturedAt}','completed');
++      insert into radar.snapshots(id,captured_at,source,repository_count) values('${id}','${capturedAt}','identity-summary-test',1);
++      insert into radar.snapshot_repositories(snapshot_id,captured_at,full_name,rank,stars,payload_json)
++      values('${id}','${capturedAt}','${name}',1,${1000 + sequence},$payload$${JSON.stringify(value)}$payload$::jsonb); commit;`);
++    return id;
++  }
++  const proof = (repository_id, full_name, requested = []) => ({ repository_id, full_name, requested_names: [full_name, ...requested] });
++  // Summaries describe these; the rest need the legacy rows themselves.
++  const summarized = [proof('R_boundary', 'boundary/new', ['boundary/old']), proof('R_quiet', 'quiet/project'),
++    proof('R_verified', 'verified/project'), proof('R_new', 'new/project'), proof('R_reuse', 'reuse/project'),
++    proof('R_absent', 'absent/project')];
++  const rowBased = [proof('R_short', 'short/project'), proof('R_names', 'names/new', ['names/old']),
++    proof('R_legacy_only', 'legacy-only/project'), proof('R_interleaved', 'interleaved/project'),
++    proof('R_recent', 'recent/project')];
++  const call = (name, proofs) => `select ${name}($proofs$${JSON.stringify(proofs)}$proofs$::jsonb)`;
++  const context = (proofs = [...summarized, ...rowBased]) => json(`set role collector; ${call('api.repository_identity_context', proofs)}`);
++  const reference = (proofs = [...summarized, ...rowBased]) =>
++    json(`set role collector; ${call('radar.repository_identity_context_reference', proofs)}`);
++  const table = name => json(`select coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text), '[]') from radar.${name} t`);
++  const withoutRows = proofs => sql(`begin;
++    create or replace function radar.repository_identity_row_context(p_repositories jsonb) returns setof jsonb
++    language plpgsql strict as $$ begin raise exception 'Row context used'; end; $$;
++    ${call('api.repository_identity_context', proofs)}; rollback;`);
++  const byId = (value, id) => value.repositories.find(row => row.repository_id === id);
++  const verifiedDays = (name, id, from, count, aliases) => {
++    for (let day = from; day < from + count; day += 1) save(name, id, day % 5 === 0, day, aliases);
++  };
++
++  await check('030 summarized identity context matches the 026 row-based context exactly', () => {
++    const original = source('026_identity_context_state').match(/create or replace function api\.repository_identity_context[\s\S]*?\n\$\$;/)[0];
++    sql(`${original.replace('api.repository_identity_context(', 'radar.repository_identity_context_reference(')}
++      grant execute on function radar.repository_identity_context_reference(jsonb) to collector;`);
++
++    [false, true, false, true].forEach((trending, day) => save('boundary/old', null, trending, day));
++    verifiedDays('boundary/new', 'R_boundary', 5, 22, ['boundary/old', 'boundary/new']);
++    [true, false].forEach((trending, day) => save('quiet/project', null, trending, day));
++    verifiedDays('quiet/project', 'R_quiet', 6, 20);
++    verifiedDays('verified/project', 'R_verified', 0, 30);
++    verifiedDays('new/project', 'R_new', 38, 3);
++    save('reuse/project', null, true, 0);
++    save('reuse/project', 'R_reused_name', true, 1);
++    verifiedDays('reuse/project', 'R_reuse', 10, 21);
++    [true, true].forEach((trending, day) => save('short/project', null, trending, day));
++    verifiedDays('short/project', 'R_short', 5, 19);
++    save('names/old', null, true, 0);
++    save('names/new', null, true, 1);
++    verifiedDays('names/new', 'R_names', 5, 21, ['names/old', 'names/new']);
++    [false, true, true].forEach((trending, day) => save('legacy-only/project', null, trending, day));
++    verifiedDays('interleaved/project', 'R_interleaved', 0, 10);
++    save('interleaved/project', null, false, 10);
++    verifiedDays('interleaved/project', 'R_interleaved', 11, 12);
++    // Legacy rows inside the growth window still decide the comparison point.
++    [30, 37, 39].forEach(day => save('recent/project', null, day === 39, day));
++    for (let point = 0; point < 21; point += 1) save('recent/project', 'R_recent', point % 2 === 0, 40);
++
++    const after = context();
++    assert.deepEqual(after, reference());
++    assert.deepEqual(after.repositories.map(row => row.repository_id).sort(),
++      [...summarized, ...rowBased].map(row => row.repository_id).filter(id => id !== 'R_absent').sort());
++    assert.equal(byId(after, 'R_boundary').identity_status, 'legacy_unverified');
++    // Legacy entries on days 1 and 3; day 5 continues the day-3 entry, so the verified days 10 to 25 add four.
++    assert.equal(byId(after, 'R_boundary').official_trending_episode_count, 6);
++    assert.equal(byId(after, 'R_boundary').observations.length, 20);
++    assert.equal(byId(after, 'R_reuse').identity_status, 'verified');
++    assert.ok(byId(after, 'R_recent').growth_comparison_captured_at);
++
++    assert.deepEqual(json(`begin; set local role collector; ${call('api.repository_identity_context', summarized)}; rollback;`),
++      reference(summarized));
++    withoutRows(summarized);
++    for (const row of rowBased) assert.throws(() => withoutRows([row]), /Row context used/);
++  });
++
++  await check('030 summaries follow later legacy writes and match a full rebuild', () => {
++    const rebuilt = name => {
++      const stored = table(name);
++      sql(`select radar.rebuild_${name}(null)`);
++      assert.deepEqual(table(name), stored);
++    };
++    const compare = () => {
++      assert.deepEqual(context(), reference());
++      rebuilt('repository_legacy_summary');
++      rebuilt('repository_identity_state');
++    };
++    compare();
++    // A legacy row after the verified rows moves the repository to the row-based path.
++    save('quiet/project', null, true, 50);
++    assert.throws(() => withoutRows([proof('R_quiet', 'quiet/project')]), /Row context used/);
++    compare();
++    sql(`update radar.snapshot_repositories set payload_json = jsonb_set(payload_json, '{official_ranks,daily}', 'null')
++      where full_name_key = 'boundary/old' and identity_is_trending`);
++    assert.equal(byId(context(), 'R_boundary').official_trending_episode_count, 5);
++    compare();
++    sql(`delete from radar.snapshot_repositories where full_name_key = 'quiet/project' and not payload_json ? 'repository_id'
++      and captured_at > '2026-09-01'`);
++    withoutRows([proof('R_quiet', 'quiet/project')]);
++    compare();
++    // An observation earlier than the stored first one rebuilds the first-observation columns.
++    save('verified/early', 'R_verified', false, -1, ['verified/early', 'verified/project']);
++    assert.equal(byId(context(), 'R_verified').first_observation_was_trending, false);
++    compare();
++
++    const before = context();
++    const [summaries, states] = [table('repository_legacy_summary'), table('repository_identity_state')];
++    sql(source('030_collection_cold_path'));
++    assert.deepEqual(context(), before);
++    assert.deepEqual(table('repository_legacy_summary'), summaries);
++    assert.deepEqual(table('repository_identity_state'), states);
++  });
++
++  await check('030 completion stores the 017 milestones without rewriting unchanged rows', () => {
++    const original = source('017_collection_atomicity').match(/create or replace function api\.complete_collection\([\s\S]*?\n\$\$;/)[0];
++    sql(original.replace('api.complete_collection(', 'radar.complete_collection_reference('));
++    const stamp = hour => new Date(Date.UTC(2026, 10, 1) + hour * 3600000).toISOString();
++    const entry = (full_name, rank, official = {}) => repository({ full_name, rank, repository_id: `M_${full_name.toLowerCase()}`,
++      repository_aliases: [full_name], official_ranks: { daily: null, weekly: null, monthly: null, ...official },
++      observation_sources: ['github_search_created', ...Object.keys(official).map(period => `official_${period}`)] });
++    const collections = [
++      [0, [entry('alpha/project', 1, { daily: 3 }), entry('beta/project', 2), entry('gamma/project', 3, { weekly: 5 })]],
++      [2, [entry('alpha/project', 1), entry('beta/project', 2, { daily: 1 }), entry('Gamma/Project', 3), entry('delta/project', 4)]],
++      [4, [entry('alpha/project', 1), entry('beta/project', 2, { daily: 1 }), entry('Gamma/Project', 3), entry('delta/project', 4)]],
++      // The long gap also runs the coverage-gap update.
++      [12, [entry('alpha/project', 1, { monthly: 2 }), entry('beta/project', 2), entry('epsilon/project', 3, { monthly: 1 })]],
++    ];
++    const locations = `select full_name_key, ctid::text as location from radar.repository_discovery_milestones`;
++    const stored = name => json(`begin; ${collections.map(([hour, repositories], index) => `
++      ${index === 2 ? `create temp table before_unchanged as ${locations};` : ''}
++      do $run$ begin
++        perform api.start_collection('30100000-0000-4000-8000-00000000000${index}', '${stamp(hour)}');
++        perform ${name}('30100000-0000-4000-8000-00000000000${index}', '${stamp(hour)}', 'milestone-test',
++          $repositories$${JSON.stringify(repositories)}$repositories$::jsonb);
++      end $run$;
++      ${index === 2 ? `create temp table rewritten as select count(*) as row_count from (${locations}) m
++        join before_unchanged b using(full_name_key) where m.location <> b.location;` : ''}`).join('')}
++      select jsonb_build_object('rewritten', (select row_count from rewritten), 'milestones',
++        (select jsonb_agg(to_jsonb(m) order by full_name_key) from radar.repository_discovery_milestones m)); rollback;`);
++    const [before, after] = [stored('radar.complete_collection_reference'), stored('api.complete_collection')];
++    assert.deepEqual(after.milestones, before.milestones);
++    const milestone = name => after.milestones.find(row => row.full_name_key === name);
++    assert.equal(milestone('gamma/project').full_name, 'Gamma/Project');
++    assert.equal(milestone('beta/project').first_official_daily_rank, 1);
++    assert.equal(milestone('alpha/project').first_official_monthly_rank, 2);
++    assert.equal(milestone('delta/project').coverage_gap, true);
++    assert.deepEqual([before.rewritten, after.rewritten], [4, 0]);
++  });
++
++  await check('030 context fails loudly when stored first observations are missing', () => {
++    sql(`update radar.repository_identity_state set first_captured_at = null where repository_id = 'R_verified'`);
++    assert.throws(() => context(), /Repository identity state is out of date/);
++    sql(`select radar.rebuild_repository_identity_state(array['R_verified'])`);
++    assert.deepEqual(context(), reference());
++    // A row without recent observations is rebuilt, not extended, by its next observation.
++    sql(`update radar.repository_identity_state set recent_captured_at = null, recent_stars = null where repository_id = 'R_new'`);
++    assert.throws(() => context(), /Repository identity state is out of date/);
++    save('new/project', 'R_new', true, 60);
++    assert.deepEqual(context(), reference());
++    const stored = table('repository_identity_state');
++    sql('select radar.rebuild_repository_identity_state(null)');
++    assert.deepEqual(table('repository_identity_state'), stored);
++  });
++}
