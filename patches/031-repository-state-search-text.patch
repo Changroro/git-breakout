@@ -1,0 +1,374 @@
+diff --git a/deploy/oracle/auto-deploy.sh b/deploy/oracle/auto-deploy.sh
+index 0be8c40..a6c5d54 100755
+--- a/deploy/oracle/auto-deploy.sh
++++ b/deploy/oracle/auto-deploy.sh
+@@ -86,7 +86,7 @@ create table if not exists radar.schema_migrations (
+ revoke all on radar.schema_migrations from public, web_anon, collector;
+ SQL
+ pending_migrations=()
+-for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record 025_classified_board_exposures 026_identity_context_state 027_collection_summary_comparisons 028_retention_candidate_summary 029_classification_version_floor 030_collection_cold_path; do
++for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record 025_classified_board_exposures 026_identity_context_state 027_collection_summary_comparisons 028_retention_candidate_summary 029_classification_version_floor 030_collection_cold_path 031_repository_state_search_text; do
+   migration_file="$TREND_RADAR_REPO/deploy/oracle/db/migrations/$migration.sql"
+   test -f "$migration_file" || { echo "Database migration is unavailable: $migration" >&2; exit 1; }
+   checksum=$(sha256sum "$migration_file" | cut -d' ' -f1)
+diff --git a/deploy/oracle/db/migrations/031_repository_state_search_text.sql b/deploy/oracle/db/migrations/031_repository_state_search_text.sql
+new file mode 100644
+index 0000000..6b57c51
+--- /dev/null
++++ b/deploy/oracle/db/migrations/031_repository_state_search_text.sql
+@@ -0,0 +1,199 @@
++begin;
++
++set local lock_timeout = '5s';
++-- Block collector inserts until the column and the trigger that writes it change together.
++lock table radar.snapshot_repositories in share row exclusive mode;
++
++-- The text archive search matches against; kept in repository_state so a search does not read every payload.
++create or replace function radar.repository_search_text(p_full_name text, p_payload jsonb)
++returns text language sql stable set search_path = pg_catalog as $$
++  select lower(concat_ws(' ', p_full_name, p_payload->>'description', p_payload->>'language',
++    (select string_agg(topic.value, ' ') from jsonb_array_elements_text(p_payload->'topics') topic(value))));
++$$;
++revoke execute on function radar.repository_search_text(text, jsonb) from public;
++grant execute on function radar.repository_search_text(text, jsonb) to collector;
++
++-- repository_state kept a copy of each latest payload; the snapshot row it points at already holds it.
++do $$
++begin
++  if exists(select 1 from information_schema.columns
++      where table_schema = 'radar' and table_name = 'repository_state' and column_name = 'payload_json') then
++    alter table radar.repository_state alter column payload_json type text
++      using radar.repository_search_text(full_name, payload_json);
++    alter table radar.repository_state rename column payload_json to search_text;
++  end if;
++end;
++$$;
++-- Collected repositories are rewritten every collection; storing them together with room for the next version keeps those writes on few pages.
++alter table radar.repository_state set (fillfactor = 50);
++cluster radar.repository_state using repository_state_observed_idx;
++
++create or replace function radar.update_repository_state()
++returns trigger language plpgsql set search_path=pg_catalog,radar as $$
++begin
++  if exists(select 1 from new_rows n join radar.repository_state s using(full_name_key)
++      where n.captured_at<=s.latest_captured_at)
++    or exists(select 1 from new_rows group by full_name_key having count(*)>1) then
++    raise exception 'Repository state requires one chronological observation per repository per statement';
++  end if;
++  insert into radar.repository_state
++  select full_name_key, full_name, captured_at, stars, identity_is_trending, case when identity_is_trending then 1 else 0 end,
++    snapshot_id, captured_at, rank, stars, identity_pushed_at, identity_is_trending,
++    radar.repository_search_text(full_name, payload_json)
++  from new_rows
++  on conflict(full_name_key) do update set
++    full_name=excluded.full_name,
++    official_trending_episode_count=repository_state.official_trending_episode_count+
++      case when excluded.latest_is_trending and not repository_state.latest_is_trending then 1 else 0 end,
++    latest_snapshot_id=excluded.latest_snapshot_id, latest_captured_at=excluded.latest_captured_at,
++    latest_rank=excluded.latest_rank, latest_stars=excluded.latest_stars,
++    latest_pushed_at=excluded.latest_pushed_at, latest_is_trending=excluded.latest_is_trending,
++    search_text=excluded.search_text;
++  return null;
++end;
++$$;
++
++create or replace function api.archive_page(
++  p_page integer,
++  p_page_size integer,
++  p_query text
++)
++returns jsonb
++language plpgsql
++stable
++set search_path = pg_catalog, radar
++as $$
++declare
++  latest_snapshot radar.snapshots%rowtype;
++  normalized_query text;
++  archive_count integer;
++  matching_count integer;
++  normalized_page integer;
++  expected_page_count integer;
++  repositories jsonb;
++begin
++  if p_page < 1 then
++    raise exception 'Archive page must be positive';
++  end if;
++  if p_page_size not between 1 and 100 then
++    raise exception 'Archive page size must be between 1 and 100';
++  end if;
++  if p_query is not null and length(p_query) > 200 then
++    raise exception 'Archive query must contain at most 200 characters';
++  end if;
++
++  select * into latest_snapshot
++  from radar.snapshots
++  order by captured_at desc
++  limit 1;
++  if not found then
++    raise exception 'No completed ranking snapshots are available';
++  end if;
++
++  normalized_query := nullif(lower(btrim(p_query)), '');
++
++  with last_rows as (
++    select latest_snapshot_id as snapshot_id,latest_captured_at as captured_at,
++      full_name_key,full_name,latest_rank as rank,search_text from radar.repository_state
++  ), archived as (
++    select last_rows.*
++    from last_rows
++    where last_rows.snapshot_id <> latest_snapshot.id
++  )
++  select count(*) into archive_count from archived;
++
++  with last_rows as (
++    select latest_snapshot_id as snapshot_id,latest_captured_at as captured_at,
++      full_name_key,full_name,latest_rank as rank,search_text from radar.repository_state
++  ), archived as (
++    select
++      last_rows.*,
++      last_rows.search_text as searchable_text
++    from last_rows
++    where last_rows.snapshot_id <> latest_snapshot.id
++  ), matching as (
++    select archived.*
++    from archived
++    where normalized_query is null or not exists (
++      select 1
++      from regexp_split_to_table(normalized_query, '\s+') term(value)
++      where archived.searchable_text not like '%' || term.value || '%'
++    )
++  )
++  select count(*) into matching_count from matching;
++
++  normalized_page := least(
++    p_page,
++    greatest(1, ceil(matching_count::numeric / p_page_size)::integer)
++  );
++  expected_page_count := least(
++    p_page_size,
++    greatest(0, matching_count - (normalized_page - 1) * p_page_size)
++  );
++
++  with last_rows as (
++    select latest_snapshot_id as snapshot_id,latest_captured_at as captured_at,
++      full_name_key,full_name,latest_rank as rank,search_text from radar.repository_state
++  ), archived as (
++    select
++      last_rows.*,
++      last_rows.search_text as searchable_text
++    from last_rows
++    where last_rows.snapshot_id <> latest_snapshot.id
++  ), matching as (
++    select archived.*
++    from archived
++    where normalized_query is null or not exists (
++      select 1
++      from regexp_split_to_table(normalized_query, '\s+') term(value)
++      where archived.searchable_text not like '%' || term.value || '%'
++    )
++  ), ranked as (
++    select
++      matching.*,
++      row_number() over (
++        order by matching.captured_at desc, matching.full_name_key
++      ) as position
++    from matching
++  ), selected as (
++    select *
++    from ranked
++    where position between
++      (normalized_page - 1) * p_page_size + 1
++      and normalized_page * p_page_size
++  )
++  select coalesce(jsonb_agg(
++    observed.payload_json || jsonb_build_object(
++      'rank', selected.rank,
++      'last_snapshot_id', selected.snapshot_id,
++      'last_observed_at', selected.captured_at
++    ) order by selected.position
++  ), '[]'::jsonb)
++  into repositories
++  from selected
++  -- The payload lives only in the snapshot row that repository_state points at.
++  join radar.snapshot_repositories observed
++    on observed.snapshot_id = selected.snapshot_id and observed.full_name_key = selected.full_name_key;
++
++  if jsonb_array_length(repositories) <> expected_page_count then
++    raise exception 'Archive page contains an unexpected repository count';
++  end if;
++
++  return jsonb_build_object(
++    'schema_version', '1.0',
++    'latest_snapshot_id', latest_snapshot.id,
++    'latest_captured_at', latest_snapshot.captured_at,
++    'archive_count', archive_count,
++    'matching_count', matching_count,
++    'page', normalized_page,
++    'page_size', p_page_size,
++    'repositories', repositories
++  );
++end;
++$$;
++
++revoke execute on function api.archive_page(integer, integer, text) from public;
++grant execute on function api.archive_page(integer, integer, text) to web_anon, collector;
++
++notify pgrst, 'reload schema';
++commit;
+diff --git a/deploy/oracle/docker-compose.yml b/deploy/oracle/docker-compose.yml
+index 33755e9..dad9afe 100644
+--- a/deploy/oracle/docker-compose.yml
++++ b/deploy/oracle/docker-compose.yml
+@@ -5,7 +5,8 @@ services:
+     image: postgres:17.6-alpine
+     restart: unless-stopped
+     # Keep the hot identity and history indexes resident and log RPCs approaching the 30s collector timeout.
+-    command: ["postgres", "-c", "shared_buffers=1GB", "-c", "log_min_duration_statement=5s"]
++    # Each collection rewrites about 10,000 pages once per checkpoint; compressing their full-page images cuts its WAL by a third.
++    command: ["postgres", "-c", "shared_buffers=1GB", "-c", "log_min_duration_statement=5s", "-c", "wal_compression=lz4"]
+     environment:
+       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+diff --git a/deploy/oracle/operations.test.ts b/deploy/oracle/operations.test.ts
+index ad61bb6..344de1e 100644
+--- a/deploy/oracle/operations.test.ts
++++ b/deploy/oracle/operations.test.ts
+@@ -24,7 +24,7 @@ function fixture(script: string) {
+ 
+ function deploymentFixture() {
+   const f = fixture("auto-deploy.sh");
+-  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record", "025_classified_board_exposures", "026_identity_context_state", "027_collection_summary_comparisons", "028_retention_candidate_summary", "029_classification_version_floor", "030_collection_cold_path"];
++  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record", "025_classified_board_exposures", "026_identity_context_state", "027_collection_summary_comparisons", "028_retention_candidate_summary", "029_classification_version_floor", "030_collection_cold_path", "031_repository_state_search_text"];
+   for (const migration of migrations) writeFileSync(join(f.repo, "deploy/oracle/db/migrations", `${migration}.sql`), "select 'fixture migration';\n");
+   writeFileSync(join(f.state, "active-image"), "sha256:previous\n");
+   writeFileSync(join(f.state, "deployed-revision"), "previous-revision\n");
+@@ -91,7 +91,7 @@ describe("Oracle operation behavior", () => {
+       expect(existsSync(join(f.state, "failed-target"))).toBe(true);
+       expect(f.run({ BROKEN_IMAGE: "1" }).status).toBe(1);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(20);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(21);
+     } finally { f.close(); }
+   });
+ 
+@@ -104,7 +104,7 @@ describe("Oracle operation behavior", () => {
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\nbuild\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(20);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(21);
+     } finally { f.close(); }
+   });
+ 
+@@ -115,7 +115,7 @@ describe("Oracle operation behavior", () => {
+       rmSync(join(f.state, "ledger"), { recursive: true });
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(40);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(42);
+     } finally { f.close(); }
+   });
+ 
+diff --git a/deploy/oracle/tests/audit-regression.mjs b/deploy/oracle/tests/audit-regression.mjs
+index e92b7e0..772e94e 100644
+--- a/deploy/oracle/tests/audit-regression.mjs
++++ b/deploy/oracle/tests/audit-regression.mjs
+@@ -8,9 +8,9 @@ import { dirname, join, resolve } from 'node:path';
+ const directory = dirname(fileURLToPath(import.meta.url));
+ const root = resolve(directory, '../../..');
+ const selected = process.argv.slice(2);
+-const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', '023', '024', '025', '026', '027', '028', '029', '030', 'backup'] : selected;
++const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', '023', '024', '025', '026', '027', '028', '029', '030', '031', 'backup'] : selected;
+ for (const name of modules) {
+-  if (!/^(core|017|018|019|020|021|022|023|024|025|026|027|028|029|030|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
++  if (!/^(core|017|018|019|020|021|022|023|024|025|026|027|028|029|030|031|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
+ }
+ const suites = await Promise.all(modules.map(async name => ({
+   name,
+diff --git a/deploy/oracle/tests/regression-031.mjs b/deploy/oracle/tests/regression-031.mjs
+new file mode 100644
+index 0000000..6f474f5
+--- /dev/null
++++ b/deploy/oracle/tests/regression-031.mjs
+@@ -0,0 +1,80 @@
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++
++const source = name => readFileSync(new URL(`../db/migrations/${name}.sql`, import.meta.url), 'utf8');
++const DAY = 86400000;
++// present(day), trending(day) and payload fields per repository; the last snapshot is day 9.
++const repositories = {
++  'alpha/vector': { present: () => true, trending: day => day % 3 === 0, description: 'Vector database', language: 'Rust', topics: ['search', 'database'] },
++  'beta/plain': { present: day => day < 6, trending: () => false, description: null, language: null, topics: [] },
++  'gamma/mcp': { present: day => day < 8, trending: day => day >= 2 && day < 5, description: 'MCP server toolkit', language: 'TypeScript', topics: ['mcp', 'agents'] },
++  'Delta/Project': { present: day => day < 4, trending: day => day === 1 || day === 3, description: 'Agents for search', language: 'Python', topics: ['Agents'] },
++  'zeta/untagged': { present: day => day === 2 || day === 5, trending: day => day === 5, description: 'No topics key', language: 'Go', topics: undefined },
++  'epsilon/fresh': { present: day => day === 9, trending: () => true, description: 'Fresh arrival', language: 'Rust', topics: ['database'] },
++};
++const stateColumns = `full_name_key, full_name, first_seen_at, first_observed_stars, first_observation_was_trending,
++  official_trending_episode_count, latest_snapshot_id, latest_captured_at, latest_rank, latest_stars, latest_pushed_at, latest_is_trending`;
++
++export default async function ({ sql, json, check, repository }) {
++  const states = table => json(`select coalesce(jsonb_agg(to_jsonb(s) order by full_name_key), '[]') from (select ${stateColumns} from radar.${table}) s`);
++  const pages = [[1, 100, null], [1, 2, null], [2, 2, null], [9, 2, null], [1, 100, 'rust'], [1, 100, 'MCP  agents'],
++    [1, 100, 'delta'], [1, 100, 'toolkit typescript'], [1, 100, 'agents'], [1, 1, 'project'], [1, 100, 'no-such-repository']];
++  const archive = name => pages.map(([page, size, query]) =>
++    json(`set role web_anon; select ${name}(${page}, ${size}, ${query === null ? 'null' : `'${query}'`})`));
++
++  await check('031 archive pages and repository state match the 013 payload copy exactly', () => {
++    for (let day = 0; day < 10; day += 1) {
++      const id = `31000000-0000-4000-8000-${String(day + 1).padStart(12, '0')}`;
++      const capturedAt = new Date(Date.UTC(2026, 8, 1) + day * DAY).toISOString();
++      const rows = Object.entries(repositories).filter(([, value]) => value.present(day)).map(([name, value], index) => {
++        // The repository keeps its key while the spelling of its name changes.
++        const fullName = name === 'Delta/Project' && day >= 2 ? 'delta/project' : name;
++        const payload = repository({ full_name: fullName, rank: index + 1, stars: 100 + day * (index + 1),
++          description: value.description, language: value.language, topics: value.topics,
++          pushed_at: day % 2 === 0 ? capturedAt : null,
++          official_ranks: { daily: value.trending(day) ? index + 1 : null, weekly: null, monthly: null } });
++        return `('${id}','${capturedAt}','${fullName}',${index + 1},${100 + day * (index + 1)},$p$${JSON.stringify(payload)}$p$::jsonb)`;
++      });
++      sql(`begin; set local role collector;
++        insert into radar.collector_runs(id,started_at,finished_at,status) values('${id}','${capturedAt}','${capturedAt}','completed');
++        insert into radar.snapshots(id,captured_at,source,repository_count) values('${id}','${capturedAt}','search-text-test',${rows.length});
++        insert into radar.snapshot_repositories(snapshot_id,captured_at,full_name,rank,stars,payload_json) values ${rows.join(',')}; commit;`);
++    }
++
++    // The 013 backfill computes every state row, payload copy included, from the full history.
++    const backfill = source('013_repository_state').match(/with observations as \([\s\S]*?from ordered group by full_name_key;/)[0];
++    const original = source('013_repository_state').match(/create or replace function api\.archive_page\([\s\S]*?\n\$\$;/)[0];
++    sql(`create table radar.repository_state_reference as select ${stateColumns}, null::jsonb as payload_json
++        from radar.repository_state where false;
++      insert into radar.repository_state_reference ${backfill}
++      grant select on radar.repository_state_reference to web_anon;
++      ${original.replaceAll('radar.repository_state', 'radar.repository_state_reference')
++        .replace('api.archive_page(', 'radar.archive_page_reference(')}
++      grant execute on function radar.archive_page_reference(integer, integer, text) to web_anon;`);
++
++    assert.deepEqual(states('repository_state'), states('repository_state_reference'));
++    assert.equal(sql(`select count(*) from radar.repository_state s join radar.repository_state_reference r using(full_name_key)
++      where s.search_text = radar.repository_search_text(r.full_name, r.payload_json)`), '6');
++    assert.equal(sql(`select search_text from radar.repository_state where full_name_key = 'delta/project'`),
++      'delta/project agents for search python agents');
++    assert.equal(sql(`select search_text from radar.repository_state where full_name_key = 'beta/plain'`), 'beta/plain');
++
++    const current = archive('api.archive_page');
++    assert.deepEqual(current, archive('radar.archive_page_reference'));
++    assert.equal(current[0].archive_count, 4);
++    assert.deepEqual(current[5].repositories.map(row => row.full_name), ['gamma/mcp']);
++    assert.deepEqual(current[8].repositories.map(row => row.full_name), ['gamma/mcp', 'delta/project']);
++    assert.equal(current[10].matching_count, 0);
++  });
++
++  await check('031 reapplies cleanly and keeps collected repositories on neighbouring pages', () => {
++    const [before, pagesBefore] = [states('repository_state'), archive('api.archive_page')];
++    sql(source('031_repository_state_search_text'));
++    assert.deepEqual(states('repository_state'), before);
++    assert.deepEqual(archive('api.archive_page'), pagesBefore);
++    assert.equal(sql(`select string_agg(full_name_key, ',' order by ctid) from radar.repository_state`),
++      sql(`select string_agg(full_name_key, ',' order by latest_captured_at desc, full_name_key) from radar.repository_state`));
++    assert.equal(sql(`select count(*) from information_schema.columns
++      where table_schema = 'radar' and table_name = 'repository_state' and column_name = 'payload_json'`), '0');
++  });
++}
