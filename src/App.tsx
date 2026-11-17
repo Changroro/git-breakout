@@ -1578,7 +1578,7 @@ function MethodologyDialog({
               <section>
                 <div className="methodology-section-title">
                   <h3>신규 발굴, 재부상과 현재 관심도</h3>
-                  <code>trend-intelligence-v7-shadow</code>
+                  <code>trend-intelligence-v9-shadow</code>
                 </div>
                 <p>확인 가능한 구성요소의 동일 가중 평균에 100을 곱합니다. 누락된 값은 0으로 처리하지 않고 계산에서 제외합니다.</p>
                 <div className="methodology-models">
@@ -1592,7 +1592,7 @@ function MethodologyDialog({
                       <li>상대 성장: 관측 증가량은 직전 스타 수에, 유지 스타 획득량은 현재 스타 수에 비교합니다.</li>
                       <li>자기 성장 가속: 최근 24시간 관측 또는 유지 스타 획득일을 이전 최대 12주 일평균 중앙값과 비교합니다.</li>
                       <li>스타 가속: 시간당 6시간 증가율과 24시간 증가율, 또는 1시간과 6시간 증가율을 비교합니다.</li>
-                      <li>참여자 가속과 참여 폭: 최신 GitHub 이벤트가 있으면 고유 참여자의 변화와 규모를 점수에 반영합니다.</li>
+                      <li>참여 폭: 최신 GitHub 이벤트가 있으면 고유 참여자 규모를 점수에 반영합니다. 참여자 가속은 근거로만 기록하고 점수 평균에는 넣지 않습니다.</li>
                     </ul>
                   </div>
                   <div>
@@ -1693,7 +1693,7 @@ function MethodologyDialog({
           <section>
             <div className="methodology-section-title">
               <h3>New discoveries, Resurgence and Current Heat</h3>
-              <code>trend-intelligence-v7-shadow</code>
+              <code>trend-intelligence-v9-shadow</code>
             </div>
             <p>
               Each score is 100 times the equal-weight mean of its known components. Missing
@@ -1710,7 +1710,7 @@ function MethodologyDialog({
                   <li>Relative growth: observed deltas use prior stars; retained acquisitions use the current star count.</li>
                   <li>Self acceleration: recent observed or retained-acquisition growth ÷ the daily median of up to 12 prior weeks.</li>
                   <li>Star acceleration: 6h/hour − 24h/hour, or 1h − 6h/hour.</li>
-                  <li>Actor acceleration and unique participant breadth: optional evidence from fresh GitHub events.</li>
+                  <li>Unique participant breadth: optional evidence from fresh GitHub events. Actor acceleration is recorded as evidence but not averaged into the score.</li>
                 </ul>
               </div>
               <div>

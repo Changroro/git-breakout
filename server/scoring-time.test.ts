@@ -43,7 +43,7 @@ describe('observed scoring time contracts', () => {
   it('does not invent acceleration from a late six-hour observation', () => {
     const result = ranked([candidate('fixture/jitter', 100, 6.5), candidate('fixture/regular', 50)]);
     expect(result.map(r => r.trend_intelligence.breakout.components.star_acceleration)).toEqual([0.5, 0.5]);
-    expect(result[0].trend_intelligence.score_version).toBe('trend-intelligence-v8-shadow');
+    expect(result[0].trend_intelligence.score_version).toBe('trend-intelligence-v9-shadow');
   });
 
   it('normalizes six-hour-only velocity using its actual elapsed time', () => {

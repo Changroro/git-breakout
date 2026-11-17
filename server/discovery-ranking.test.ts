@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { sampleRepositories } from "../src/data/repositories.ts";
 import { rankRepositories } from "../src/lib/ranking.ts";
 import { rankTrendIntelligence, type RepositoryStarHistory } from "../src/lib/trend-intelligence.ts";
-import { buildLocalRankingPage } from "./local-ranking.ts";
+import { buildLocalRankingPage, isClassifiedScoreVersion } from "./local-ranking.ts";
 import { parseRankingPageResponse } from "../src/lib/history.ts";
 
 const capturedAt = "2026-09-09T12:00:00.000Z";
@@ -24,7 +24,14 @@ const histories: RepositoryStarHistory[] = candidates.map((r, i) => ({ full_name
 }));
 
 describe("discovery and resurgence boards", () => {
-  it.each(["trend-intelligence-v7-shadow", "trend-intelligence-v8-shadow"] as const)("recognizes classification in %s snapshots", (version) => {
+  it("treats trend-intelligence v7 and later as classified, like the snapshot summary", () => {
+    expect(["v6", "v7", "v8", "v9", "v10"].map(v => isClassifiedScoreVersion(`trend-intelligence-${v}-shadow`)))
+      .toEqual([false, true, true, true, true]);
+    expect(isClassifiedScoreVersion(undefined)).toBe(false);
+    expect(isClassifiedScoreVersion("trend-intelligence-v10000000000-shadow")).toBe(false);
+  });
+
+  it.each(["trend-intelligence-v7-shadow", "trend-intelligence-v8-shadow", "trend-intelligence-v9-shadow"] as const)("recognizes classification in %s snapshots", (version) => {
     const repositories = rankTrendIntelligence(rankRepositories(candidates, capturedAt), [], capturedAt, histories, origins)
       .map(repository => ({ ...repository, trend_intelligence: { ...repository.trend_intelligence, score_version: version } }));
     const page = buildLocalRankingPage({ snapshot: { id: version, captured_at: capturedAt, source: "test", repositories },

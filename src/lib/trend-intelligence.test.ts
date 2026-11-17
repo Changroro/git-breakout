@@ -420,10 +420,30 @@ describe("rankTrendIntelligence", () => {
       starHistories(10),
     );
 
-    expect(ranked[0].trend_intelligence.score_version).toBe("trend-intelligence-v8-shadow");
-    const historical = structuredClone(ranked[0]);
-    historical.trend_intelligence.score_version = "trend-intelligence-v2-shadow";
-    expect(trendIntelligenceFor(historical)?.score_version).toBe("trend-intelligence-v2-shadow");
+    expect(ranked[0].trend_intelligence.score_version).toBe("trend-intelligence-v9-shadow");
+    for (const version of ["trend-intelligence-v2-shadow", "trend-intelligence-v7-shadow", "trend-intelligence-v8-shadow"] as const) {
+      const historical = structuredClone(ranked[0]);
+      historical.trend_intelligence.score_version = version;
+      expect(trendIntelligenceFor(historical)?.score_version).toBe(version);
+    }
+  });
+
+  it("keeps actor acceleration as evidence without averaging it into the breakout score", () => {
+    const ranked = rankTrendIntelligence(
+      Array.from({ length: 20 }, (_, index) => repository(index, { delta6: 10 + index * 3, delta24: 20 + index * 5 })),
+      Array.from({ length: 20 }, (_, index) => eventSignals(index, { h6: 10 + (index % 4) * 6, h24: 30 + index })),
+      CAPTURED_AT,
+      starHistories(20),
+    );
+    const scored = ranked.filter((item) => item.trend_intelligence.breakout.score !== null);
+
+    expect(scored.length).toBeGreaterThan(2);
+    for (const item of scored) {
+      const { actor_acceleration, ...rest } = item.trend_intelligence.breakout.components;
+      const known = Object.values(rest).filter((value): value is number => value !== null);
+      expect(actor_acceleration).not.toBeNull();
+      expect(item.trend_intelligence.breakout.score).toBeCloseTo(known.reduce((sum, value) => sum + value, 0) / known.length * 100, 3);
+    }
   });
 
   it("rejects stale event evidence", () => {

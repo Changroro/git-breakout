@@ -1,0 +1,182 @@
+diff --git a/deploy/oracle/auto-deploy.sh b/deploy/oracle/auto-deploy.sh
+index 7a85b90..d65faee 100755
+--- a/deploy/oracle/auto-deploy.sh
++++ b/deploy/oracle/auto-deploy.sh
+@@ -86,7 +86,7 @@ create table if not exists radar.schema_migrations (
+ revoke all on radar.schema_migrations from public, web_anon, collector;
+ SQL
+ pending_migrations=()
+-for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record 025_classified_board_exposures 026_identity_context_state 027_collection_summary_comparisons 028_retention_candidate_summary; do
++for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record 025_classified_board_exposures 026_identity_context_state 027_collection_summary_comparisons 028_retention_candidate_summary 029_classification_version_floor; do
+   migration_file="$TREND_RADAR_REPO/deploy/oracle/db/migrations/$migration.sql"
+   test -f "$migration_file" || { echo "Database migration is unavailable: $migration" >&2; exit 1; }
+   checksum=$(sha256sum "$migration_file" | cut -d' ' -f1)
+diff --git a/deploy/oracle/db/migrations/029_classification_version_floor.sql b/deploy/oracle/db/migrations/029_classification_version_floor.sql
+new file mode 100644
+index 0000000..71c268e
+--- /dev/null
++++ b/deploy/oracle/db/migrations/029_classification_version_floor.sql
+@@ -0,0 +1,29 @@
++begin;
++
++-- Every trend-intelligence version from v7 on classifies discovery candidates, so later versions stay counted.
++create or replace function radar.refresh_snapshot_summary(p_snapshot_id uuid)
++returns void language sql set search_path=pg_catalog,radar as $$
++  insert into radar.snapshot_summary
++  with candidates as materialized (
++    select full_name_key,payload_json from radar.snapshot_repositories where snapshot_id=p_snapshot_id
++  ), languages as (
++    select lower(btrim(payload_json->>'language')) as value,min(btrim(payload_json->>'language')) as label,count(*)::integer as count
++    from candidates where nullif(btrim(payload_json->>'language'),'') is not null group by lower(btrim(payload_json->>'language'))
++  ), topics as (
++    select lower(btrim(t.value)) as value,min(btrim(t.value)) as label,count(distinct full_name_key)::integer as count
++    from candidates cross join lateral jsonb_array_elements_text(payload_json->'topics') t(value)
++    where btrim(t.value)<>'' group by lower(btrim(t.value))
++  )
++  select p_snapshot_id,
++    coalesce((select jsonb_agg(to_jsonb(l) order by count desc,label) from languages l),'[]'::jsonb),
++    coalesce((select jsonb_agg(to_jsonb(t) order by count desc,label) from topics t),'[]'::jsonb),
++    exists(select 1 from candidates where payload_json ? 'trend_intelligence'),
++    exists(select 1 from candidates where substring(payload_json #>> '{trend_intelligence,score_version}' from '^trend-intelligence-v([0-9]{1,9})-shadow$')::integer >= 7)
++  on conflict(snapshot_id) do update set languages=excluded.languages,topics=excluded.topics,
++    intelligence_available=excluded.intelligence_available,classification_available=excluded.classification_available;
++$$;
++revoke execute on function radar.refresh_snapshot_summary(uuid) from public;
++grant execute on function radar.refresh_snapshot_summary(uuid) to collector;
++
++notify pgrst, 'reload schema';
++commit;
+diff --git a/deploy/oracle/operations.test.ts b/deploy/oracle/operations.test.ts
+index 03d0716..c327588 100644
+--- a/deploy/oracle/operations.test.ts
++++ b/deploy/oracle/operations.test.ts
+@@ -24,7 +24,7 @@ function fixture(script: string) {
+ 
+ function deploymentFixture() {
+   const f = fixture("auto-deploy.sh");
+-  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record", "025_classified_board_exposures", "026_identity_context_state", "027_collection_summary_comparisons", "028_retention_candidate_summary"];
++  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record", "025_classified_board_exposures", "026_identity_context_state", "027_collection_summary_comparisons", "028_retention_candidate_summary", "029_classification_version_floor"];
+   for (const migration of migrations) writeFileSync(join(f.repo, "deploy/oracle/db/migrations", `${migration}.sql`), "select 'fixture migration';\n");
+   writeFileSync(join(f.state, "active-image"), "sha256:previous\n");
+   writeFileSync(join(f.state, "deployed-revision"), "previous-revision\n");
+@@ -91,7 +91,7 @@ describe("Oracle operation behavior", () => {
+       expect(existsSync(join(f.state, "failed-target"))).toBe(true);
+       expect(f.run({ BROKEN_IMAGE: "1" }).status).toBe(1);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(18);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(19);
+     } finally { f.close(); }
+   });
+ 
+@@ -104,7 +104,7 @@ describe("Oracle operation behavior", () => {
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\nbuild\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(18);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(19);
+     } finally { f.close(); }
+   });
+ 
+@@ -115,7 +115,7 @@ describe("Oracle operation behavior", () => {
+       rmSync(join(f.state, "ledger"), { recursive: true });
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(36);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(38);
+     } finally { f.close(); }
+   });
+ 
+diff --git a/deploy/oracle/tests/audit-regression.mjs b/deploy/oracle/tests/audit-regression.mjs
+index 62a8538..7d9af69 100644
+--- a/deploy/oracle/tests/audit-regression.mjs
++++ b/deploy/oracle/tests/audit-regression.mjs
+@@ -8,9 +8,9 @@ import { dirname, join, resolve } from 'node:path';
+ const directory = dirname(fileURLToPath(import.meta.url));
+ const root = resolve(directory, '../../..');
+ const selected = process.argv.slice(2);
+-const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', '023', '024', '025', '026', '027', '028', 'backup'] : selected;
++const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', '023', '024', '025', '026', '027', '028', '029', 'backup'] : selected;
+ for (const name of modules) {
+-  if (!/^(core|017|018|019|020|021|022|023|024|025|026|027|028|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
++  if (!/^(core|017|018|019|020|021|022|023|024|025|026|027|028|029|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
+ }
+ const suites = await Promise.all(modules.map(async name => ({
+   name,
+diff --git a/deploy/oracle/tests/regression-021.mjs b/deploy/oracle/tests/regression-021.mjs
+index 13e08e2..9b01eab 100644
+--- a/deploy/oracle/tests/regression-021.mjs
++++ b/deploy/oracle/tests/regression-021.mjs
+@@ -2,12 +2,12 @@ import assert from 'node:assert/strict';
+ 
+ export default async function ({ sql, check, repository }) {
+   await check('v8 and v7 snapshots retain classification availability while older versions stay historical', () => {
+-    for (const [index, version] of [6, 7, 8].entries()) {
++    for (const [index, version] of [6, 7, 8, 9, 10].entries()) {
+       const id = `00000000-0000-4000-8000-00000000030${index}`;
+       const row = repository({ trend_intelligence: { score_version: `trend-intelligence-v${version}-shadow` } });
+       sql(`set role collector;
+-        select api.start_collection('${id}', now() - interval '${12 - index * 3} hours');
+-        select api.complete_collection('${id}', now() - interval '${12 - index * 3} hours', 'fixture',
++        select api.start_collection('${id}', now() - interval '${16 - index * 3} hours');
++        select api.complete_collection('${id}', now() - interval '${16 - index * 3} hours', 'fixture',
+           $payload$${JSON.stringify([row])}$payload$::jsonb);`);
+       assert.equal(sql(`set role web_anon; select classification_available from radar.snapshot_summary where snapshot_id='${id}'`), version >= 7 ? 't' : 'f');
+     }
+diff --git a/deploy/oracle/tests/regression-029.mjs b/deploy/oracle/tests/regression-029.mjs
+new file mode 100644
+index 0000000..3ccbd98
+--- /dev/null
++++ b/deploy/oracle/tests/regression-029.mjs
+@@ -0,0 +1,52 @@
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++
++const source = name => readFileSync(new URL(`../db/migrations/${name}.sql`, import.meta.url), 'utf8');
++
++export default async function ({ sql, json, check, repository }) {
++  const version = number => `trend-intelligence-v${number}-shadow`;
++  // Each entry is one snapshot; null stands for a row without trend_intelligence.
++  const stored = [[null], [{}], [version(6)], [version(7)], [version(8)], [version(6), version(8)], [null, version(7)],
++    ['trend-intelligence-v8'], ['trend-intelligence-v8-shadow-2'], ['intelligence-v8-shadow'], ['trend-intelligence-vx-shadow'],
++    ['trend-intelligence-v-shadow'], ['Trend-Intelligence-V8-Shadow'], [''], [version(99999999999)]];
++  const later = [[version(9)], [version(10)], [version(6), version(9)]];
++  const save = (rows, index) => {
++    const id = `29000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`;
++    const capturedAt = new Date(Date.UTC(2026, 8, 1) + index * 7200000).toISOString();
++    const values = rows.map((row, rank) => {
++      const fullName = `floor/project-${rank}`;
++      const payload = repository({ full_name: fullName, rank: rank + 1,
++        ...(row === null ? {} : { trend_intelligence: typeof row === 'string' ? { score_version: row } : row }) });
++      return `('${id}','${capturedAt}','${fullName}',${rank + 1},100,$p$${JSON.stringify(payload)}$p$::jsonb)`;
++    });
++    sql(`begin; set local role collector;
++      insert into radar.collector_runs(id,started_at,finished_at,status) values('${id}','${capturedAt}','${capturedAt}','completed');
++      insert into radar.snapshots(id,captured_at,source,repository_count) values('${id}','${capturedAt}','version-floor-test',${rows.length});
++      insert into radar.snapshot_repositories(snapshot_id,captured_at,full_name,rank,stars,payload_json) values ${values.join(',')}; commit;`);
++    return id;
++  };
++  const summary = id => json(`select to_jsonb(s) from radar.snapshot_summary s where snapshot_id='${id}'`);
++  const reference = id => {
++    sql(`select radar.refresh_snapshot_summary_reference('${id}')`);
++    return summary(id);
++  };
++
++  await check('029 version floor keeps every 021 result for stored versions and counts later versions', () => {
++    const original = source('021_v8_classification').match(/create or replace function radar\.refresh_snapshot_summary[\s\S]*?\n\$\$;/)[0];
++    sql(original.replace('radar.refresh_snapshot_summary(', 'radar.refresh_snapshot_summary_reference('));
++    const classified = [];
++    stored.forEach((rows, index) => {
++      const id = save(rows, index);
++      const current = summary(id);
++      assert.deepEqual(current, reference(id));
++      if (current.classification_available) classified.push(index);
++    });
++    assert.deepEqual(classified, [3, 4, 5, 6]);
++    later.forEach((rows, index) => {
++      const id = save(rows, stored.length + index);
++      const current = summary(id);
++      assert.equal(current.classification_available, true);
++      assert.deepEqual(reference(id), { ...current, classification_available: false });
++    });
++  });
++}

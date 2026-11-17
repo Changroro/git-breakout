@@ -93,7 +93,8 @@ export type TrendIntelligence = {
     | "trend-intelligence-v5-shadow"
     | "trend-intelligence-v6-shadow"
     | "trend-intelligence-v7-shadow"
-    | "trend-intelligence-v8-shadow";
+    | "trend-intelligence-v8-shadow"
+    | "trend-intelligence-v9-shadow";
   phase: TrendPhase;
   confidence: Confidence;
   star_evidence_window_hours: 1 | 6 | 24 | null;
@@ -139,6 +140,7 @@ export function trendIntelligenceFor(repository: RankedRepository): TrendIntelli
       "trend-intelligence-v6-shadow",
       "trend-intelligence-v7-shadow",
       "trend-intelligence-v8-shadow",
+      "trend-intelligence-v9-shadow",
     ].includes(String(value.score_version))
   ) {
     throw new TypeError(`Repository ${repository.full_name} has invalid trend intelligence`);
@@ -646,7 +648,8 @@ export function rankTrendIntelligence(
       };
       breakoutCalculations.set(row.repository.full_name, {
         components,
-        score: scoreFrom(known(Object.values(components))),
+        // Actor acceleration is an unscaled difference, so busy repositories land at both extremes; kept as evidence only.
+        score: scoreFrom(known(Object.values({ ...components, actor_acceleration: null }))),
       });
     });
 
@@ -738,7 +741,7 @@ export function rankTrendIntelligence(
         components: { ...row.repository.momentum.components },
       },
       trend_intelligence: {
-        score_version: "trend-intelligence-v8-shadow",
+        score_version: "trend-intelligence-v9-shadow",
         phase,
         confidence,
         star_evidence_window_hours: row.starEvidenceWindowHours,

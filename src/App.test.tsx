@@ -314,7 +314,7 @@ describe("TrackRecordSection", () => {
     expect(markup).toContain("log1p(value) × 55");
     expect(markup).toContain("Official Trending signal");
     expect(markup).toContain("24h → 6h → 1h");
-    expect(markup).toContain("trend-intelligence-v7-shadow");
+    expect(markup).toContain("trend-intelligence-v9-shadow");
   });
 });
 

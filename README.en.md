@@ -92,7 +92,7 @@ score = log1p(observedStarsPerDay) × 55
 - Observed star velocity begins only after measurements are at least two hours apart.
 - GitHub Trending rank is used for discovery and evidence, not added directly to momentum.
 - Missing evidence remains `insufficient_data` instead of being converted into a zero score.
-- New discoveries, Resurgence and Current heat are stored separately under `trend-intelligence-v8-shadow`. Rates use actual elapsed observation time when recorded; evidence records the history fetch timestamp and the self-baseline period and gap.
+- New discoveries, Resurgence and Current heat are stored separately under `trend-intelligence-v9-shadow`. Rates use actual elapsed observation time when recorded; evidence records the history fetch timestamp and the self-baseline period and gap. Actor acceleration is recorded as evidence but not averaged into the New discoveries and Resurgence scores.
 
 New discoveries is the default view, with Momentum available separately. This navigation choice does not establish the new model's predictive quality. Track Record measures what happened after the board showed a repository, but its hit rule (Trending Daily or +500 stars within seven days) is one definition, and artificial growth such as star farming can still count as a hit. Repeated Watch activity can contribute to heat and persistence, so scores do not establish organic interest or sustained development.
 

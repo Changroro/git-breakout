@@ -16,6 +16,12 @@ import { emptyBoardTrackRecord, type TrackRecord } from "../src/lib/discovery-tr
 
 const MAX_TOPIC_FACETS = 500;
 
+// Same rule as radar.refresh_snapshot_summary (migration 029): classification exists from v7 on.
+export function isClassifiedScoreVersion(version: string | undefined): boolean {
+  const match = /^trend-intelligence-v([0-9]{1,9})-shadow$/.exec(version ?? "");
+  return match !== null && Number(match[1]) >= 7;
+}
+
 export function emptyTrackRecord(generatedAt: string): TrackRecord {
   return {
     schema_version: "1.0",
@@ -128,10 +134,8 @@ export function buildLocalRankingPage({
     ),
     languages: facets.languages,
     topics: boundedTopics(facets.topics, filters.topic),
-    classification_available: snapshot.repositories.some(repository => {
-      const version = trendIntelligenceFor(repository)?.score_version;
-      return version === "trend-intelligence-v7-shadow" || version === "trend-intelligence-v8-shadow";
-    }),
+    classification_available: snapshot.repositories.some(repository =>
+      isClassifiedScoreVersion(trendIntelligenceFor(repository)?.score_version)),
     track_record: emptyTrackRecord(snapshot.captured_at),
     repositories: candidates.slice(start, start + pageSize).map((repository) => ({
       ...repository,
