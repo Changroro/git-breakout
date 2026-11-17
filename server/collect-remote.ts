@@ -84,7 +84,7 @@ export async function collectRemoteOnce({
     const payload = intelligentRepositories.map(repository => ({ ...repository,
       repository_aliases: aliasesById.get(repository.repository_id!)! }));
     result = { runId, capturedAt, repositoryCount: payload.length,
-      message: `Collected ${payload.length} repositories from ${eventRepositoryNames.length} event candidates after retaining ${retainedRepositoryNames.length} of ${summary.repositories.length} observed repositories in ${runId} at ${capturedAt}; star history refreshed ${starHistory.fetched}, reused ${starHistory.reused}, missing ${starHistory.skipped} within a budget of ${fetchBudget} from ${rateLimit.remaining} remaining core calls` };
+      message: `Collected ${payload.length} repositories from ${eventRepositoryNames.length} event candidates after retaining ${retainedRepositoryNames.length} of ${summary.observedRepositoryCount ?? summary.repositories.length} observed repositories in ${runId} at ${capturedAt}; star history refreshed ${starHistory.fetched}, reused ${starHistory.reused}, missing ${starHistory.skipped} within a budget of ${fetchBudget} from ${rateLimit.remaining} remaining core calls` };
     completing = true;
     await historyApi.completeCollection({ runId, capturedAt, source: "github_events_v2_shadow", repositories: payload });
     return result;

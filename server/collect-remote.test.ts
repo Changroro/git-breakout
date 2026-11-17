@@ -73,6 +73,13 @@ describe("remote collector identity and completion boundary", () => {
     expect(repository.growth.stars_delta_24h).toBeNull();
   });
 
+  it("reports the observed repository count when the summary lists only retention candidates", async () => {
+    const dependencies = fixture();
+    await expect(collectRemoteOnce(dependencies)).resolves.toMatchObject({ message: expect.stringContaining(" of 0 observed repositories") });
+    dependencies.historyApi.readCollectionSummary.mockResolvedValue({ ...summary, observedRepositoryCount: 58_712 });
+    await expect(collectRemoteOnce(dependencies)).resolves.toMatchObject({ message: expect.stringContaining(" of 58712 observed repositories") });
+  });
+
   it("recovers a committed collection after the completion response is lost", async () => {
     const dependencies = fixture();
     dependencies.historyApi.completeCollection.mockRejectedValue(new Error("response lost"));

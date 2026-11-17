@@ -85,6 +85,14 @@ describe("parseCollectionContext", () => {
     });
   });
 
+  it("reads the observed repository count of a candidate-only summary", () => {
+    const summary = { latest_captured_at: null, interval_minutes: 120,
+      retention_policy: { grace_days: 14, growth_days: 7, push_days: 30, repository_limit: 1_000 }, repositories: [] };
+    expect(parseCollectionContext({ ...summary, observed_repository_count: 58_712 }).observedRepositoryCount).toBe(58_712);
+    expect(parseCollectionContext(summary)).not.toHaveProperty("observedRepositoryCount");
+    expect(() => parseCollectionContext({ ...summary, observed_repository_count: -1 })).toThrow("observed_repository_count");
+  });
+
   it("rejects duplicate repositories and invalid observations", () => {
     expect(() => parseCollectionContext({
       latest_captured_at: null,

@@ -16,6 +16,8 @@ export type CollectionContext = {
   latestCapturedAt: string | null;
   intervalMinutes: number;
   retentionPolicy: RetentionPolicy;
+  // Present when the response lists only retention candidates instead of every observed repository.
+  observedRepositoryCount?: number;
   repositories: Array<RepositoryRetentionCandidate & {
     repositoryId?: string;
     identityStatus?: 'verified' | 'legacy_unverified';
@@ -337,6 +339,9 @@ export function parseCollectionContext(value: unknown): CollectionContext {
     latestCapturedAt,
     intervalMinutes: context.interval_minutes as number,
     retentionPolicy,
+    ...(context.observed_repository_count === undefined ? {} : {
+      observedRepositoryCount: requireNonNegativeInteger(context.observed_repository_count, "observed_repository_count"),
+    }),
     repositories,
   };
 }
