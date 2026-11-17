@@ -1,0 +1,246 @@
+diff --git a/deploy/oracle/auto-deploy.sh b/deploy/oracle/auto-deploy.sh
+index e8fec8e..7a85b90 100755
+--- a/deploy/oracle/auto-deploy.sh
++++ b/deploy/oracle/auto-deploy.sh
+@@ -86,7 +86,7 @@ create table if not exists radar.schema_migrations (
+ revoke all on radar.schema_migrations from public, web_anon, collector;
+ SQL
+ pending_migrations=()
+-for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record 025_classified_board_exposures 026_identity_context_state 027_collection_summary_comparisons; do
++for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record 025_classified_board_exposures 026_identity_context_state 027_collection_summary_comparisons 028_retention_candidate_summary; do
+   migration_file="$TREND_RADAR_REPO/deploy/oracle/db/migrations/$migration.sql"
+   test -f "$migration_file" || { echo "Database migration is unavailable: $migration" >&2; exit 1; }
+   checksum=$(sha256sum "$migration_file" | cut -d' ' -f1)
+diff --git a/deploy/oracle/db/migrations/028_retention_candidate_summary.sql b/deploy/oracle/db/migrations/028_retention_candidate_summary.sql
+new file mode 100644
+index 0000000..b2f2946
+--- /dev/null
++++ b/deploy/oracle/db/migrations/028_retention_candidate_summary.sql
+@@ -0,0 +1,66 @@
++begin;
++
++set local lock_timeout = '5s';
++
++-- GitHub push times are fixed-width UTC text, so byte order is time order.
++create index if not exists repository_state_pushed_idx on radar.repository_state (latest_pushed_at collate "C");
++-- Any other spelling cannot be range-compared and is always returned for the collector to judge.
++create index if not exists repository_state_unparsed_push_idx on radar.repository_state (full_name_key)
++  where latest_pushed_at !~ '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$';
++
++-- Returns every repository the collector's retention filter can accept, plus a day of slack on each window;
++-- the collector still applies the exact filter. A repository passes that filter only when first seen within
++-- grace_days (so observed since then), pushed within push_days, or observed within growth_days with more stars.
++create or replace function api.collection_summary()
++returns jsonb language sql stable set search_path=pg_catalog,radar as $$
++  with policy as (select * from radar.collector_settings where id),
++  latest as (select max(captured_at) as captured_at from radar.snapshots),
++  bounds as (
++    select latest.captured_at - make_interval(days=>policy.retention_growth_days) as growth_at,
++      latest.captured_at - make_interval(days=>greatest(policy.retention_grace_days,policy.retention_growth_days)+1) as observed_after,
++      to_char((latest.captured_at - make_interval(days=>policy.retention_push_days+1)) at time zone 'UTC',
++        'YYYY-MM-DD"T"HH24:MI:SS"Z"') as pushed_from
++    from policy cross join latest
++  ),
++  summaries as (
++    select s.*,
++      -- A repository unseen since the threshold compares against its latest row; capture times are unique.
++      case when s.latest_captured_at<=(select growth_at from bounds) then s.latest_captured_at else comparison.captured_at end
++        as growth_comparison_captured_at,
++      case when s.latest_captured_at<=(select growth_at from bounds) then s.latest_stars else comparison.stars end
++        as growth_comparison_stars
++    from radar.repository_state s
++    left join lateral (select captured_at,stars from radar.snapshot_repositories r
++      where s.latest_captured_at>(select growth_at from bounds)
++        and r.full_name_key=s.full_name_key and r.captured_at<=(select growth_at from bounds)
++      order by captured_at desc limit 1) comparison on true
++    where s.latest_captured_at>(select observed_after from bounds)
++      or s.latest_pushed_at collate "C">=(select pushed_from from bounds)
++      or s.latest_pushed_at !~ '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z$'
++  )
++  select jsonb_build_object(
++    'latest_captured_at',(select captured_at from latest),
++    'interval_minutes',(select interval_minutes from policy),
++    'retention_policy',(select jsonb_build_object('grace_days',retention_grace_days,'growth_days',retention_growth_days,
++      'push_days',retention_push_days,'repository_limit',retention_repository_limit) from policy),
++    'observed_repository_count',(select count(*) from radar.repository_state),
++    'repositories',coalesce((select jsonb_agg(jsonb_build_object(
++      'full_name',full_name,'first_seen_at',first_seen_at,'first_observed_stars',first_observed_stars,
++      'first_observation_was_trending',first_observation_was_trending,'official_trending_episode_count',official_trending_episode_count,
++      'latest_captured_at',latest_captured_at,'latest_pushed_at',latest_pushed_at,'latest_rank',latest_rank,'latest_stars',latest_stars,
++      'growth_comparison_captured_at',growth_comparison_captured_at,'growth_comparison_stars',growth_comparison_stars,
++      'observations','[]'::jsonb) order by full_name_key) from summaries),'[]'::jsonb)
++  );
++$$;
++revoke execute on function api.collection_summary() from public;
++grant execute on function api.collection_summary() to collector;
++
++-- JIT compilation took half of this function's run time on production data.
++alter function api.repository_identity_context(jsonb) set jit = off;
++
++-- Both repeat the key of a unique index on the same table.
++drop index if exists radar.snapshot_repositories_snapshot_idx;
++drop index if exists radar.repository_identity_history_idx;
++
++notify pgrst, 'reload schema';
++commit;
+diff --git a/deploy/oracle/operations.test.ts b/deploy/oracle/operations.test.ts
+index 6f0cb50..03d0716 100644
+--- a/deploy/oracle/operations.test.ts
++++ b/deploy/oracle/operations.test.ts
+@@ -24,7 +24,7 @@ function fixture(script: string) {
+ 
+ function deploymentFixture() {
+   const f = fixture("auto-deploy.sh");
+-  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record", "025_classified_board_exposures", "026_identity_context_state", "027_collection_summary_comparisons"];
++  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record", "025_classified_board_exposures", "026_identity_context_state", "027_collection_summary_comparisons", "028_retention_candidate_summary"];
+   for (const migration of migrations) writeFileSync(join(f.repo, "deploy/oracle/db/migrations", `${migration}.sql`), "select 'fixture migration';\n");
+   writeFileSync(join(f.state, "active-image"), "sha256:previous\n");
+   writeFileSync(join(f.state, "deployed-revision"), "previous-revision\n");
+@@ -91,7 +91,7 @@ describe("Oracle operation behavior", () => {
+       expect(existsSync(join(f.state, "failed-target"))).toBe(true);
+       expect(f.run({ BROKEN_IMAGE: "1" }).status).toBe(1);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(17);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(18);
+     } finally { f.close(); }
+   });
+ 
+@@ -104,7 +104,7 @@ describe("Oracle operation behavior", () => {
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\nbuild\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(17);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(18);
+     } finally { f.close(); }
+   });
+ 
+@@ -115,7 +115,7 @@ describe("Oracle operation behavior", () => {
+       rmSync(join(f.state, "ledger"), { recursive: true });
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(34);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(36);
+     } finally { f.close(); }
+   });
+ 
+diff --git a/deploy/oracle/tests/audit-regression.mjs b/deploy/oracle/tests/audit-regression.mjs
+index 9889259..62a8538 100644
+--- a/deploy/oracle/tests/audit-regression.mjs
++++ b/deploy/oracle/tests/audit-regression.mjs
+@@ -8,9 +8,9 @@ import { dirname, join, resolve } from 'node:path';
+ const directory = dirname(fileURLToPath(import.meta.url));
+ const root = resolve(directory, '../../..');
+ const selected = process.argv.slice(2);
+-const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', '023', '024', '025', '026', '027', 'backup'] : selected;
++const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', '023', '024', '025', '026', '027', '028', 'backup'] : selected;
+ for (const name of modules) {
+-  if (!/^(core|017|018|019|020|021|022|023|024|025|026|027|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
++  if (!/^(core|017|018|019|020|021|022|023|024|025|026|027|028|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
+ }
+ const suites = await Promise.all(modules.map(async name => ({
+   name,
+diff --git a/deploy/oracle/tests/regression-028.mjs b/deploy/oracle/tests/regression-028.mjs
+new file mode 100644
+index 0000000..28513df
+--- /dev/null
++++ b/deploy/oracle/tests/regression-028.mjs
+@@ -0,0 +1,99 @@
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++
++const source = name => readFileSync(new URL(`../db/migrations/${name}.sql`, import.meta.url), 'utf8');
++const server = name => import(new URL(`../../../server/${name}.ts`, import.meta.url).href);
++const DAY = 86400000;
++const START = Date.UTC(2026, 8, 1);
++const OLD_PUSH = '2026-08-01T00:00:00Z';
++const range = (from, to) => day => day >= from && day <= to;
++// The last snapshot is day 44 (2026-10-15): grace starts 10-01, push starts 09-15, growth compares at 10-08.
++const repositories = {
++  'stale/project': { present: range(0, 4), pushed: '2026-09-01T00:00:00Z' },
++  'grace/project': { present: range(31, 33) },
++  'grace-edge/project': { present: range(30, 30) },
++  'grace-out/project': { present: range(29, 29) },
++  'pushed/project': { present: range(0, 10), pushed: '2026-09-20T00:00:00Z' },
++  'pushed-edge/project': { present: range(0, 2), pushed: '2026-09-15T00:00:00Z' },
++  'pushed-fraction/project': { present: range(0, 2), pushed: '2026-09-15T00:00:00.000Z' },
++  'pushed-out/project': { present: range(0, 2), pushed: '2026-09-14T23:59:59Z' },
++  'offset/project': { present: range(0, 2), pushed: '2026-09-20T09:00:00+09:00' },
++  'offset-old/project': { present: range(0, 2), pushed: '2026-08-01T09:00:00+09:00' },
++  'null-push/project': { present: range(0, 2), pushed: null },
++  'gained/project': { present: range(0, 44), stars: day => 100 + day },
++  'flat/project': { present: range(0, 44) },
++  'resumed/project': { present: day => day <= 2 || day >= 43, stars: day => 100 + day },
++  'dropped/project': { present: range(0, 36), stars: day => 100 + day },
++};
++const eligible = ['gained/project', 'grace-edge/project', 'grace/project', 'offset/project', 'pushed-edge/project',
++  'pushed-fraction/project', 'pushed/project', 'resumed/project'];
++const candidatesOnly = ['dropped/project', 'flat/project', 'offset-old/project', 'pushed-out/project'];
++
++export default async function ({ sql, json, check, repository }) {
++  const { parseCollectionContext } = await server('remote-history');
++  const { selectRetainedRepositoryNames } = await server('retention');
++  const retained = response => {
++    const context = parseCollectionContext(response);
++    return selectRetainedRepositoryNames(context.repositories, context.latestCapturedAt, context.retentionPolicy);
++  };
++  const summary = () => json('set role collector; select api.collection_summary()');
++  const reference = () => json('set role collector; select radar.collection_context_reference(null, false)');
++
++  await check('028 candidate summary retains the same repositories as the full summary', () => {
++    const original = source('013_repository_state').match(/create or replace function radar\.collection_context_data[\s\S]*?\n\$\$;/)[0];
++    sql(`${original.replace('radar.collection_context_data(', 'radar.collection_context_reference(')}
++      grant execute on function radar.collection_context_reference(text[], boolean) to collector;`);
++    assert.deepEqual(summary(), { ...reference(), observed_repository_count: 0 });
++    for (let day = 0; day < 45; day += 1) {
++      const id = `28000000-0000-4000-8000-${String(day + 1).padStart(12, '0')}`;
++      const capturedAt = new Date(START + day * DAY).toISOString();
++      const rows = Object.entries(repositories).filter(([, value]) => value.present(day)).map(([name, value], index) =>
++        `('${id}','${capturedAt}','${name}',${index + 1},${value.stars?.(day) ?? 100},$p$${JSON.stringify(repository({
++          full_name: name, rank: index + 1, pushed_at: value.pushed === undefined ? OLD_PUSH : value.pushed }))}$p$::jsonb)`);
++      sql(`begin; set local role collector;
++        insert into radar.collector_runs(id,started_at,finished_at,status) values('${id}','${capturedAt}','${capturedAt}','completed');
++        insert into radar.snapshots(id,captured_at,source,repository_count) values('${id}','${capturedAt}','candidate-test',${rows.length});
++        insert into radar.snapshot_repositories(snapshot_id,captured_at,full_name,rank,stars,payload_json) values ${rows.join(',')}; commit;`);
++    }
++    const compare = () => {
++      const [full, candidates] = [reference(), summary()];
++      const { repositories: fullRows, ...fullHeader } = full;
++      const { repositories: candidateRows, observed_repository_count: observed, ...candidateHeader } = candidates;
++      assert.deepEqual(candidateHeader, fullHeader);
++      assert.equal(observed, fullRows.length);
++      for (const row of candidateRows) assert.deepEqual(row, fullRows.find(other => other.full_name === row.full_name));
++      assert.deepEqual(retained(candidates), retained(full));
++      return { names: retained(candidates), candidateRows };
++    };
++    const first = compare();
++    assert.deepEqual([...first.names].sort(), eligible);
++    assert.deepEqual(first.candidateRows.map(row => row.full_name), [...eligible, ...candidatesOnly].sort());
++    sql('update radar.collector_settings set retention_repository_limit = 3');
++    assert.equal(compare().names.length, 3);
++    // A policy change moves the candidate windows with it.
++    sql('update radar.collector_settings set retention_repository_limit = 1000, retention_grace_days = 40, retention_push_days = 50, retention_growth_days = 20');
++    const widened = compare();
++    assert.ok(widened.names.includes('stale/project') && widened.names.includes('dropped/project'));
++    sql('update radar.collector_settings set retention_grace_days = 14, retention_push_days = 30, retention_growth_days = 7');
++  });
++
++  await check('028 summary reads candidates through indexes and reapplies cleanly', () => {
++    const body = source('028_retention_candidate_summary').match(/function api\.collection_summary\(\)[\s\S]*?\$\$\n([\s\S]*?)\n\$\$;/)[1];
++    const plan = sql(`set enable_seqscan = off; set enable_indexscan = off; set enable_indexonlyscan = off; explain ${body}`);
++    for (const index of ['repository_state_observed_idx', 'repository_state_pushed_idx', 'repository_state_unparsed_push_idx']) {
++      assert.match(plan, new RegExp(`Bitmap Index Scan on ${index}`));
++    }
++    const state = () => ({ summary: summary(),
++      settings: sql("select proconfig::text from pg_proc where oid = 'api.repository_identity_context(jsonb)'::regprocedure"),
++      indexes: sql(`select string_agg(indexname, ',' order by indexname) from pg_indexes where schemaname = 'radar'
++        and tablename in ('repository_state', 'snapshot_repositories', 'repository_identity_observations')`) });
++    const before = state();
++    assert.match(before.settings, /jit=off/);
++    assert.doesNotMatch(before.indexes, /snapshot_repositories_snapshot_idx|repository_identity_history_idx/);
++    assert.match(before.indexes, /snapshot_repositories_snapshot_id_rank_key/);
++    assert.match(before.indexes, /repository_identity_observations_repository_id_captured_at_key/);
++    sql(source('028_retention_candidate_summary'));
++    assert.deepEqual(state(), before);
++    sql('drop function radar.collection_context_reference(text[], boolean)');
++  });
++}

@@ -1,0 +1,175 @@
+diff --git a/deploy/oracle/auto-deploy.sh b/deploy/oracle/auto-deploy.sh
+index 835b5d1..e8fec8e 100755
+--- a/deploy/oracle/auto-deploy.sh
++++ b/deploy/oracle/auto-deploy.sh
+@@ -86,7 +86,7 @@ create table if not exists radar.schema_migrations (
+ revoke all on radar.schema_migrations from public, web_anon, collector;
+ SQL
+ pending_migrations=()
+-for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record 025_classified_board_exposures 026_identity_context_state; do
++for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record 025_classified_board_exposures 026_identity_context_state 027_collection_summary_comparisons; do
+   migration_file="$TREND_RADAR_REPO/deploy/oracle/db/migrations/$migration.sql"
+   test -f "$migration_file" || { echo "Database migration is unavailable: $migration" >&2; exit 1; }
+   checksum=$(sha256sum "$migration_file" | cut -d' ' -f1)
+diff --git a/deploy/oracle/db/migrations/027_collection_summary_comparisons.sql b/deploy/oracle/db/migrations/027_collection_summary_comparisons.sql
+new file mode 100644
+index 0000000..c3392f9
+--- /dev/null
++++ b/deploy/oracle/db/migrations/027_collection_summary_comparisons.sql
+@@ -0,0 +1,43 @@
++begin;
++
++create or replace function radar.collection_context_data(p_full_names text[], p_observations boolean)
++returns jsonb language sql stable set search_path=pg_catalog,radar as $$
++  with policy as (select * from radar.collector_settings where id),
++  latest as (select max(captured_at) as captured_at from radar.snapshots),
++  summaries as (
++    select s.*,
++      -- A repository unseen since the threshold compares against its latest row; capture times are unique.
++      case when s.latest_captured_at<=latest.captured_at-make_interval(days=>policy.retention_growth_days)
++        then s.latest_captured_at else comparison.captured_at end as growth_comparison_captured_at,
++      case when s.latest_captured_at<=latest.captured_at-make_interval(days=>policy.retention_growth_days)
++        then s.latest_stars else comparison.stars end as growth_comparison_stars,
++      case when p_observations then (
++        select jsonb_agg(jsonb_build_object('captured_at',o.captured_at,'stars',o.stars) order by o.captured_at desc)
++        from (select captured_at,stars from radar.snapshot_repositories r
++          where r.full_name_key=s.full_name_key order by captured_at desc limit 20) o
++      ) else '[]'::jsonb end as observations
++    from radar.repository_state s cross join policy cross join latest
++    left join lateral (select captured_at,stars from radar.snapshot_repositories r
++      where s.latest_captured_at>latest.captured_at-make_interval(days=>policy.retention_growth_days)
++        and r.full_name_key=s.full_name_key and r.captured_at<=latest.captured_at-make_interval(days=>policy.retention_growth_days)
++      order by captured_at desc limit 1) comparison on true
++    where p_full_names is null or s.full_name_key=any(p_full_names)
++  )
++  select jsonb_build_object(
++    'latest_captured_at',(select captured_at from latest),
++    'interval_minutes',(select interval_minutes from policy),
++    'retention_policy',(select jsonb_build_object('grace_days',retention_grace_days,'growth_days',retention_growth_days,
++      'push_days',retention_push_days,'repository_limit',retention_repository_limit) from policy),
++    'repositories',coalesce((select jsonb_agg(jsonb_build_object(
++      'full_name',full_name,'first_seen_at',first_seen_at,'first_observed_stars',first_observed_stars,
++      'first_observation_was_trending',first_observation_was_trending,'official_trending_episode_count',official_trending_episode_count,
++      'latest_captured_at',latest_captured_at,'latest_pushed_at',latest_pushed_at,'latest_rank',latest_rank,'latest_stars',latest_stars,
++      'growth_comparison_captured_at',growth_comparison_captured_at,'growth_comparison_stars',growth_comparison_stars,
++      'observations',observations) order by full_name_key) from summaries),'[]'::jsonb)
++  );
++$$;
++revoke execute on function radar.collection_context_data(text[],boolean) from public;
++grant execute on function radar.collection_context_data(text[],boolean) to collector;
++
++notify pgrst, 'reload schema';
++commit;
+diff --git a/deploy/oracle/docker-compose.yml b/deploy/oracle/docker-compose.yml
+index 207986c..33755e9 100644
+--- a/deploy/oracle/docker-compose.yml
++++ b/deploy/oracle/docker-compose.yml
+@@ -4,6 +4,8 @@ services:
+   db:
+     image: postgres:17.6-alpine
+     restart: unless-stopped
++    # Keep the hot identity and history indexes resident and log RPCs approaching the 30s collector timeout.
++    command: ["postgres", "-c", "shared_buffers=1GB", "-c", "log_min_duration_statement=5s"]
+     environment:
+       POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+diff --git a/deploy/oracle/operations.test.ts b/deploy/oracle/operations.test.ts
+index 1a31b0c..6f0cb50 100644
+--- a/deploy/oracle/operations.test.ts
++++ b/deploy/oracle/operations.test.ts
+@@ -24,7 +24,7 @@ function fixture(script: string) {
+ 
+ function deploymentFixture() {
+   const f = fixture("auto-deploy.sh");
+-  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record", "025_classified_board_exposures", "026_identity_context_state"];
++  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record", "025_classified_board_exposures", "026_identity_context_state", "027_collection_summary_comparisons"];
+   for (const migration of migrations) writeFileSync(join(f.repo, "deploy/oracle/db/migrations", `${migration}.sql`), "select 'fixture migration';\n");
+   writeFileSync(join(f.state, "active-image"), "sha256:previous\n");
+   writeFileSync(join(f.state, "deployed-revision"), "previous-revision\n");
+@@ -91,7 +91,7 @@ describe("Oracle operation behavior", () => {
+       expect(existsSync(join(f.state, "failed-target"))).toBe(true);
+       expect(f.run({ BROKEN_IMAGE: "1" }).status).toBe(1);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(16);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(17);
+     } finally { f.close(); }
+   });
+ 
+@@ -104,7 +104,7 @@ describe("Oracle operation behavior", () => {
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\nbuild\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(16);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(17);
+     } finally { f.close(); }
+   });
+ 
+@@ -115,7 +115,7 @@ describe("Oracle operation behavior", () => {
+       rmSync(join(f.state, "ledger"), { recursive: true });
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(32);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(34);
+     } finally { f.close(); }
+   });
+ 
+diff --git a/deploy/oracle/tests/audit-regression.mjs b/deploy/oracle/tests/audit-regression.mjs
+index 40c44d8..9889259 100644
+--- a/deploy/oracle/tests/audit-regression.mjs
++++ b/deploy/oracle/tests/audit-regression.mjs
+@@ -8,9 +8,9 @@ import { dirname, join, resolve } from 'node:path';
+ const directory = dirname(fileURLToPath(import.meta.url));
+ const root = resolve(directory, '../../..');
+ const selected = process.argv.slice(2);
+-const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', '023', '024', '025', '026', 'backup'] : selected;
++const modules = selected.length === 0 ? ['core', '017', '018', '019', '020', '021', '022', '023', '024', '025', '026', '027', 'backup'] : selected;
+ for (const name of modules) {
+-  if (!/^(core|017|018|019|020|021|022|023|024|025|026|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
++  if (!/^(core|017|018|019|020|021|022|023|024|025|026|027|backup)$/.test(name)) throw new Error(`Unknown integration module: ${name}`);
+ }
+ const suites = await Promise.all(modules.map(async name => ({
+   name,
+diff --git a/deploy/oracle/tests/regression-027.mjs b/deploy/oracle/tests/regression-027.mjs
+new file mode 100644
+index 0000000..4bd573e
+--- /dev/null
++++ b/deploy/oracle/tests/regression-027.mjs
+@@ -0,0 +1,38 @@
++import assert from 'node:assert/strict';
++import { readFileSync } from 'node:fs';
++
++const source = name => readFileSync(new URL(`../db/migrations/${name}.sql`, import.meta.url), 'utf8');
++
++export default async function ({ sql, json, check, repository }) {
++  await check('027 collection summary matches the per-row growth comparison exactly', () => {
++    const original = source('013_repository_state').match(/create or replace function radar\.collection_context_data[\s\S]*?\n\$\$;/)[0];
++    sql(original.replace('radar.collection_context_data(', 'radar.collection_context_reference('));
++    const names = ['stale/project', 'recent/project', 'fresh/project', 'gap/project'];
++    let sequence = 0;
++    for (let day = 0; day < 20; day += 1) {
++      sequence += 1;
++      const id = `27000000-0000-4000-8000-${String(sequence).padStart(12, '0')}`;
++      const capturedAt = new Date(Date.UTC(2026, 8, 1) + day * 86400000).toISOString();
++      const present = names.filter(name => name === 'stale/project' ? day < 5 : name === 'fresh/project' ? day >= 16
++        : name === 'gap/project' ? day < 3 || day >= 18 : true);
++      const rows = present.map((name, index) => `('${id}','${capturedAt}','${name}',${index + 1},${100 * (index + 1) + day},
++        $p$${JSON.stringify(repository({ full_name: name, rank: index + 1 }))}$p$::jsonb)`).join(',');
++      sql(`begin; set local role collector;
++        insert into radar.collector_runs(id,started_at,finished_at,status) values('${id}','${capturedAt}','${capturedAt}','completed');
++        insert into radar.snapshots(id,captured_at,source,repository_count) values('${id}','${capturedAt}','summary-test',${present.length});
++        insert into radar.snapshot_repositories(snapshot_id,captured_at,full_name,rank,stars,payload_json) values ${rows}; commit;`);
++    }
++    const compare = args => assert.deepEqual(json(`set role collector; select radar.collection_context_data(${args})`),
++      json(`select radar.collection_context_reference(${args})`));
++    compare('null, false');
++    compare('null, true');
++    compare("array['gap/project','fresh/project'], true");
++    const summary = json('set role collector; select api.collection_summary()').repositories;
++    const growth = Object.fromEntries(summary.map(row => [row.full_name, row.growth_comparison_captured_at]));
++    assert.equal(growth['stale/project'], '2026-09-05T00:00:00+00:00');
++    assert.equal(growth['recent/project'], '2026-09-13T00:00:00+00:00');
++    assert.equal(growth['fresh/project'], null);
++    assert.equal(growth['gap/project'], '2026-09-03T00:00:00+00:00');
++    sql('drop function radar.collection_context_reference(text[], boolean)');
++  });
++}
