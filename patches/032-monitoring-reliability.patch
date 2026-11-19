@@ -1,0 +1,260 @@
+diff --git a/deploy/oracle/auto-deploy.sh b/deploy/oracle/auto-deploy.sh
+--- a/deploy/oracle/auto-deploy.sh
++++ b/deploy/oracle/auto-deploy.sh
+@@ -9,8 +9,6 @@
+ env_file="$TREND_RADAR_REPO/deploy/oracle/.env"
+ exec 9>/run/lock/github-trend-radar-deploy.lock
+ flock -n 9 || exit 0
+-exec 8>/run/lock/github-trend-radar-collector.lock
+-flock -n 8 || { echo "Collector is active; deployment deferred" >&2; exit 0; }
+ test -d "$TREND_RADAR_REPO/.git" || { echo "Git repository is unavailable" >&2; exit 1; }
+ test -f "$compose_file" || { echo "Compose file is unavailable" >&2; exit 1; }
+ test -f "$env_file" || { echo "Environment file is unavailable" >&2; exit 1; }
+@@ -24,7 +22,7 @@
+ fi
+ operations_digest=$(cd "$TREND_RADAR_REPO/deploy/oracle" && find . -type f \
+   \( -name '*.sh' -o -name '*.sql' -o -name '*.yml' -o -name '*.service' -o -name '*.timer' -o -name Dockerfile -o -name .env \) \
+-  -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
++  -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+ target="$target_revision:$operations_digest"
+ mkdir -p "$TREND_RADAR_STATE_DIR"
+ if test -f "$TREND_RADAR_STATE_DIR/failed-target" && test "$(<"$TREND_RADAR_STATE_DIR/failed-target")" = "$target"; then
+@@ -77,18 +75,22 @@
+ trap 'exit 130' INT
+ trap 'exit 143' TERM
+ export TREND_RADAR_WEB_IMAGE="github-trend-radar-web:$target_revision-${operations_digest:0:12}"
+-compose exec -T db sh -lc 'psql -X --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"' <<'SQL'
+-create table if not exists radar.schema_migrations (
+-  name text primary key,
+-  checksum text not null,
+-  applied_at timestamptz not null default now()
+-);
+-revoke all on radar.schema_migrations from public, web_anon, collector;
++ledger_exists=$(compose exec -T db sh -lc 'psql -X --set=ON_ERROR_STOP=1 --tuples-only --no-align --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"' <<'SQL'
++select to_regclass('radar.schema_migrations') is not null;
+ SQL
++)
++if [[ "$ledger_exists" != t && "$ledger_exists" != f ]]; then
++  echo "Could not determine whether the migration ledger exists" >&2
++  exit 1
++fi
+ pending_migrations=()
+-for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record 025_classified_board_exposures 026_identity_context_state 027_collection_summary_comparisons 028_retention_candidate_summary 029_classification_version_floor 030_collection_cold_path 031_repository_state_search_text; do
++for migration in 011_set_based_event_signals 012_discovery_resurgence 013_repository_state 014_snapshot_summaries 015_observed_series_window 016_selected_event_windows 017_collection_atomicity 018_event_coverage 019_repository_identity 020_service_status 021_v8_classification 022_event_processing_scope 023_identity_context_scalars 024_board_track_record 025_classified_board_exposures 026_identity_context_state 027_collection_summary_comparisons 028_retention_candidate_summary 029_classification_version_floor 030_collection_cold_path 031_repository_state_search_text 032_event_status_grace; do
+   migration_file="$TREND_RADAR_REPO/deploy/oracle/db/migrations/$migration.sql"
+   test -f "$migration_file" || { echo "Database migration is unavailable: $migration" >&2; exit 1; }
++  if test "$ledger_exists" = f; then
++    pending_migrations+=("$migration")
++    continue
++  fi
+   checksum=$(sha256sum "$migration_file" | cut -d' ' -f1)
+   applied=$(printf "select checksum from radar.schema_migrations where name = '%s';\n" "$migration" \
+     | compose exec -T db sh -lc 'psql -X --set=ON_ERROR_STOP=1 --tuples-only --no-align --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"')
+@@ -100,6 +102,8 @@
+ done
+ if test "${#pending_migrations[@]}" = 0 && test -f "$TREND_RADAR_STATE_DIR/deployed-target" \
+     && test "$(<"$TREND_RADAR_STATE_DIR/deployed-target")" = "$target"; then exit 0; fi
++exec 8>/run/lock/github-trend-radar-collector.lock
++flock -n 8 || { echo "Collector is active; deployment deferred" >&2; exit 0; }
+ active_lifecycle=$(compose exec -T db sh -lc 'psql -X --set=ON_ERROR_STOP=1 --tuples-only --no-align --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"' <<'SQL'
+ select count(*) from pg_stat_activity
+ where datname = current_database() and pid <> pg_backend_pid() and state <> 'idle'
+@@ -110,6 +114,14 @@
+   echo "A collector lifecycle RPC remains active; deployment deferred" >&2
+   exit 0
+ fi
++compose exec -T db sh -lc 'psql -X --set=ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"' <<'SQL'
++create table if not exists radar.schema_migrations (
++  name text primary key,
++  checksum text not null,
++  applied_at timestamptz not null default now()
++);
++revoke all on radar.schema_migrations from public, web_anon, collector;
++SQL
+ compose build web
+ for migration in "${pending_migrations[@]}"; do
+   migration_file="$TREND_RADAR_REPO/deploy/oracle/db/migrations/$migration.sql"
+diff --git a/deploy/oracle/collect-cycle.sh b/deploy/oracle/collect-cycle.sh
+--- a/deploy/oracle/collect-cycle.sh
++++ b/deploy/oracle/collect-cycle.sh
+@@ -8,9 +8,9 @@
+ env_file="$TREND_RADAR_REPO/deploy/oracle/.env"
+
+ exec 9>/run/lock/github-trend-radar-collector.lock
+-if ! flock -n 9; then
+-  echo "A GitBreakout collection is already running"
+-  exit 0
++if ! flock -w 60 9; then
++  echo "Could not acquire the GitBreakout collection lock within 60 seconds" >&2
++  exit 1
+ fi
+
+ test -d "$TREND_RADAR_REPO/.git" || { echo "Git repository is unavailable: $TREND_RADAR_REPO" >&2; exit 1; }
+diff --git a/deploy/oracle/db/migrations/032_event_status_grace.sql b/deploy/oracle/db/migrations/032_event_status_grace.sql
+new file mode 100644
+--- /dev/null
++++ b/deploy/oracle/db/migrations/032_event_status_grace.sql
+@@ -0,0 +1,58 @@
++begin;
++
++create or replace function api.service_status()
++returns jsonb
++language sql
++stable
++security definer
++set search_path = pg_catalog, radar
++set statement_timeout = '5s'
++as $$
++  with settings as (
++    select interval_minutes from radar.collector_settings where id
++  ), latest as (
++    select captured_at from radar.snapshots order by captured_at desc limit 1
++  ), latest_run as (
++    select started_at from radar.collector_runs where status = 'completed' order by started_at desc limit 1
++  ), failure as (
++    select finished_at from radar.collector_runs where status = 'failed' order by started_at desc limit 1
++  ), event_hours as (
++    select hour, h.bucket_at, h.rejected_line_count
++    from generate_series(
++      date_trunc('hour', now()) - interval '25 hours',
++      date_trunc('hour', now()) - interval '2 hours', interval '1 hour'
++    ) hour
++    left join radar.event_collection_hours h on h.bucket_at = hour
++  ), event_status as (
++    select count(*) filter (where bucket_at is null)::integer as missing_hours,
++      coalesce(bool_or(bucket_at is null and hour + interval '2 hours 10 minutes' <= now()), false) as overdue
++    from event_hours
++  )
++  select jsonb_build_object(
++    'schema_version', '1.0',
++    'status', case when latest.captured_at is null
++      or now() - latest.captured_at > make_interval(mins => settings.interval_minutes * 2)
++      or event_status.overdue
++      then 'degraded' else 'ok' end,
++    'latest_snapshot_at', latest.captured_at,
++    'snapshot_age_seconds', case when latest.captured_at is null then null
++      else greatest(0, extract(epoch from now() - latest.captured_at)) end,
++    'expected_interval_minutes', settings.interval_minutes,
++    'next_due_at', coalesce(latest_run.started_at + make_interval(mins => settings.interval_minutes), now()),
++    'last_failure', case when failure.finished_at is null then null else jsonb_build_object('at', failure.finished_at) end,
++    'events', jsonb_build_object(
++      'latest_completed_hour', (select max(bucket_at) from radar.event_collection_hours),
++      'missing_hours', event_status.missing_hours,
++      'excluded_invalid_names', (select coalesce(sum(rejected_line_count),0) from event_hours),
++      'source_complete', event_status.missing_hours = 0
++    )
++  )
++  from settings cross join event_status
++  left join latest on true left join latest_run on true left join failure on true;
++$$;
++
++revoke all on function api.service_status() from public;
++grant execute on function api.service_status() to web_anon, collector;
++
++notify pgrst, 'reload schema';
++commit;
+diff --git a/deploy/oracle/operations.test.ts b/deploy/oracle/operations.test.ts
+--- a/deploy/oracle/operations.test.ts
++++ b/deploy/oracle/operations.test.ts
+@@ -24,7 +24,7 @@
+
+ function deploymentFixture() {
+   const f = fixture("auto-deploy.sh");
+-  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record", "025_classified_board_exposures", "026_identity_context_state", "027_collection_summary_comparisons", "028_retention_candidate_summary", "029_classification_version_floor", "030_collection_cold_path", "031_repository_state_search_text"];
++  const migrations = ["011_set_based_event_signals", "012_discovery_resurgence", "013_repository_state", "014_snapshot_summaries", "015_observed_series_window", "016_selected_event_windows", "017_collection_atomicity", "018_event_coverage", "019_repository_identity", "020_service_status", "021_v8_classification", "022_event_processing_scope", "023_identity_context_scalars", "024_board_track_record", "025_classified_board_exposures", "026_identity_context_state", "027_collection_summary_comparisons", "028_retention_candidate_summary", "029_classification_version_floor", "030_collection_cold_path", "031_repository_state_search_text", "032_event_status_grace"];
+   for (const migration of migrations) writeFileSync(join(f.repo, "deploy/oracle/db/migrations", `${migration}.sql`), "select 'fixture migration';\n");
+   writeFileSync(join(f.state, "active-image"), "sha256:previous\n");
+   writeFileSync(join(f.state, "deployed-revision"), "previous-revision\n");
+@@ -42,8 +42,10 @@
+   *"up -d "*) printf '%s\\n' "$TREND_RADAR_WEB_IMAGE" > "$TREND_RADAR_STATE_DIR/active-image";;
+   *"exec -T db "*)
+     sql=$(cat)
+-    mkdir -p "$TREND_RADAR_STATE_DIR/ledger"
+     if [[ "$*" == *"notify pgrst"* ]]; then touch "$TREND_RADAR_STATE_DIR/schema-reloaded"
++    elif [[ "$sql" == "select to_regclass"* ]]; then
++      if [[ -d "$TREND_RADAR_STATE_DIR/ledger" ]]; then echo t; else echo f; fi
++    elif [[ "$sql" == "create table if not exists radar.schema_migrations"* ]]; then mkdir -p "$TREND_RADAR_STATE_DIR/ledger"
+     elif [[ "$sql" == *"from pg_stat_activity"* ]]; then echo 0
+     elif [[ "$sql" == "select checksum"* ]]; then
+       name=$(printf '%s' "$sql" | cut -d "'" -f2)
+@@ -91,7 +93,7 @@
+       expect(existsSync(join(f.state, "failed-target"))).toBe(true);
+       expect(f.run({ BROKEN_IMAGE: "1" }).status).toBe(1);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(21);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(22);
+     } finally { f.close(); }
+   });
+
+@@ -104,7 +106,24 @@
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+       expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\nbuild\n");
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(21);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(22);
++    } finally { f.close(); }
++  });
++
++  it("checks unchanged deployments while collection holds the shared lock", () => {
++    const f = deploymentFixture();
++    try {
++      expect(f.run().status).toBe(0);
++      f.command("flock", 'test "$*" != "-n 8"');
++      f.command("sort", 'test "${LC_ALL:-}" = C\ncommand -p sort "$@"');
++      const result = f.run({ LC_ALL: "C.UTF-8" });
++      expect(result.status, result.stderr).toBe(0);
++      expect(result.stderr).not.toContain("deployment deferred");
++      writeFileSync(join(f.repo, "deploy/oracle/.env"), "EXAMPLE=changed\n");
++      const changed = f.run();
++      expect(changed.status, changed.stderr).toBe(0);
++      expect(changed.stderr).toContain("deployment deferred");
++      expect(readFileSync(join(f.state, "builds"), "utf8")).toBe("build\n");
+     } finally { f.close(); }
+   });
+
+@@ -115,7 +134,7 @@
+       rmSync(join(f.state, "ledger"), { recursive: true });
+       const next = f.run();
+       expect(next.status, next.stderr).toBe(0);
+-      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(42);
++      expect(readFileSync(join(f.state, "applied"), "utf8").trim().split("\n")).toHaveLength(44);
+     } finally { f.close(); }
+   });
+
+@@ -135,6 +154,7 @@
+   it("collects event catch-up even when metadata is not due", () => {
+     const f = fixture("collect-cycle.sh");
+     try {
++      f.command("flock", 'test "$*" = "-w 60 9"');
+       f.command("docker", `case "$*" in *"ps -q web"*) echo web;; "inspect "*) echo sha256:fixture;; *collect-events-catchup*) echo event >> "$TREND_RADAR_STATE_DIR/actions";; *read-collection-schedule*) echo '{"next_due_at":"2099-01-01T00:00:00Z"}';; *) exit 92;; esac\n`);
+       const result = f.run();
+       expect(result.status, result.stderr).toBe(0);
+diff --git a/deploy/oracle/tests/regression-022.mjs b/deploy/oracle/tests/regression-022.mjs
+--- a/deploy/oracle/tests/regression-022.mjs
++++ b/deploy/oracle/tests/regression-022.mjs
+@@ -27,4 +27,25 @@
+     assert.equal(result.events.source_complete, true);
+     assert.equal(result.events.excluded_invalid_names, 24);
+   });
++  await check('only the newest missing event hour has a ten-minute grace period', () => {
++    const currentHour = `'${sql("select date_trunc('hour', max(captured_at)) from radar.snapshots")}'::timestamptz`;
++    const statusAt = offset => json(`begin;
++      select replace(pg_get_functiondef('api.service_status()'::regprocedure), 'now()',
++        format('%L::timestamptz', ${currentHour} + interval '${offset}')) \\gexec
++      set local role web_anon;
++      select api.service_status();
++      rollback;`);
++    sql(`truncate radar.event_collection_hours, radar.repository_event_buckets;
++      insert into radar.event_collection_hours(bucket_at,source_repository_count,stored_repository_count,line_count,rejected_line_count)
++      select hour,0,0,1,0 from generate_series(${currentHour} - interval '25 hours',
++        ${currentHour} - interval '3 hours', interval '1 hour') hour;`);
++    const withinGrace = statusAt('9 minutes 59 seconds');
++    assert.equal(withinGrace.status, 'ok');
++    assert.equal(withinGrace.events.missing_hours, 1);
++    assert.equal(withinGrace.events.source_complete, false);
++    assert.equal(statusAt('10 minutes').status, 'degraded');
++
++    sql(`delete from radar.event_collection_hours where bucket_at = ${currentHour} - interval '3 hours'`);
++    assert.equal(statusAt('9 minutes 59 seconds').status, 'degraded');
++  });
+ }
