@@ -16,8 +16,8 @@ if (databasePath === undefined || databasePath.trim() === "") {
 }
 
 const historyApi = new RemoteHistoryApi({
-  baseUrl: requireEnvironment("TREND_RADAR_API_URL"),
-  collectorToken: requireEnvironment("TREND_RADAR_COLLECTOR_TOKEN"),
+  baseUrl: requireEnvironment("GIT_BREAKOUT_API_URL"),
+  collectorToken: requireEnvironment("GIT_BREAKOUT_COLLECTOR_TOKEN"),
 });
 const database = new HistoryDatabase(resolve(databasePath));
 

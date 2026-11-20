@@ -145,7 +145,7 @@ async function fetchTrendingPeriod(
   const response = await fetchImplementation(`https://github.com/trending?since=${period}`, {
     headers: {
       Accept: "text/html",
-      "User-Agent": "ai-trend-radar/0.0.0",
+      "User-Agent": "git-breakout/0.0.0",
     },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
@@ -253,7 +253,7 @@ async function searchRepositoryNames(
       headers: {
         Accept: "application/vnd.github+json",
         Authorization: `Bearer ${token}`,
-        "User-Agent": "ai-trend-radar/0.0.0",
+        "User-Agent": "git-breakout/0.0.0",
         "X-GitHub-Api-Version": "2022-11-28",
       },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -498,7 +498,7 @@ async function fetchMetadataBatch(
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
-      "User-Agent": "ai-trend-radar/0.0.0",
+      "User-Agent": "git-breakout/0.0.0",
       "X-GitHub-Api-Version": "2022-11-28",
     },
     body: JSON.stringify(request),

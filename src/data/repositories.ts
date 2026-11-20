@@ -62,7 +62,7 @@ function subtractTime(days: number, hours: number): string {
 export const sampleRepositories: RepositoryCandidate[] = seeds.map((seed) => ({
   full_name: seed.fullName,
   url: `https://github.com/${seed.fullName}`,
-  open_graph_image_url: `https://opengraph.githubassets.com/ai-trend-radar/${seed.fullName}`,
+  open_graph_image_url: `https://opengraph.githubassets.com/git-breakout/${seed.fullName}`,
   description: seed.description,
   language: seed.language,
   topics: ["ai", seed.language.toLowerCase()],

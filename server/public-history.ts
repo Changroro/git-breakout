@@ -32,7 +32,7 @@ const CACHED_READS = new Set(["snapshot_timeline", "snapshot_page", "search_snap
 function validateBaseUrl(value: string): string {
   const url = URL.parse(value);
   if (url === null || !["http:", "https:"].includes(url.protocol)) {
-    throw new TypeError("TREND_RADAR_INTERNAL_API_URL must be an HTTP URL");
+    throw new TypeError("GIT_BREAKOUT_INTERNAL_API_URL must be an HTTP URL");
   }
   return url.href.replace(/\/$/, "");
 }

@@ -116,18 +116,18 @@ function requireEnvironment(name: string): string {
 
 async function main() {
   const githubToken = requireEnvironment("GITHUB_TOKEN");
-  const reserveValue = process.env.TREND_RADAR_STAR_HISTORY_RESERVE;
+  const reserveValue = process.env.GIT_BREAKOUT_STAR_HISTORY_RESERVE;
   if (reserveValue !== undefined && !/^\d+$/.test(reserveValue.trim())) {
-    throw new TypeError("TREND_RADAR_STAR_HISTORY_RESERVE must be a non-negative integer");
+    throw new TypeError("GIT_BREAKOUT_STAR_HISTORY_RESERVE must be a non-negative integer");
   }
   const reserve = reserveValue === undefined ? null : Number(reserveValue.trim());
   if (reserve !== null && !Number.isSafeInteger(reserve)) throw new RangeError("Star history reserve must be a safe integer");
   const starHistoryStore = new StarHistoryStore({
-    cacheDirectory: resolve(process.env.TREND_RADAR_STAR_HISTORY_CACHE_DIR ?? resolve(process.cwd(), "data", "star-history")),
+    cacheDirectory: resolve(process.env.GIT_BREAKOUT_STAR_HISTORY_CACHE_DIR ?? resolve(process.cwd(), "data", "star-history")),
     token: githubToken, ttlMs: 20 * 3_600_000, ttlJitterMs: 6 * 3_600_000,
   });
-  const historyApi = new RemoteHistoryApi({ baseUrl: requireEnvironment("TREND_RADAR_API_URL"),
-    collectorToken: requireEnvironment("TREND_RADAR_COLLECTOR_TOKEN") });
+  const historyApi = new RemoteHistoryApi({ baseUrl: requireEnvironment("GIT_BREAKOUT_API_URL"),
+    collectorToken: requireEnvironment("GIT_BREAKOUT_COLLECTOR_TOKEN") });
   const schedule = await historyApi.readCollectionSchedule();
   const waitMilliseconds = millisecondsUntilCollectionDue(schedule, new Date());
   if (waitMilliseconds > 0) {

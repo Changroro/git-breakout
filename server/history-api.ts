@@ -55,7 +55,7 @@ function attachHistoryApi(
         cacheDirectory: starHistoryDirectory,
         token,
         hourlyRequestLimit: requirePositiveIntegerEnvironment(
-          "TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT",
+          "GIT_BREAKOUT_STAR_HISTORY_WEB_HOURLY_LIMIT",
         ),
       });
     }

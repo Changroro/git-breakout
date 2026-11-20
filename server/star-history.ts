@@ -28,7 +28,7 @@ const DEFAULT_CACHE_TTL_MS = 6 * 3_600_000;
 const FAILURE_COOLDOWN_MS = 60_000;
 const MAX_HOURLY_REQUEST_LIMIT = DEFAULT_RATE_LIMIT_RESERVE;
 const GITHUB_API_VERSION = "2026-03-10";
-const USER_AGENT = "ai-trend-radar/0.0.0";
+const USER_AGENT = "git-breakout/0.0.0";
 
 export type StarHistoryDay = {
   /** ISO label derived from GitHub's week timestamp and day position. */

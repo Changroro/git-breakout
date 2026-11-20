@@ -12,8 +12,8 @@ function requireEnvironment(name: string): string {
 
 const { bucketAt, candidateLimit } = parseEventCollectorArguments(process.argv.slice(2));
 const historyApi = new RemoteHistoryApi({
-  baseUrl: requireEnvironment("TREND_RADAR_API_URL"),
-  collectorToken: requireEnvironment("TREND_RADAR_COLLECTOR_TOKEN"),
+  baseUrl: requireEnvironment("GIT_BREAKOUT_API_URL"),
+  collectorToken: requireEnvironment("GIT_BREAKOUT_COLLECTOR_TOKEN"),
 });
 const completed = await historyApi.readCompletedEventHours(bucketAt, 1);
 if (!completed.some(hour => Date.parse(hour) === Date.parse(bucketAt))) await collectEventHour(bucketAt, candidateLimit, historyApi);

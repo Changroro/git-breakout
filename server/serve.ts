@@ -12,7 +12,7 @@ function requireEnvironment(name: string): string {
 function readPort(value: string): number {
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new RangeError("TREND_RADAR_WEB_PORT must be an integer between 1 and 65535");
+    throw new RangeError("GIT_BREAKOUT_WEB_PORT must be an integer between 1 and 65535");
   }
   return port;
 }
@@ -31,24 +31,24 @@ function readHostList(value: string | undefined): string[] {
   }
   const hosts = value.split(",").map((host) => host.trim());
   if (hosts.some((host) => host === "")) {
-    throw new TypeError("TREND_RADAR_LEGACY_HOSTS must be a comma-separated hostname list");
+    throw new TypeError("GIT_BREAKOUT_LEGACY_HOSTS must be a comma-separated hostname list");
   }
   return hosts;
 }
 
-const port = readPort(requireEnvironment("TREND_RADAR_WEB_PORT"));
-const publicHost = requireEnvironment("TREND_RADAR_PUBLIC_HOST");
+const port = readPort(requireEnvironment("GIT_BREAKOUT_WEB_PORT"));
+const publicHost = requireEnvironment("GIT_BREAKOUT_PUBLIC_HOST");
 const server = createWebServer({
-  cacheDirectory: resolve(requireEnvironment("TREND_RADAR_WEB_CACHE_DIR")),
+  cacheDirectory: resolve(requireEnvironment("GIT_BREAKOUT_WEB_CACHE_DIR")),
   canonicalHost: publicHost,
   githubToken: requireEnvironment("GITHUB_TOKEN"),
   starHistoryHourlyRequestLimit: readPositiveInteger(
-    requireEnvironment("TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT"),
-    "TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT",
+    requireEnvironment("GIT_BREAKOUT_STAR_HISTORY_WEB_HOURLY_LIMIT"),
+    "GIT_BREAKOUT_STAR_HISTORY_WEB_HOURLY_LIMIT",
   ),
-  internalApiUrl: requireEnvironment("TREND_RADAR_INTERNAL_API_URL"),
-  legacyHosts: readHostList(process.env.TREND_RADAR_LEGACY_HOSTS),
-  staticDirectory: resolve(requireEnvironment("TREND_RADAR_STATIC_DIR")),
+  internalApiUrl: requireEnvironment("GIT_BREAKOUT_INTERNAL_API_URL"),
+  legacyHosts: readHostList(process.env.GIT_BREAKOUT_LEGACY_HOSTS),
+  staticDirectory: resolve(requireEnvironment("GIT_BREAKOUT_STATIC_DIR")),
   trafficAnalytics: {
     apiToken: requireEnvironment("CLOUDFLARE_ANALYTICS_TOKEN"),
     hostname: publicHost,

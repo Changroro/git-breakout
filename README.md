@@ -105,7 +105,7 @@ score = log1p(observedStarsPerDay) × 55
 - 최근 168시간의 집계 이벤트를 유지하고 1·6·24·72시간 구간을 계산한다.
 - 랭킹 스냅샷과 아카이브는 이벤트 보존 기간과 별도로 유지한다.
 - Star 히스토리는 실행 시작 시점의 남은 API 한도 안에서만 갱신한다. 예산을 넘는 저장소는 기존 캐시를 그대로 쓰고, 캐시도 없으면 근거 없음으로 기록한다.
-- 웹의 Star 히스토리 조회는 `TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT`로 시간당 요청 수를 강제 제한한다. 허용 범위는 1~500이고 운영값은 300이다.
+- 웹의 Star 히스토리 조회는 `GIT_BREAKOUT_STAR_HISTORY_WEB_HOURLY_LIMIT`로 시간당 요청 수를 강제 제한한다. 허용 범위는 1~500이고 운영값은 300이다.
 - GitHub Actions 예약 수집은 사용하지 않는다.
 
 ## Getting Started
@@ -123,7 +123,7 @@ git clone https://github.com/Changroro/git-breakout.git
 cd git-breakout
 npm ci
 GITHUB_TOKEN=your_token npm run collect
-GITHUB_TOKEN=your_token TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT=300 npm run dev
+GITHUB_TOKEN=your_token GIT_BREAKOUT_STAR_HISTORY_WEB_HOURLY_LIMIT=300 npm run dev
 ```
 
 브라우저에서 `http://localhost:5173`을 연다. 수집된 스냅샷이 없으면 화면은 데이터가 필요하다는 오류를 명시적으로 표시한다.

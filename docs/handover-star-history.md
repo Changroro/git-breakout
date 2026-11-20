@@ -56,15 +56,15 @@ PR: `#31` (`claude/github-star-history-api-uq6mi3`, main 미머지)
 ## 배포 전 필요한 것
 
 1. PR #31 검토 보완 커밋 후 main 머지
-2. **운영 웹 서버 환경변수에 `GITHUB_TOKEN`과 `TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT=300` 추가.** 둘 중 하나라도 없으면 웹 서버가 시작하지 않는다.
+2. **운영 웹 서버 환경변수에 `GITHUB_TOKEN`과 `GIT_BREAKOUT_STAR_HISTORY_WEB_HOURLY_LIMIT=300` 추가.** 둘 중 하나라도 없으면 웹 서버가 시작하지 않는다.
 3. 평소 방식대로 배포. **DB 스키마 변경 없음**
 
 선택 환경변수:
 
 | 이름 | 기본값 | 용도 |
 | --- | --- | --- |
-| `TREND_RADAR_STAR_HISTORY_CACHE_DIR` | `data/star-history` | 수집기 히스토리 캐시 위치 |
-| `TREND_RADAR_STAR_HISTORY_RESERVE` | `500` | 히스토리에 쓰지 않고 남겨둘 core 콜 수 |
+| `GIT_BREAKOUT_STAR_HISTORY_CACHE_DIR` | `data/star-history` | 수집기 히스토리 캐시 위치 |
+| `GIT_BREAKOUT_STAR_HISTORY_RESERVE` | `500` | 히스토리에 쓰지 않고 남겨둘 core 콜 수 |
 
 웹 서버 캐시는 기존 캐시 디렉터리 아래 `star-history/`에 쌓인다. 둘 다 `.gitignore` 처리됨.
 

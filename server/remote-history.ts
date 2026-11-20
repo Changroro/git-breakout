@@ -362,10 +362,10 @@ export class RemoteHistoryApi {
   }) {
     const parsedUrl = URL.parse(baseUrl);
     if (parsedUrl === null || !["http:", "https:"].includes(parsedUrl.protocol)) {
-      throw new TypeError("TREND_RADAR_API_URL must be an HTTP URL");
+      throw new TypeError("GIT_BREAKOUT_API_URL must be an HTTP URL");
     }
     if (collectorToken.trim() === "") {
-      throw new TypeError("TREND_RADAR_COLLECTOR_TOKEN is required");
+      throw new TypeError("GIT_BREAKOUT_COLLECTOR_TOKEN is required");
     }
     this.baseUrl = parsedUrl.href.replace(/\/$/, "");
     this.collectorToken = collectorToken;

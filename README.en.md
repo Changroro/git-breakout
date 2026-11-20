@@ -105,7 +105,7 @@ See the [public methodology](docs/methodology.md) for formulas and limitations. 
 - Aggregated events are retained for 168 hours and evaluated over 1, 6, 24, and 72-hour windows.
 - Ranking snapshots and archived observations are retained independently from raw event windows.
 - Star history is refreshed only within the API quota remaining when a run starts. Repositories beyond that budget keep their cached history, and those without one are recorded as missing evidence.
-- Web star-history requests are hard-capped by `TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT`; the accepted range is 1-500 and production uses 300 requests per hour.
+- Web star-history requests are hard-capped by `GIT_BREAKOUT_STAR_HISTORY_WEB_HOURLY_LIMIT`; the accepted range is 1-500 and production uses 300 requests per hour.
 - Scheduled collection does not use GitHub Actions.
 
 ## Getting Started
@@ -123,7 +123,7 @@ git clone https://github.com/Changroro/git-breakout.git
 cd git-breakout
 npm ci
 GITHUB_TOKEN=your_token npm run collect
-GITHUB_TOKEN=your_token TREND_RADAR_STAR_HISTORY_WEB_HOURLY_LIMIT=300 npm run dev
+GITHUB_TOKEN=your_token GIT_BREAKOUT_STAR_HISTORY_WEB_HOURLY_LIMIT=300 npm run dev
 ```
 
 Open `http://localhost:5173`. If no snapshot has been collected, the UI fails loudly with a data requirement instead of silently substituting sample data.

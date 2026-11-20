@@ -218,7 +218,7 @@ describe("PublicHistoryApi", () => {
 
   it("rejects an invalid internal API URL", () => {
     expect(() => new PublicHistoryApi({ baseUrl: "file:///tmp/api" })).toThrow(
-      "TREND_RADAR_INTERNAL_API_URL must be an HTTP URL",
+      "GIT_BREAKOUT_INTERNAL_API_URL must be an HTTP URL",
     );
   });
 
